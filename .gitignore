@@ -1,0 +1,36 @@
+# ── 憑證與機敏資料（絕對不可提交）──────────────────
+.env
+.env.*
+!.env.example
+*credential*
+*secret*
+*password*
+*.pem
+*.key
+
+# n8n workflow 匯出檔可能夾帶憑證，確認後再手動解除忽略
+n8n/*-with-credentials.json
+
+# ── 轉換器輸出（可重新產生，不進版控）──────────────
+converter/output/
+*-output.json
+faq-items.json
+conversion-report.json
+elementor-template-output.json
+
+# ── WP 端備份／匯出 ──────────────────────────────
+*.sql
+wp-content/
+
+# ── Python ──────────────────────────────────────
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+
+# ── 編輯器與系統 ────────────────────────────────
+.DS_Store
+.vscode/
+.idea/
+*.swp
