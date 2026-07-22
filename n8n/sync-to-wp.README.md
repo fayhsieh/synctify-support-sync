@@ -17,8 +17,12 @@
 ## Webhook 網址
 
 - webhook path：**`synctify-sync-to-wp`**
-- 生產網址：`<你的 n8n base URL>/webhook/synctify-sync-to-wp`
-- 測試網址（開發時按「Listen for test event」）：`<base>/webhook-test/synctify-sync-to-wp`
+- n8n base：`https://automation.internal.synctify.net`
+- 生產網址：`https://automation.internal.synctify.net/webhook/synctify-sync-to-wp`
+- 測試網址（開發時按「Listen for test event」）：`https://automation.internal.synctify.net/webhook-test/synctify-sync-to-wp`
+
+> ⚠️ base host 帶 `internal`：若此 n8n 僅限內網／VPN，Notion 雲端按鈕（發自 Notion 伺服器）可能打不到。
+> 上線前需確認生產 webhook 對 Notion 可達，否則按鈕無法觸發（同 SSO 閘門那類的可達性問題）。
 
 **Content Hub 的「同步到 WP」按鈕填生產網址**，並帶 header `x-synctify-token: <N8N_WEBHOOK_TOKEN>`，
 body 帶按下的版本子列 page id：`{ "page_id": "<notion-page-id>" }`。
