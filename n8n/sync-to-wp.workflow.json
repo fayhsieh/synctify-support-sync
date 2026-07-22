@@ -1,0 +1,804 @@
+{
+  "name": "Synctify — sync-to-wp（Workflow 1 骨架）",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "synctify-sync-to-wp",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "14af4294-c764-422a-a3cc-5d8b78e1fd4e",
+      "name": "Webhook：同步到 WP",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        320
+      ],
+      "webhookId": "4ecb5a10-6262-4cf0-91eb-6a37f2b8ac98"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "ac24de2f-6f5e-4908-a8d9-67de6c2362b5",
+              "leftValue": "={{ $json.headers['x-synctify-token'] }}",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              },
+              "rightValue": "={{ $env.N8N_WEBHOOK_TOKEN }}"
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "911709ee-0f19-46a0-897f-03669cbf2c7d",
+      "name": "驗證 token",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        260,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { \"error\": \"invalid or missing token\" } }}",
+        "options": {
+          "responseCode": 401
+        }
+      },
+      "id": "c9bd2000-1e32-4169-835d-2d3dbcd03337",
+      "name": "回應 401（token 錯誤）",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        260,
+        540
+      ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=https://api.notion.com/v1/pages/{{ $('Webhook：同步到 WP').item.json.body.page_id }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "notionApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Notion-Version",
+              "value": "2022-06-28"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "06e400dc-ba77-476c-8efb-30d08f5a4cdb",
+      "name": "Notion：取得子列",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        520,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "705b1a58-8dfc-4f0f-ab4b-af3324ae28bb",
+              "name": "mother_id",
+              "value": "={{ $json.properties['Parent item'].relation[0].id }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "63527921-36d7-4237-af38-112f161f5c44",
+      "name": "取出母列 ID",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        780,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=https://api.notion.com/v1/pages/{{ $json.mother_id }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "notionApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Notion-Version",
+              "value": "2022-06-28"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "0a73502c-a3bd-4dd3-a23f-b91cf6285871",
+      "name": "Notion：取得母列",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1040,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=https://api.notion.com/v1/blocks/{{ $('Webhook：同步到 WP').item.json.body.page_id }}/children?page_size=100",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "notionApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Notion-Version",
+              "value": "2022-06-28"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "eec432b3-d16f-4f2b-9d18-d2aef3c09764",
+      "name": "Notion：取得子列內容(blocks)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1300,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Notion blocks → Notion-flavored Markdown（v0，best-effort）\n// 已知落差：巢狀清單、table、callout 的 icon/color 對映（Notion 給 emoji 與\n// \"green_background\"，轉換器期望 \"checkmark\"/\"green_bg\" 類字串）尚未對齊——見 workflow README。\nconst blocks = ($input.first().json.results) || [];\nfunction rt(arr){\n  return (arr||[]).map(t => {\n    let s = t.plain_text || '';\n    const a = t.annotations || {};\n    if (a.code) s = '`' + s + '`';\n    if (a.bold) s = '**' + s + '**';\n    if (a.italic) s = '*' + s + '*';\n    if (t.href) s = '[' + s + '](' + t.href + ')';\n    return s;\n  }).join('');\n}\nconst lines = [];\nfor (const b of blocks) {\n  const t = b.type;\n  const d = b[t] || {};\n  switch (t) {\n    case 'heading_1': lines.push('# ' + rt(d.rich_text)); break;\n    case 'heading_2': lines.push('## ' + rt(d.rich_text)); break;\n    case 'heading_3': lines.push('### ' + rt(d.rich_text)); break;\n    case 'paragraph': lines.push(rt(d.rich_text)); break;\n    case 'bulleted_list_item': lines.push('- ' + rt(d.rich_text)); break;\n    case 'numbered_list_item': lines.push('1. ' + rt(d.rich_text)); break;\n    case 'quote': lines.push('> ' + rt(d.rich_text)); break;\n    case 'code': lines.push('```' + (d.language || '') + '\\n' + rt(d.rich_text) + '\\n```'); break;\n    case 'divider': lines.push('---'); break;\n    case 'callout': {\n      const icon = d.icon ? (d.icon.emoji || (d.icon.external && d.icon.external.url) || '') : '';\n      lines.push('<callout icon=\"' + icon + '\" color=\"' + (d.color || '') + '\">');\n      lines.push('\\t' + rt(d.rich_text));\n      lines.push('</callout>');\n      break;\n    }\n    case 'image': {\n      const url = d.file ? d.file.url : (d.external ? d.external.url : '');\n      lines.push('![' + rt(d.caption) + '](' + url + ')');\n      break;\n    }\n    default: lines.push('<!-- TODO unsupported block: ' + t + ' -->');\n  }\n  lines.push('');\n}\nreturn [{ json: { markdown: lines.join('\\n') } }];"
+      },
+      "id": "7d69afed-8d3e-43a1-af05-09921479452a",
+      "name": "Blocks → Markdown",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1560,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "47318fc8-09a2-421f-bdd8-a5008d1c2250",
+              "name": "markdown",
+              "value": "={{ $json.markdown }}",
+              "type": "string"
+            },
+            {
+              "id": "f5b193dc-0ee2-4840-8ca1-6148ecd3a3c3",
+              "name": "title",
+              "value": "={{ ($('Notion：取得母列').item.json.properties['Doc name'].title[0].plain_text) }}",
+              "type": "string"
+            },
+            {
+              "id": "affa2379-fe6c-4e59-8784-006329ed7c7b",
+              "name": "faq_group",
+              "value": "={{ ($('Notion：取得母列').item.json.properties['Doc name'].title[0].plain_text).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '') }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "1e021257-375a-4398-9686-25e5d6e664e5",
+      "name": "組裝參數",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        1820,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.CONVERTER_URL || 'http://host.docker.internal:8800' }}/convert",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { \"markdown\": $json.markdown, \"title\": $json.title, \"faq_group\": $json.faq_group, \"sync_date\": $now.format('MMMM d, yyyy') } }}",
+        "options": {}
+      },
+      "id": "7db2c9f2-0c04-4eba-945a-ccaab5ca05dd",
+      "name": "呼叫轉換器 /convert",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2080,
+        320
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "1a25da79-242b-4e00-98d8-cb11ea0ae595",
+      "name": "圖片處理（MOCK/TODO）",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        2340,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "typeValidation": "loose",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "a0061257-0536-4fb6-a410-c7e8b752a7c7",
+                    "leftValue": "={{ $('Notion：取得母列').item.json.properties['WP Post ID'].rich_text[0]?.plain_text || '' }}",
+                    "operator": {
+                      "type": "string",
+                      "operation": "empty",
+                      "singleValue": true
+                    },
+                    "rightValue": ""
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "新文章"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "typeValidation": "loose",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "84cef93e-bddb-47a6-a401-e27af1c05e97",
+                    "leftValue": "={{ $('Notion：取得母列').item.json.properties['WP Post ID'].rich_text[0]?.plain_text || '' }}",
+                    "operator": {
+                      "type": "string",
+                      "operation": "notEmpty",
+                      "singleValue": true
+                    },
+                    "rightValue": ""
+                  },
+                  {
+                    "id": "ab0b7982-0629-4efc-9667-b5b58f2b419b",
+                    "leftValue": "={{ $('Notion：取得母列').item.json.properties['上稿狀態'].select?.name || '' }}",
+                    "operator": {
+                      "type": "string",
+                      "operation": "notEquals"
+                    },
+                    "rightValue": "已發佈"
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "更新草稿"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "typeValidation": "loose",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "8aecd81c-0bef-4553-a85a-84fa1a89513c",
+                    "leftValue": "={{ $('Notion：取得母列').item.json.properties['WP Post ID'].rich_text[0]?.plain_text || '' }}",
+                    "operator": {
+                      "type": "string",
+                      "operation": "notEmpty",
+                      "singleValue": true
+                    },
+                    "rightValue": ""
+                  },
+                  {
+                    "id": "a4157c53-e7c3-4c0d-8dc4-24b9497b4f86",
+                    "leftValue": "={{ $('Notion：取得母列').item.json.properties['上稿狀態'].select?.name || '' }}",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "rightValue": "已發佈"
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "影子草稿"
+            }
+          ]
+        },
+        "options": {
+          "fallbackOutput": "none"
+        }
+      },
+      "id": "a5fa4428-be09-4a25-85f8-59521482ecb5",
+      "name": "判斷路徑",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [
+        2600,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "feff0104-a906-47bc-8641-03da82704c55",
+              "name": "target_post_id",
+              "value": "={{ 999001 }}",
+              "type": "number"
+            },
+            {
+              "id": "0f8276dc-1bea-43d6-9ef9-879545cb0308",
+              "name": "target_kind",
+              "value": "new",
+              "type": "string"
+            },
+            {
+              "id": "418b22ec-5b9d-4ea9-90e6-d55cd26997b8",
+              "name": "status_after",
+              "value": "草稿已建立",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "2953b9a7-1c83-4def-a74d-f00860a050fd",
+      "name": "9a 新文章（MOCK）",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        2860,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "4ba3aba4-0a80-4dec-aabc-99f7e787dbe3",
+              "name": "target_post_id",
+              "value": "={{ $('Notion：取得母列').item.json.properties['WP Post ID'].rich_text[0]?.plain_text || '' }}",
+              "type": "string"
+            },
+            {
+              "id": "260072c7-0e0e-4237-994d-d501d55f97ec",
+              "name": "target_kind",
+              "value": "update-draft",
+              "type": "string"
+            },
+            {
+              "id": "d3967069-4b87-4eaf-870f-7e573dc4e51e",
+              "name": "status_after",
+              "value": "草稿已建立",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "f0c0035b-d704-48f0-979c-7ec956e8c913",
+      "name": "9b 更新草稿（MOCK）",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        2860,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "f879b386-5185-481b-9547-51922f791ff6",
+              "name": "target_post_id",
+              "value": "={{ 999002 }}",
+              "type": "number"
+            },
+            {
+              "id": "f6244d21-9542-4e67-b626-5b90e2884ef3",
+              "name": "target_kind",
+              "value": "shadow-draft",
+              "type": "string"
+            },
+            {
+              "id": "cf7f1498-c1d0-4c8d-9b5b-3deb0f8fd1cc",
+              "name": "status_after",
+              "value": "待確認發佈",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "887bb846-56d9-4bc4-b92a-58a88928429a",
+      "name": "9c 影子草稿（MOCK）",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        2860,
+        540
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "9d5872ac-d055-4078-852b-d23f2f887700",
+              "name": "elementor_written",
+              "value": "={{ true }}",
+              "type": "boolean"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "a7bb2129-3c8a-494f-91b1-6b9e7ef0ee90",
+      "name": "寫入 Elementor（MOCK）",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        3160,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "c47d17c4-e9d9-4ca0-8b4f-3ae11ac2af53",
+              "name": "seo_written",
+              "value": "={{ true }}",
+              "type": "boolean"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "83c25a95-c1ce-4b31-a5ad-656a46f1cfc9",
+      "name": "寫入 SEO（MOCK）",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        3420,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "7e38465d-d8ea-4512-a2b2-250560aee993",
+              "name": "faq_written",
+              "value": "={{ true }}",
+              "type": "boolean"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "cdf9bac1-f7c9-4e07-b239-8889d010ca0e",
+      "name": "寫入 FAQ（MOCK）",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        3680,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "method": "PATCH",
+        "url": "=https://api.notion.com/v1/pages/{{ $('取出母列 ID').item.json.mother_id }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "notionApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Notion-Version",
+              "value": "2022-06-28"
+            }
+          ]
+        },
+        "options": {},
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { \"properties\": { \"WP Post ID\": { \"rich_text\": [ { \"text\": { \"content\": String($('判斷路徑').item.json.target_post_id) } } ] }, \"上稿狀態\": { \"select\": { \"name\": $('判斷路徑').item.json.status_after } }, \"最後同步時間\": { \"date\": { \"start\": $now.toISO() } } } } }}"
+      },
+      "id": "6ba0ba6b-d1c7-465c-ba14-cbe8a95b065d",
+      "name": "回寫母列狀態",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3940,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { \"ok\": true, \"target_post_id\": $('判斷路徑').item.json.target_post_id, \"status\": $('判斷路徑').item.json.status_after } }}",
+        "options": {}
+      },
+      "id": "eb1b809b-2fd9-4789-8204-aafc8ab8fff6",
+      "name": "回應成功",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        4200,
+        320
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook：同步到 WP": {
+      "main": [
+        [
+          {
+            "node": "驗證 token",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "驗證 token": {
+      "main": [
+        [
+          {
+            "node": "Notion：取得子列",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "回應 401（token 錯誤）",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Notion：取得子列": {
+      "main": [
+        [
+          {
+            "node": "取出母列 ID",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "取出母列 ID": {
+      "main": [
+        [
+          {
+            "node": "Notion：取得母列",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Notion：取得母列": {
+      "main": [
+        [
+          {
+            "node": "Notion：取得子列內容(blocks)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Notion：取得子列內容(blocks)": {
+      "main": [
+        [
+          {
+            "node": "Blocks → Markdown",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Blocks → Markdown": {
+      "main": [
+        [
+          {
+            "node": "組裝參數",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "組裝參數": {
+      "main": [
+        [
+          {
+            "node": "呼叫轉換器 /convert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "呼叫轉換器 /convert": {
+      "main": [
+        [
+          {
+            "node": "圖片處理（MOCK/TODO）",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "圖片處理（MOCK/TODO）": {
+      "main": [
+        [
+          {
+            "node": "判斷路徑",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "判斷路徑": {
+      "main": [
+        [
+          {
+            "node": "9a 新文章（MOCK）",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "9b 更新草稿（MOCK）",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "9c 影子草稿（MOCK）",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "9a 新文章（MOCK）": {
+      "main": [
+        [
+          {
+            "node": "寫入 Elementor（MOCK）",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "9b 更新草稿（MOCK）": {
+      "main": [
+        [
+          {
+            "node": "寫入 Elementor（MOCK）",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "9c 影子草稿（MOCK）": {
+      "main": [
+        [
+          {
+            "node": "寫入 Elementor（MOCK）",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "寫入 Elementor（MOCK）": {
+      "main": [
+        [
+          {
+            "node": "寫入 SEO（MOCK）",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "寫入 SEO（MOCK）": {
+      "main": [
+        [
+          {
+            "node": "寫入 FAQ（MOCK）",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "寫入 FAQ（MOCK）": {
+      "main": [
+        [
+          {
+            "node": "回寫母列狀態",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "回寫母列狀態": {
+      "main": [
+        [
+          {
+            "node": "回應成功",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "meta": {
+    "synctify_note": "Workflow 1 skeleton; WP writes mocked; converter & Notion real"
+  },
+  "tags": []
+}
