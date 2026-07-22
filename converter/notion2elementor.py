@@ -93,19 +93,32 @@ def inline_md_to_html(text):
         text = text.replace(emoji, f'[custom_icon class="{cls}"]')
     return text
 
-# ---------- Callout 類型判別（Style Guide §7，五種）----------
+# ---------- Callout 類型判別（mapping-rules §二，五種）----------
+# 支援兩種來源格式（判斷結果一致）：
+#   1. Notion API 原生：icon 是 emoji（💡ℹ️✅⚠️），color 是 Notion 底色名（*_background）
+#      —— n8n Blocks→Markdown 節點直接輸出這種
+#   2. 舊匯出格式：icon 是路徑字串（含 light-bulb/info/checkmark/warning），color 如 green_bg
+#      —— samples/ 逆向驗證檔用這種
+# Warning 與 Danger 同為 ⚠️/warning，靠底色（黃 vs 紅）區分，故底色判斷不可省。
 
 def callout_type(icon, color):
-    if "light-bulb" in icon:
+    icon = icon or ""
+    color = (color or "").lower()
+    is_yellow = "yellow" in color
+    is_red = "red" in color or "danger" in color
+    # 順序：Message → Info → Success → Warning/Danger（後者需底色區分）
+    if "💡" in icon or "light-bulb" in icon:
         return None  # Message：一般 note，無 alert_type
-    if "checkmark" in icon:
-        return "success"
-    if "warning" in icon and "yellow" in color:
-        return "warning"
-    if "warning" in icon and ("red" in color or "danger" in color):
-        return "danger"
-    if "info" in icon:
+    if "ℹ" in icon or "info" in icon:
         return "info"
+    if "✅" in icon or "checkmark" in icon:
+        return "success"
+    if "⚠" in icon or "warning" in icon:
+        if is_red:
+            return "danger"
+        if is_yellow:
+            return "warning"
+        return "warning"  # 底色無法判斷時保守歸為 Warning
     return None
 
 # ---------- 區塊解析 ----------

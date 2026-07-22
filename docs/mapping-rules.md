@@ -33,6 +33,19 @@ Notion 教學文件 → WordPress Elementor（Docly + EazyDocs）自動上稿轉
 
 Callout 首行若為粗體獨立行 → alert_title，其餘內容 → alert_description。
 
+**判別順序**：Message → Info → Success → Warning/Danger。Warning 與 Danger 同為 ⚠️，
+**只能靠底色區分**（黃＝Warning、紅＝Danger），故底色判斷不可省；底色無法判斷時保守歸為 Warning。
+
+**兩種來源格式都支援**（判別結果一致，見 `callout_type()`）：
+
+| 訊號 | Notion API 原生（n8n Blocks→Markdown 輸出） | 舊匯出格式（`samples/` 用） |
+| --- | --- | --- |
+| icon | emoji：`💡` `ℹ️` `✅` `⚠️` | 路徑字串含 `light-bulb`／`info`／`checkmark`／`warning` |
+| 底色 | Notion 名：`gray_background`／`blue_background`／`green_background`／`yellow_background`／`red_background` | `green_bg`／`yellow_bg`／`red_bg` 等 |
+
+> n8n 的 `Blocks → Markdown` 節點直接輸出 Notion 原生 emoji＋`*_background`，轉換器已能直接吃，
+> 不需在 n8n 端另做對映。
+
 ## 三、圖片規則
 
 | 情境 | 處理 |

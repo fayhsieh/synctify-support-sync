@@ -50,10 +50,9 @@ body 帶按下的版本子列 page id：`{ "page_id": "<notion-page-id>" }`。
 
 1. **Notion 屬性名稱**：節點用了假設的屬性名 `Parent item`、`Doc name`、`WP Post ID`、`上稿狀態`、`最後同步時間`。
    匯入後請對照實際 Content Hub 屬性名，不符就改節點內的屬性 key。
-2. **Callout icon/color 對映**：`Blocks → Markdown` 直接輸出 Notion API 給的 emoji 與 `green_background` 類色值；
-   但轉換器 `callout_type()` 期望的是 `checkmark`/`light-bulb`/`warning`/`info` 與 `green_bg`/`yellow`/`red` 類字串
-   （來自舊 Notion 匯出格式，見 `samples/`）。**兩者需要一層對映**，否則 callout 分類會失準。這是 Notion→markdown
-   保真度的核心待辦，建議與產出 `samples/` 的來源流程對齊。
+2. ~~**Callout icon/color 對映**~~ ✅ 已解決：轉換器 `callout_type()` 現在同時吃 Notion 原生 emoji＋
+   `*_background` 底色，與舊匯出 icon-path 兩種格式（見 `docs/mapping-rules.md` §二、
+   `converter/test_callout_mapping.py`）。`Blocks → Markdown` 直接輸出 Notion 原生格式即可，n8n 端不需另做對映。
 3. **Blocks → Markdown v0 覆蓋度**：巢狀清單、table、多層 children、分頁（>100 blocks）尚未處理。
 4. **圖片處理**：mock。真實版要對 `report.images` 中 `pending_upload=true` 者下載 Notion S3 → 上傳 WP 媒體庫
    （帶 alt/caption）→ 取 media ID → 回填 Elementor JSON 圖片網址。
