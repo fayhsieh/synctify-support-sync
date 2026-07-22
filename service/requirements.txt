@@ -1,0 +1,6 @@
+# Notion → Elementor 轉換 HTTP microservice 依賴
+fastapi>=0.115,<1
+uvicorn[standard]>=0.30,<1
+# TestClient（starlette）需要 httpx
+httpx>=0.27,<1
+pytest>=8,<9
