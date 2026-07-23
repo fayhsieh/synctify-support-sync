@@ -10,9 +10,25 @@
 1. n8n → Workflows → Import from File → 選 `sync-to-wp.workflow.json`
 2. 設定 credential / 環境變數：
    - **Notion API credential**：四個 Notion HTTP 節點（取得子列／母列／子列內容／回寫母列）用「Predefined Credential Type → Notion API」，匯入後在每個節點的下拉選你的 Notion 憑證
-   - **`CONVERTER_URL`**（n8n 環境變數）：轉換 service 位址，預設 `http://host.docker.internal:8800`（n8n 在 Docker、轉換器跑在宿主機時適用）；不同部署自行覆蓋
+   - **`CONVERTER_URL`**（n8n 環境變數）：轉換 service 位址。**內網 n8n 連得到才行**，見下方「轉換器部署」
    - **`N8N_WEBHOOK_TOKEN`**（n8n 環境變數）：webhook header token，與 `.env` 同值。「驗證 token」節點比對 `x-synctify-token` header
 3. 存檔並 **Activate**（webhook 生產網址啟用）
+
+## 轉換器部署與 CONVERTER_URL（測試前必解）
+
+轉換器（`service/`）目前跑在開發機 localhost:8800。n8n 是內網伺服器
+`automation.internal.synctify.net`，**連不到開發機的 localhost**，所以轉換器必須部署在內網 n8n
+能觸達的位置。依 n8n 跑法選 `CONVERTER_URL`：
+
+| n8n 跑法 / 轉換器位置 | CONVERTER_URL |
+| --- | --- |
+| 轉換器與 n8n 同一個 docker-compose（同 network） | `http://<compose 服務名>:8800`（推薦） |
+| 轉換器 container 與 n8n 同主機、n8n 在 Docker | `http://host.docker.internal:8800` |
+| 轉換器獨立內網服務（有內網 DNS） | `http://converter.internal.synctify.net:8800` |
+| n8n 直接跑在主機（非 Docker）、轉換器同主機 | `http://127.0.0.1:8800` |
+
+> 開發機 localhost **不是**可行選項（內網 n8n 打不到）。最省事是把轉換器包成 container 塞進 n8n 的
+> compose，用服務名互連。轉換器已可容器化（`service/` + `service/requirements.txt`）。
 
 ## Webhook 網址
 
@@ -26,6 +42,24 @@
 
 **Content Hub 的「同步到 WP」按鈕填生產網址**，並帶 header `x-synctify-token: <N8N_WEBHOOK_TOKEN>`，
 body 帶按下的版本子列 page id：`{ "page_id": "<notion-page-id>" }`。
+
+## 用 pinData 在畫布直接測試
+
+workflow 已內建 `pinData`，Webhook 節點釘了一筆測試資料（Amazon SC v2 子列
+`3492f2ede27d80b68faceb92929e5a0c`）。在 n8n 畫布按 **Execute Workflow** 即可用這筆跑，不必打 webhook。
+
+⚠️ pinData 裡的 `x-synctify-token` 是佔位字串 `REPLACE_WITH_YOUR_N8N_WEBHOOK_TOKEN`——
+**在 n8n UI 把它改成你真正的 token** 才過得了「驗證 token」節點（真 token 不入 repo）。
+或改打測試 webhook：
+
+```bash
+curl -X POST https://automation.internal.synctify.net/webhook-test/synctify-sync-to-wp \
+  -H "Content-Type: application/json" \
+  -H "x-synctify-token: <你的 N8N_WEBHOOK_TOKEN>" \
+  -d '{"page_id":"3492f2ede27d80b68faceb92929e5a0c"}'
+```
+
+只測前半段（Webhook→轉換器）時，先把尾端「回寫母列狀態」節點停用，避免寫髒真實母列。
 
 ## 節點：真實 vs mock
 
@@ -48,8 +82,10 @@ body 帶按下的版本子列 page id：`{ "page_id": "<notion-page-id>" }`。
 
 ## 已知落差（骨架待補，非 bug）
 
-1. **Notion 屬性名稱**：節點用了假設的屬性名 `Parent item`、`Doc name`、`WP Post ID`、`上稿狀態`、`最後同步時間`。
-   匯入後請對照實際 Content Hub 屬性名，不符就改節點內的屬性 key。
+1. ~~**Notion 屬性名稱**~~ ✅ 已對 schema 驗證（2026-07-23）：`Doc name`(title)、`Parent item`(relation)、
+   `WP Post ID`(text)、`上稿狀態`(select)、`最後同步時間`(date) 全部與 Content Hub 一致。
+   注意：另有 `Status`（status 型）＝內容工作流狀態，**與 `上稿狀態` 不同**，別誤用；`Version` 的 v1 標籤是
+   `"v1 (Initial Version)"`（Workflow 2 比對時注意）。標題已在「組裝參數」節點去掉 `- vN`／`(Current)` 後綴。
 2. ~~**Callout icon/color 對映**~~ ✅ 已解決：轉換器 `callout_type()` 現在同時吃 Notion 原生 emoji＋
    `*_background` 底色，與舊匯出 icon-path 兩種格式（見 `docs/mapping-rules.md` §二、
    `converter/test_callout_mapping.py`）。`Blocks → Markdown` 直接輸出 Notion 原生格式即可，n8n 端不需另做對映。

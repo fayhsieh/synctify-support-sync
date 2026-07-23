@@ -193,13 +193,13 @@
             {
               "id": "f5b193dc-0ee2-4840-8ca1-6148ecd3a3c3",
               "name": "title",
-              "value": "={{ ($('Notion：取得母列').item.json.properties['Doc name'].title[0].plain_text) }}",
+              "value": "={{ ($('Notion：取得母列').item.json.properties['Doc name'].title[0].plain_text).replace(/\\s+[-–]\\s*v\\d.*$/i, '').replace(/\\s*\\(Current\\)\\s*$/i, '').trim() }}",
               "type": "string"
             },
             {
               "id": "affa2379-fe6c-4e59-8784-006329ed7c7b",
               "name": "faq_group",
-              "value": "={{ ($('Notion：取得母列').item.json.properties['Doc name'].title[0].plain_text).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '') }}",
+              "value": "={{ ($('Notion：取得母列').item.json.properties['Doc name'].title[0].plain_text).replace(/\\s+[-–]\\s*v\\d.*$/i, '').replace(/\\s*\\(Current\\)\\s*$/i, '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '') }}",
               "type": "string"
             }
           ]
@@ -572,6 +572,22 @@
       ]
     }
   ],
+  "pinData": {
+    "Webhook：同步到 WP": [
+      {
+        "json": {
+          "headers": {
+            "x-synctify-token": "REPLACE_WITH_YOUR_N8N_WEBHOOK_TOKEN"
+          },
+          "params": {},
+          "query": {},
+          "body": {
+            "page_id": "3492f2ede27d80b68faceb92929e5a0c"
+          }
+        }
+      }
+    ]
+  },
   "connections": {
     "Webhook：同步到 WP": {
       "main": [
