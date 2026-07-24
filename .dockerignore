@@ -1,0 +1,24 @@
+# 不要把這些帶進 build context / image
+.git/
+.venv/
+venv/
+**/__pycache__/
+**/*.py[cod]
+.pytest_cache/
+
+# 憑證絕對不進 image
+.env
+.env.*
+!.env.example
+
+# 不需進 image 的東西
+n8n/
+skill/
+scripts/
+docs/
+samples/
+converter/output/
+*-output.json
+.DS_Store
+.vscode/
+.idea/

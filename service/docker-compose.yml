@@ -1,0 +1,28 @@
+# 轉換 HTTP microservice 的 compose。
+# 用法一：獨立跑（內網有 DNS/IP 給 n8n 連）
+#   cd service && docker compose up -d --build
+#   → CONVERTER_URL = http://<這台內網位址>:8800
+#
+# 用法二（推薦）：併進 n8n 的 compose，用服務名互連、不對外開埠
+#   把下面 converter 這段複製到 n8n 的 compose，與 n8n 放同一個 network，
+#   並移除 ports 區塊（同 network 用服務名即可）。
+#   → n8n 的環境變數 CONVERTER_URL = http://converter:8800
+services:
+  converter:
+    build:
+      context: ..                      # repo 根目錄（含 converter/ 與 service/）
+      dockerfile: service/Dockerfile
+    image: synctify-converter:latest
+    container_name: synctify-converter
+    restart: unless-stopped
+    environment:
+      # 選用：設了之後 /convert 需帶 Authorization: Bearer <key>
+      - CONVERTER_API_KEY=${CONVERTER_API_KEY:-}
+    ports:
+      - "8800:8800"                    # 併進 n8n compose、同 network 時可移除此區塊
+# 併進 n8n compose 時，讓 converter 加入 n8n 所在的 network，例如：
+#     networks:
+#       - n8n_default
+#   networks:
+#     n8n_default:
+#       external: true
