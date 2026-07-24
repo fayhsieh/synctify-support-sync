@@ -76,8 +76,9 @@ def test_nested_image_becomes_caption_shortcode_in_step():
 
     t2 = items[1]["text"]
     assert "[caption" in t2 and "[/caption]" in t2
-    assert '<a href="https://example.com/img.png">' in t2   # lightbox
-    assert '<img src="https://example.com/img.png"' in t2
+    assert '<a href="https://example.com/img.png">' in t2   # Link To = Media File
+    assert 'class="size-large"' in t2                        # Size = Large
+    assert 'width="1024" height="576"' in t2                 # 1024x576
     assert "My caption" in t2
     assert "<li>" not in "".join(i["text"] for i in items)
 

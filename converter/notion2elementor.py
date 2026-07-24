@@ -355,8 +355,11 @@ def convert(md, article_title, faq_group_slug, sync_date=None):
                         if not pending:
                             iurl = re.sub(r"-\d+x\d+(\.\w+)$", r"\1", iurl)
                         report_images.append({"url": iurl, "alt": alt, "pending_upload": pending})
+                        # 標準：Link To = Media File（<a href> 包 img）、Size = Large 1024x576
+                        # （size-large class＋width/height）。對齊實站 7915 與站方統一規範。
                         html += (f'[caption align="alignnone" width="1024"]'
-                                 f'<a href="{iurl}"><img src="{iurl}" alt="{alt}" /></a> {alt}[/caption]')
+                                 f'<a href="{iurl}"><img class="size-large" src="{iurl}" '
+                                 f'alt="{alt}" width="1024" height="576" /></a> {alt}[/caption]')
                     else:
                         # 巢狀 bullet／接續說明 → 內嵌縮排段落（非 <li>，不被編號 counter 計入）
                         html += f'<p style="padding-left: 40px;">{inline_md_to_html(sub[1])}</p>'
