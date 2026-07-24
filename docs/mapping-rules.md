@@ -13,7 +13,7 @@ Notion 教學文件 → WordPress Elementor（Docly + EazyDocs）自動上稿轉
 | 4 | 粗體獨立行 `**Step X-X. ...**` | heading widget（h4） | 舊文件相容規則（Notion 尚無 H4 時期的寫法） |
 | 5 | 一般段落 | text-editor widget（`<p>`） | 輸出乾淨 HTML，不帶任何貼上殘留 |
 | 6 | 項目符號清單（含巢狀） | text-editor widget（`<ul><li>`） | |
-| 7 | 數字清單 `1. 2. 3.` | docly_list_item widget（order_list 圓形數字樣式） | 全站統一此樣式 |
+| 7 | 數字清單 `1. 2. 3.` | docly_list_item widget（order_list 圓形數字樣式） | 全站統一此樣式；一段連續編號維持在同一 widget，編號連續。編號項下 tab 縮排的巢狀 bullet → 該步驟內嵌 `<ul>`；tab 縮排的接續說明 → 該步驟追加 `<p>` |
 | 8 | 行內程式碼 `` `UI 路徑` `` | `[direction]...[/direction]` shortcode | 可點擊 UI 路徑；路徑用 `>` 分隔放同一組 |
 | 9 | 粗體 `**文字**` | `<strong>` | 不可點擊的 UI 文字、狀態名稱 |
 | 10 | 連結 `[文字](url)` | `<a href="..." target="_blank" rel="noopener">` | 連結文字一律去除粗體 |
