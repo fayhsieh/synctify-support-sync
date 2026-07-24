@@ -19,7 +19,7 @@ Notion 教學文件 → WordPress Elementor（Docly + EazyDocs）自動上稿轉
 | 10 | 連結 `[文字](url)` | `<a href="..." target="_blank" rel="noopener">` | 連結文字一律去除粗體 |
 | 11 | 程式碼區塊（fenced，含語言標記） | docly_code_syntax_highlighter widget | 語言標記 → `lng_type`，內容 → `source_code` |
 | 12 | 表格 | text-editor widget 內 HTML `<table>` | |
-| 13 | 圖片＋圖說 | image widget | 圖說 → alt text＋caption；詳見「三、圖片規則」 |
+| 13 | 圖片＋圖說 | image widget | 圖說 → alt text＋caption；詳見「三、圖片規則」。**例外**：tab 縮排在數字清單步驟下的巢狀圖片 → 內嵌成該步驟 item 內的 `[caption]` shortcode（`<a href>` 保 lightbox、`[caption]` 保圖說、不佔圓圈編號），非獨立 widget。結構逆向自實站範本 7915 |
 
 ## 二、Callout 映射（五種，依 Notion icon＋底色判別）
 

@@ -185,8 +185,14 @@ def parse_blocks(md):
                 sub = []
                 while i < len(lines) and lines[i].startswith("\t") and lines[i].strip():
                     sline = lines[i].strip()
+                    im = re.match(r"^!\[(.*?)\]\((.*?)\)$", sline)
                     bm = re.match(r"^-\s+(.*)$", sline)
-                    sub.append(bm.group(1) if bm else sline)
+                    if im:                       # 步驟下的巢狀圖片
+                        sub.append(("image", im.group(1), im.group(2)))
+                    elif bm:                     # 巢狀 bullet
+                        sub.append(("text", bm.group(1)))
+                    else:                        # 接續說明
+                        sub.append(("text", sline))
                     i += 1
                 items.append({"text": text, "sub": sub})
             blocks.append({"t": "olist", "items": items})
@@ -340,9 +346,20 @@ def convert(md, article_title, faq_group_slug, sync_date=None):
             ul_items = []
             for it in b["items"]:
                 html = f"<p>{inline_md_to_html(it['text'])}</p>"
-                # 巢狀子內容 → 內嵌縮排段落（非 <li>，不會被編號 counter 計入）
                 for sub in it["sub"]:
-                    html += f'<p style="padding-left: 40px;">{inline_md_to_html(sub)}</p>'
+                    if sub[0] == "image":
+                        # 步驟下的巢狀圖片 → 內嵌 [caption] shortcode（保留圖說＋lightbox，
+                        # 且不佔圓圈編號）。結構逆向自實站範本 7915。
+                        alt, iurl = sub[1], sub[2]
+                        pending = "prod-files-secure" in iurl
+                        if not pending:
+                            iurl = re.sub(r"-\d+x\d+(\.\w+)$", r"\1", iurl)
+                        report_images.append({"url": iurl, "alt": alt, "pending_upload": pending})
+                        html += (f'[caption align="alignnone" width="1024"]'
+                                 f'<a href="{iurl}"><img src="{iurl}" alt="{alt}" /></a> {alt}[/caption]')
+                    else:
+                        # 巢狀 bullet／接續說明 → 內嵌縮排段落（非 <li>，不被編號 counter 計入）
+                        html += f'<p style="padding-left: 40px;">{inline_md_to_html(sub[1])}</p>'
                 ul_items.append({"_id": eid(), "text": html})
             cur.append(widget("docly_list_item", {"style": "order_list", "steps": "",
                                                    "ul_icon_list": ul_items}))

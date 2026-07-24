@@ -59,6 +59,33 @@ def test_nested_stays_one_widget_and_uses_indented_p():
     assert "continuation note" in items[2]["text"]
 
 
+def test_nested_image_becomes_caption_shortcode_in_step():
+    md = "\n".join([
+        "## Steps",
+        "1. First step",
+        "2. Do this with a screenshot:",
+        "\t![My caption](https://example.com/img.png)",
+        "3. Third step",
+    ])
+    tpl, _f, rep = n2e.convert(md, "T", "t", sync_date="July 24, 2026")
+    ws = _widgets(tpl["content"])
+    olists = [w for w in ws if w["widgetType"] == "docly_list_item"]
+    assert len(olists) == 1
+    items = olists[0]["settings"]["ul_icon_list"]
+    assert len(items) == 3  # 巢狀圖片不佔編號
+
+    t2 = items[1]["text"]
+    assert "[caption" in t2 and "[/caption]" in t2
+    assert '<a href="https://example.com/img.png">' in t2   # lightbox
+    assert '<img src="https://example.com/img.png"' in t2
+    assert "My caption" in t2
+    assert "<li>" not in "".join(i["text"] for i in items)
+
+    # 巢狀圖片不產生獨立 image widget，但仍計入 report 圖片清單
+    assert not [w for w in ws if w["widgetType"] == "image"]
+    assert any(img["alt"] == "My caption" for img in rep["images"])
+
+
 def test_plain_numbered_list_unchanged():
     md = "## S\n1. one\n2. two\n3. three"
     items = _olists(md)[0]["settings"]["ul_icon_list"]
