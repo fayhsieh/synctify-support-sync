@@ -173,12 +173,22 @@ def parse_blocks(md):
                 i += 1
             blocks.append({"t": "table", "header": header, "rows": rows})
             continue
-        # 數字清單 → 圓形數字（docly_list_item），連續編號行收成一組
+        # 數字清單 → 圓形數字（docly_list_item），整段連續編號收成「同一個」widget。
+        # 編號項下 tab 縮排的子內容（巢狀 bullet 或接續說明）收進該項，渲染成
+        # 內嵌 <p style="padding-left:40px"> —— 對齊實站結構（範本 7899 逆向確認）：
+        # 不可用 <ul><li>，否則主題 CSS counter 會把 <li> 也算進圓圈編號。
         if re.match(r"^\d+\.\s+", stripped):
             items = []
             while i < len(lines) and re.match(r"^\d+\.\s+", lines[i].strip()):
-                items.append(re.sub(r"^\d+\.\s+", "", lines[i].strip()))
+                text = re.sub(r"^\d+\.\s+", "", lines[i].strip())
                 i += 1
+                sub = []
+                while i < len(lines) and lines[i].startswith("\t") and lines[i].strip():
+                    sline = lines[i].strip()
+                    bm = re.match(r"^-\s+(.*)$", sline)
+                    sub.append(bm.group(1) if bm else sline)
+                    i += 1
+                items.append({"text": text, "sub": sub})
             blocks.append({"t": "olist", "items": items})
             continue
         # 標題
@@ -327,9 +337,15 @@ def convert(md, article_title, faq_group_slug, sync_date=None):
         elif b["t"] == "list":
             cur.append(widget("text-editor", {"editor": list_to_html_v2(b["items"])}))
         elif b["t"] == "olist":
+            ul_items = []
+            for it in b["items"]:
+                html = f"<p>{inline_md_to_html(it['text'])}</p>"
+                # 巢狀子內容 → 內嵌縮排段落（非 <li>，不會被編號 counter 計入）
+                for sub in it["sub"]:
+                    html += f'<p style="padding-left: 40px;">{inline_md_to_html(sub)}</p>'
+                ul_items.append({"_id": eid(), "text": html})
             cur.append(widget("docly_list_item", {"style": "order_list", "steps": "",
-                "ul_icon_list": [{"_id": eid(), "text": f"<p>{inline_md_to_html(t)}</p>"}
-                                 for t in b["items"]]}))
+                                                   "ul_icon_list": ul_items}))
         elif b["t"] == "code":
             cur.append(widget("docly_code_syntax_highlighter",
                               {"lng_type": b["lang"], "source_code": b["code"]}))

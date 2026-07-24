@@ -13,7 +13,7 @@ Notion 教學文件 → WordPress Elementor（Docly + EazyDocs）自動上稿轉
 | 4 | 粗體獨立行 `**Step X-X. ...**` | heading widget（h4） | 舊文件相容規則（Notion 尚無 H4 時期的寫法） |
 | 5 | 一般段落 | text-editor widget（`<p>`） | 輸出乾淨 HTML，不帶任何貼上殘留 |
 | 6 | 項目符號清單（含巢狀） | text-editor widget（`<ul><li>`） | |
-| 7 | 數字清單 `1. 2. 3.` | docly_list_item widget（order_list 圓形數字樣式） | 全站統一此樣式。⚠️ 編號項下的巢狀 bullet 要拆成獨立 `<ul>` widget（渲染成 ○ bullet），**不可**內嵌進 docly_list_item 的 item（主題 CSS counter 會把內嵌 `<li>` 也算進圓圈編號）。跨 bullet 的主編號延續機制待從實站 widget 逆向確認 |
+| 7 | 數字清單 `1. 2. 3.` | docly_list_item widget（order_list 圓形數字樣式） | 全站統一此樣式。整段連續編號＝**同一個** docly_list_item（編號連續靠同一 widget，`steps` 留空）。編號項下 tab 縮排的巢狀子內容（bullet／接續說明）內嵌成 `<p style="padding-left: 40px;">`，**不可**用 `<ul><li>`（主題 CSS counter 會把 `<li>` 算進圓圈編號）。結構逆向自實站範本 7899 |
 | 8 | 行內程式碼 `` `UI 路徑` `` | `[direction]...[/direction]` shortcode | 可點擊 UI 路徑；路徑用 `>` 分隔放同一組。分隔符 `>` 輸出為 `&gt;`（否則 Docly shortcode 會渲染成箭頭圖示，站上要字面 `>`）|
 | 9 | 粗體 `**文字**` | `<strong>` | 不可點擊的 UI 文字、狀態名稱 |
 | 10 | 連結 `[文字](url)` | `<a href="..." target="_blank" rel="noopener">` | 連結文字一律去除粗體 |
