@@ -1,0 +1,295 @@
+"""
+Notion blocks → Markdown 測試。
+
+重點是**端到端**：block JSON → markdown → notion2elementor → Elementor JSON，
+直接斷言最終 widget 結構，確保這一層產出的 markdown 真的能被轉換器正確解析
+（避免「數字清單斷編號」「表格沒被辨識」這類格式細節出錯）。
+
+⚠️ 這裡的 block fixture 是依 Notion API schema 手工建構的合成資料，
+尚未用真實 API 回傳驗證過（測試站閘門未放行前拿不到）。
+
+執行：
+    cd <repo root> && ./.venv/bin/python -m pytest converter/test_notion_blocks.py -v
+"""
+import itertools
+import pathlib
+import sys
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+import notion2elementor as n2e  # noqa: E402
+import notion_blocks as nb  # noqa: E402
+
+_ids = itertools.count(1)
+
+
+# ---------- fixture helpers ----------
+
+def rt(text, **ann):
+    t = {"plain_text": text, "annotations": {k: True for k in ann if k != "href"}}
+    if "href" in ann:
+        t["href"] = ann["href"]
+    return t
+
+
+def blk(btype, payload=None, children=None, parent=None):
+    b = {"id": f"blk-{next(_ids)}", "type": btype, btype: payload or {}}
+    b["has_children"] = bool(children)
+    if children is not None:
+        b["children"] = children
+    if parent:
+        b["parent"] = {"type": "block_id", "block_id": parent}
+    return b
+
+
+def para(text):
+    return blk("paragraph", {"rich_text": [rt(text)]})
+
+
+def head(level, text):
+    return blk(f"heading_{level}", {"rich_text": [rt(text)]})
+
+
+def num(text, children=None):
+    return blk("numbered_list_item", {"rich_text": [rt(text)]}, children)
+
+
+def bullet(text, children=None):
+    return blk("bulleted_list_item", {"rich_text": [rt(text)]}, children)
+
+
+def image(url, caption):
+    return blk("image", {"external": {"url": url}, "caption": [rt(caption)]})
+
+
+def table(rows, ):
+    trs = [blk("table_row", {"cells": [[rt(c)] for c in row]}) for row in rows]
+    return blk("table", {"table_width": len(rows[0])}, trs)
+
+
+def widgets(els):
+    out = []
+    for e in els:
+        if e.get("elType") == "widget":
+            out.append(e)
+        out += widgets(e.get("elements", []))
+    return out
+
+
+def to_elementor(blocks):
+    md, report = nb.blocks_to_markdown(blocks)
+    tpl, faqs, rep = n2e.convert(md, "T", "t", sync_date="July 24, 2026")
+    return md, widgets(tpl["content"]), report
+
+
+# ---------- 測試 ----------
+
+def test_heading_offset_maps_notion_h1_to_h2():
+    md, ws, _ = to_elementor([head(1, "Overview"), para("Body text.")])
+    assert md.startswith("## Overview")
+    heads = [w for w in ws if w["widgetType"] == "heading"]
+    assert heads[0]["settings"]["title"] == "Overview"
+    # Notion H1 → ## → h2（無 header_size 即預設 h2）
+    assert "header_size" not in heads[0]["settings"]
+
+
+def test_numbered_list_contiguous_single_widget():
+    """連續編號之間不可有空行，否則會被切成多個 widget、編號重來。"""
+    blocks = [head(1, "Steps")] + [num(f"Step {i}") for i in range(1, 6)]
+    md, ws, _ = to_elementor(blocks)
+    assert "\n\n1." not in md  # 編號項之間沒有空行
+    olists = [w for w in ws if w["widgetType"] == "docly_list_item"]
+    assert len(olists) == 1
+    assert len(olists[0]["settings"]["ul_icon_list"]) == 5
+
+
+def test_numbered_list_with_nested_bullets():
+    blocks = [
+        head(1, "Steps"),
+        num("First"),
+        num("Pick one:", children=[bullet("Option A"), bullet("Option B")]),
+        num("Last"),
+    ]
+    md, ws, _ = to_elementor(blocks)
+    olists = [w for w in ws if w["widgetType"] == "docly_list_item"]
+    assert len(olists) == 1
+    items = olists[0]["settings"]["ul_icon_list"]
+    assert len(items) == 3                      # 巢狀 bullet 不佔編號
+    assert items[1]["text"].count('padding-left: 40px;') == 2
+    assert "<li>" not in "".join(i["text"] for i in items)
+
+
+def test_numbered_list_with_nested_image_becomes_caption():
+    blocks = [
+        head(1, "Steps"),
+        num("Click the menu"),
+        num("Select it", children=[image("https://x/img.png", "The menu")]),
+        num("Done"),
+    ]
+    md, ws, _ = to_elementor(blocks)
+    olists = [w for w in ws if w["widgetType"] == "docly_list_item"]
+    items = olists[0]["settings"]["ul_icon_list"]
+    assert len(items) == 3
+    assert "[caption" in items[1]["text"]
+    assert 'class="size-large"' in items[1]["text"]
+    assert not [w for w in ws if w["widgetType"] == "image"]   # 未產生獨立 image widget
+
+
+def test_table_becomes_html_table():
+    blocks = [head(1, "Ref"), table([["Column", "Description"],
+                                     ["Partner Code", "The code sent."],
+                                     ["Source", "System or Custom."]])]
+    md, ws, _ = to_elementor(blocks)
+    assert "| Column | Description |" in md
+    assert "| --- | --- |" in md
+    tables = [w for w in ws if w["widgetType"] == "text-editor"
+              and "<table>" in w["settings"].get("editor", "")]
+    assert len(tables) == 1
+    assert "<th>Column</th>" in tables[0]["settings"]["editor"]
+    assert "<td>Partner Code</td>" in tables[0]["settings"]["editor"]
+
+
+def test_callout_emoji_maps_to_alert_type():
+    blocks = [
+        head(1, "S"),
+        blk("callout", {"rich_text": [rt("Heads up.")], "icon": {"emoji": "⚠️"},
+                        "color": "red_background"}),
+    ]
+    _md, ws, _ = to_elementor(blocks)
+    alerts = [w for w in ws if w["widgetType"] == "docly_alerts_box"]
+    assert len(alerts) == 1
+    assert alerts[0]["settings"]["alert_type"] == "danger"
+
+
+def test_inline_code_and_link_and_bold():
+    blocks = [head(1, "S"), blk("paragraph", {"rich_text": [
+        rt("Go to "), rt("Orders > Exception Orders", code=True), rt(" and click "),
+        rt("Save", bold=True), rt(" or see "), rt("docs", href="https://e.com"),
+    ]})]
+    _md, ws, _ = to_elementor(blocks)
+    # 略過轉換器自動產生的 "Last updated" widget，找含實際內文的那個
+    ed = next(w["settings"]["editor"] for w in ws
+              if w["widgetType"] == "text-editor" and "Go to" in w["settings"].get("editor", ""))
+    assert "[direction]Orders &gt; Exception Orders[/direction]" in ed   # 路徑用 &gt;
+    assert "<strong>Save</strong>" in ed
+    assert '<a href="https://e.com" target="_blank" rel="noopener">docs</a>' in ed
+
+
+def test_seo_meta_and_version_history_sections_excluded():
+    blocks = [
+        head(1, "Overview"), para("Real content."),
+        blk("paragraph", {"rich_text": [rt("SEO Meta", bold=True)]}),
+        para("Title: something"),
+        head(1, "Version History"), para("v2 - changed things"),
+    ]
+    md, _ws, report = to_elementor(blocks)
+    assert "Real content." in md
+    assert "SEO Meta" not in md
+    assert "Title: something" not in md
+    assert "Version History" not in md
+    assert "v2 - changed things" not in md
+    assert len(report["skipped_sections"]) == 2
+
+
+def test_toggle_excluded_as_internal_note():
+    blocks = [head(1, "S"), para("Visible."),
+              blk("toggle", {"rich_text": [rt("Content Review Notes")]},
+                  [para("internal only")])]
+    md, _ws, report = to_elementor(blocks)
+    assert "Visible." in md
+    assert "internal only" not in md
+    assert report["excluded_toggles"] == 1
+
+
+def test_flat_list_is_rebuilt_into_tree():
+    """n8n 的『Also Fetch Nested Blocks』回傳扁平清單，需用 parent.block_id 重建。"""
+    parent = num("Pick one:")
+    child_a = bullet("Option A")
+    child_b = bullet("Option B")
+    for c in (child_a, child_b):
+        c["parent"] = {"type": "block_id", "block_id": parent["id"]}
+        c.pop("children", None)
+    parent.pop("children", None)
+    flat = [head(1, "Steps"), parent, child_a, child_b, num("Next")]
+
+    md, ws, _ = to_elementor(flat)
+    olists = [w for w in ws if w["widgetType"] == "docly_list_item"]
+    assert len(olists) == 1
+    items = olists[0]["settings"]["ul_icon_list"]
+    assert len(items) == 2                                   # 兩個編號項
+    assert items[0]["text"].count("padding-left: 40px;") == 2  # 子項掛回第一項
+
+
+def test_code_block_language_preserved():
+    blocks = [head(1, "S"), blk("code", {"rich_text": [rt("GET /api\nHost: x")],
+                                         "language": "http"})]
+    _md, ws, _ = to_elementor(blocks)
+    code = [w for w in ws if w["widgetType"] == "docly_code_syntax_highlighter"]
+    assert len(code) == 1
+    assert code[0]["settings"]["lng_type"] == "http"
+    assert "GET /api" in code[0]["settings"]["source_code"]
+
+
+def test_realistic_article_matches_handmade_shape():
+    """
+    模擬 Manage Exception Orders 的實際結構（章節＋表格＋數字清單＋步驟內嵌圖＋callout），
+    斷言自動路徑產出的 widget 組成與手工整理的結果一致。
+    """
+    blocks = [
+        head(1, "Overview"),
+        para("The Exception Orders page helps you review sales orders."),
+        table([["Tab", "What it shows", "What you can do"],
+               ["Errors", "Unresolved error-type issues.", "Reinstate the order."],
+               ["On-Hold", "Temporarily paused orders.", "Release the order."]]),
+
+        head(1, "Review error orders"),
+        para("Use the Errors tab."),
+        num("Go to Orders"), num("Select the Errors tab"), num("Review the list"),
+        image("https://x/errors-list.png", "Review exception orders."),
+
+        head(1, "Reinstate an error order"),
+        num("Go to Orders"),
+        num("Find the order"),
+        num("Select Reinstate Order", children=[image("https://x/actions.png", "Action menu.")]),
+        num("Click Submit"),
+        table([["Error type", "What to do"],
+               ["SKU Not Found", "Select the correct SKU."]]),
+        blk("callout", {"rich_text": [rt("Note", bold=True)], "icon": {"emoji": "ℹ️"},
+                        "color": "blue_background"},
+            [para("Missing Default Warehouse is resolved differently.")]),
+
+        head(1, "Important notes"),
+        bullet("Errors and On-Hold are different tabs."),
+        bullet("Use Reinstate Order for error-type issues."),
+    ]
+    _md, ws, report = to_elementor(blocks)
+
+    kinds = {}
+    for w in ws:
+        kinds[w["widgetType"]] = kinds.get(w["widgetType"], 0) + 1
+
+    assert kinds["heading"] == 4
+    # 兩個表格皆成 HTML table
+    tables = [w for w in ws if w["widgetType"] == "text-editor"
+              and "<table>" in w["settings"].get("editor", "")]
+    assert len(tables) == 2
+    # 兩段數字清單，各自單一 widget、編號連續
+    olists = [w for w in ws if w["widgetType"] == "docly_list_item"]
+    assert [len(o["settings"]["ul_icon_list"]) for o in olists] == [3, 4]
+    # 步驟內嵌圖 → [caption]；獨立圖 → image widget（僅 errors-list 那張）
+    assert "[caption" in olists[1]["settings"]["ul_icon_list"][2]["text"]
+    assert len([w for w in ws if w["widgetType"] == "image"]) == 1
+    # callout 正確分類
+    alerts = [w for w in ws if w["widgetType"] == "docly_alerts_box"]
+    assert alerts[0]["settings"]["alert_type"] == "info"
+    assert alerts[0]["settings"]["alert_title"] == "Note"
+    # 項目符號清單成獨立 <ul>
+    assert any(w["widgetType"] == "text-editor"
+               and w["settings"].get("editor", "").startswith("<ul>") for w in ws)
+    assert not report["unsupported"]
+
+
+def test_unsupported_block_recorded_not_crash():
+    blocks = [head(1, "S"), para("ok"), blk("equation", {"expression": "x^2"})]
+    md, _ws, report = to_elementor(blocks)
+    assert "ok" in md
+    assert "equation" in report["unsupported"]

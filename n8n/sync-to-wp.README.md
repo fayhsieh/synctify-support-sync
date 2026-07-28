@@ -89,7 +89,16 @@ curl -X POST https://automation.internal.synctify.net/webhook-test/synctify-sync
 2. ~~**Callout icon/color 對映**~~ ✅ 已解決：轉換器 `callout_type()` 現在同時吃 Notion 原生 emoji＋
    `*_background` 底色，與舊匯出 icon-path 兩種格式（見 `docs/mapping-rules.md` §二、
    `converter/test_callout_mapping.py`）。`Blocks → Markdown` 直接輸出 Notion 原生格式即可，n8n 端不需另做對映。
-3. **Blocks → Markdown v0 覆蓋度**：巢狀清單、table、多層 children、分頁（>100 blocks）尚未處理。
+3. **Blocks → Markdown** ✅ 邏輯已硬化並移出 workflow：改為 `converter/notion_blocks.py`
+   （13 個測試，端到端驗證 blocks → markdown → Elementor JSON）。涵蓋巢狀清單、表格、
+   步驟內嵌圖片、callout、扁平清單重建樹、SEO Meta／Version History／toggle 剔除。
+   - **分頁與多層 children 改由 n8n 原生處理**：用 Notion 節點的 **Get Child Blocks**
+     操作，開啟 **Return All** 與 **Also Fetch Nested Blocks**，不需自行遞迴／分頁。
+     該選項回傳扁平清單，模組會用 `parent.block_id` 重建樹。
+   - workflow 內現存的 JS `Blocks → Markdown` Code node **已過時**，待架構定案後
+     （容器 or n8n-Python）換成呼叫此模組。
+   - ⚠️ 未驗證假設：`HEADING_OFFSET = 1`（Notion H1 → `##`）依現有文章慣例推定，
+     需用真實 block 資料確認。
 4. **圖片處理**：mock。真實版要對 `report.images` 中 `pending_upload=true` 者下載 Notion S3 → 上傳 WP 媒體庫
    （帶 alt/caption）→ 取 media ID → 回填 Elementor JSON 圖片網址。
 5. **Switch 線上狀態**：目前用母列 `上稿狀態` 當「WP 線上是不是已發佈」的代理。閘門放行後可改成實際讀 WP 文章 status。
