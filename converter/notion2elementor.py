@@ -11,17 +11,26 @@ Synctify Support Center 自動上稿流程
 
 映射規則 v1（見 Marketing Wiki 設計文件）
 """
-import json
+# 核心轉換（convert 及其相依）刻意只用 `re`，不 import 其他模組——
+# n8n v2 的 Python task runner 預設封鎖所有 import，相依愈少愈容易通過
+# allowlist（只需 N8N_RUNNERS_STDLIB_ALLOW=re）。json／sys 只在 CLI 區塊使用，
+# datetime 僅在未給 sync_date 時延遲載入。
 import re
-import secrets
-import sys
-from datetime import date
 
 # ---------- 工具 ----------
 
+_eid_counter = 0
+
+
 def eid():
-    """Elementor 元素 ID：7-8 位十六進位"""
-    return secrets.token_hex(4)[:7]
+    """Elementor 元素 ID：7 位十六進位。
+
+    以計數器＋固定散列產生，不用 secrets（避免相依 os.urandom）。
+    同一份輸入會得到相同 ID，輸出因此可重現、可 diff。
+    """
+    global _eid_counter
+    _eid_counter += 1
+    return f"{(_eid_counter * 0x9E3779B1) & 0xFFFFFFF:07x}"
 
 def widget(widget_type, settings):
     return {
@@ -283,7 +292,13 @@ def list_to_html_v2(items):
 # ---------- 主轉換 ----------
 
 def convert(md, article_title, faq_group_slug, sync_date=None):
-    sync_date = sync_date or date.today().strftime("%B %d, %Y")
+    if not sync_date:
+        # 延遲載入：呼叫端（n8n／service）通常會帶入 sync_date，
+        # 不帶時才需要 datetime，避免核心路徑多一個 import 相依。
+        from datetime import date
+        sync_date = date.today().strftime("%B %d, %Y")
+    global _eid_counter
+    _eid_counter = 0          # 每次轉換重置，確保同輸入產生同 ID
     blocks = parse_blocks(md)
 
     # 抽出 FAQ 段（## FAQs / ## Troubleshooting 之後的 ###+段落）
@@ -424,6 +439,10 @@ def in_faq_title(text):
 # ---------- CLI ----------
 
 if __name__ == "__main__":
+    # 僅 CLI 需要，不放模組頂層（保持核心轉換只相依 re）
+    import json
+    import sys
+
     src, title, slug, outdir = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
     with open(src) as f:
         md = f.read()
