@@ -167,7 +167,12 @@ try:
                     json={"language": LANG,
                           "items": [{"id": 999999999, "translated": "__synctify_probe__"}]})
     if r.status_code == 200:
-        record("5. tp/update 寫入（冒煙，bogus id）", True, f"{short(r)}（未命中真實列）")
+        body = r.json()
+        # 不存在的 id 必須回報 not_found，不可算進 updated
+        # （若算進 updated，過期 id 會造成「宣稱寫入成功但一列都沒寫」的靜默失敗）
+        ok = body.get("not_found") == 1 and body.get("updated") == 0
+        record("5. tp/update 寫入（冒煙，bogus id）", ok,
+               f"{short(r)}" + ("" if ok else "  ⚠️ 期望 not_found=1/updated=0，外掛可能是舊版"))
     elif r.status_code == 501:
         record("5. tp/update 寫入（冒煙）", True, f"端點可達但 TP 未設定（{short(r)}）")
     else:

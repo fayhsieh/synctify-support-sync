@@ -92,9 +92,9 @@ n8n 的憑證應存在 n8n credential 管理中，不要寫進 workflow JSON。�
 - [x] 建立 Application Password（已填入 `.env`）
 - [x] 驗證腳本就緒（`scripts/verify_endpoints.py`：converter service → 六端點各實打一次含認證與清理）
 
-待辦：
+- [x] **驗證各端點**（2026-07-29，測試站閘門放行後實打）：`scripts/verify_endpoints.py` **13/13 通過** —— elementor 寫入／備份／還原、SEO meta、tp lookup／update、Arconix FAQ REST、認證負向測試、測試草稿自動清理
 
-- [ ] **驗證各端點（阻塞中）**：測試站被 SSO/OAuth 閘門擋在最前面，`/wp-json/` 全被 302 轉去 Google 登入，流量到不了 WP。需先在閘門把 `/wp-json/` 設為例外或提供可通過 proxy 的憑證；放行後跑 `scripts/verify_endpoints.py` 即可打勾（同一閘門也會擋 n8n）
+待辦：
 - [ ] 建置 n8n workflow（webhook → 轉換 → WP 寫入 → 狀態回寫）
   - [x] Workflow 1 sync-to-wp 骨架（`n8n/sync-to-wp.workflow.json`；Notion＋轉換器接真，WP 寫入 mock）
   - [ ] Workflow 1：閘門放行後把 WP mock 換真＋圖片上傳迴圈＋Notion→markdown callout 對映

@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Synctify Sync Helper
  * Description: Notion → n8n → WordPress 自動上稿流程的輔助端點：開啟 Arconix FAQ REST、寫入 Elementor data、讀寫 TranslatePress 字典表、寫入 AIOSEO meta。
- * Version: 0.1.0
+ * Version: 0.1.1
  * Author: Synctify Marketing (Fay)
  *
  * 安裝：外掛 → 上傳外掛（打包成 zip），或直接放入 wp-content/mu-plugins/
@@ -149,22 +149,34 @@ add_action( 'rest_api_init', function () {
 			if ( is_wp_error( $table ) ) return $table;
 			$items = $req->get_json_params()['items'] ?? array();
 			global $wpdb;
-			$updated = 0; $skipped = 0;
+			$updated = 0; $skipped = 0; $not_found = 0; $failed = 0;
 			foreach ( $items as $item ) {
 				if ( empty( $item['id'] ) || ! isset( $item['translated'] ) ) continue;
-				$status = (int) $wpdb->get_var( $wpdb->prepare(
+				// 注意：get_var 對「不存在的列」與「status=0（未翻譯）」都會讓 (int) 轉成 0，
+				// 必須先用 null 判斷該列是否存在，否則過期的 id 會被當成可寫入，
+				// 實際一列都沒寫到卻回報成功（呼叫端會誤以為譯文已寫入）。
+				$row_status = $wpdb->get_var( $wpdb->prepare(
 					"SELECT status FROM {$table} WHERE id = %d", (int) $item['id']
 				) );
-				if ( 2 === $status ) { $skipped++; continue; } // 人工翻譯不覆蓋
-				$wpdb->update(
+				if ( null === $row_status ) { $not_found++; continue; } // 該列不存在（id 可能已失效）
+				if ( 2 === (int) $row_status ) { $skipped++; continue; } // 人工翻譯不覆蓋
+				$affected = $wpdb->update(
 					$table,
 					array( 'translated' => $item['translated'], 'status' => 1 ),
 					array( 'id' => (int) $item['id'] ),
 					array( '%s', '%d' ), array( '%d' )
 				);
+				// 回傳 false 為 DB 錯誤；0 代表該列值未變動（已確認列存在，視為成功）
+				if ( false === $affected ) { $failed++; continue; }
 				$updated++;
 			}
-			return array( 'ok' => true, 'updated' => $updated, 'skipped_human' => $skipped );
+			return array(
+				'ok'            => true,
+				'updated'       => $updated,
+				'skipped_human' => $skipped,
+				'not_found'     => $not_found,
+				'failed'        => $failed,
+			);
 		},
 	) );
 
