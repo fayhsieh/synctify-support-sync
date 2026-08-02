@@ -22,13 +22,21 @@ n8n Code node 設定：
 沒有輸入時會跑內建自我測試，方便貼上後直接按 Execute 驗證環境。
 """
 import argparse
+import json
 import pathlib
 import re
 import sys
+import uuid
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 CONVERTER = ROOT / "converter"
 OUT = ROOT / "n8n" / "code-node.py"
+WF_OUT = ROOT / "n8n" / "notion-to-elementor-test.workflow.json"
+
+# 測試用 Notion 頁面：Manage Exception Orders v2（已有手工轉換版本可比對）
+TEST_PAGE_ID = "3822f2ede27d80f1bd47d73c6314bec4"
+TEST_TITLE = "Manage Exception Orders"
+TEST_FAQ_GROUP = "manage-exception-orders"
 
 HEADER = '''# ══════════════════════════════════════════════════════════════════
 #  自動產生，請勿直接編輯
@@ -151,6 +159,80 @@ def build():
     return body
 
 
+def build_workflow(code):
+    """產生獨立的唯讀測試 workflow：Notion 讀取 → 補欄位 → 轉換。不寫任何東西。"""
+    def nid():
+        return str(uuid.uuid4())
+
+    nodes = [
+        {
+            "parameters": {},
+            "id": nid(), "name": "手動觸發",
+            "type": "n8n-nodes-base.manualTrigger", "typeVersion": 1,
+            "position": [0, 300],
+        },
+        {
+            "parameters": {
+                "resource": "block",
+                "operation": "getAll",
+                "blockId": TEST_PAGE_ID,
+                "returnAll": True,
+                "fetchNestedBlocks": True,
+            },
+            "id": nid(), "name": "Notion：取得頁面 blocks",
+            "type": "n8n-nodes-base.notion", "typeVersion": 2.2,
+            "position": [240, 300],
+            "notes": "務必確認 Return All 與 Also Fetch Nested Blocks 兩個開關都開啟；"
+                     "表格的列(table_row)與步驟下的圖片都是巢狀 block，沒開會抓不到。",
+        },
+        {
+            "parameters": {
+                "includeOtherFields": True,
+                "assignments": {"assignments": [
+                    {"id": nid(), "name": "title", "value": TEST_TITLE, "type": "string"},
+                    {"id": nid(), "name": "faq_group", "value": TEST_FAQ_GROUP, "type": "string"},
+                ]},
+                "options": {},
+            },
+            "id": nid(), "name": "補上標題與 FAQ group",
+            "type": "n8n-nodes-base.set", "typeVersion": 3.4,
+            "position": [480, 300],
+            "notes": "Include Other Fields 必須開啟，否則 block 內容會被覆蓋掉。",
+        },
+        {
+            "parameters": {
+                "mode": "runOnceForAllItems",
+                "language": "python",
+                "pythonCode": code,
+            },
+            "id": nid(), "name": "轉換：blocks → Elementor JSON",
+            "type": "n8n-nodes-base.code", "typeVersion": 2,
+            "position": [720, 300],
+            "notes": "自動產生，請勿直接編輯。改 converter/*.py 後跑 "
+                     "scripts/build_n8n_code_node.py 重新產生。",
+        },
+    ]
+
+    def link(a, b):
+        return {a: {"main": [[{"node": b, "type": "main", "index": 0}]]}}
+
+    connections = {}
+    for a, b in [("手動觸發", "Notion：取得頁面 blocks"),
+                 ("Notion：取得頁面 blocks", "補上標題與 FAQ group"),
+                 ("補上標題與 FAQ group", "轉換：blocks → Elementor JSON")]:
+        connections.update(link(a, b))
+
+    return {
+        "name": "Synctify — Notion→Elementor 轉換測試（唯讀）",
+        "nodes": nodes,
+        "connections": connections,
+        "active": False,
+        "settings": {"executionOrder": "v1"},
+        "meta": {"synctify_note": "唯讀測試：只讀 Notion，不寫 Notion/WP。"},
+        "tags": [],
+    }
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--check", action="store_true",
@@ -159,19 +241,31 @@ def main():
 
     body = build()
     if args.check:
-        if not OUT.exists():
-            print(f"✗ 產物不存在：{OUT}")
+        problems = []
+        if not OUT.exists() or OUT.read_text(encoding="utf-8") != body:
+            problems.append(str(OUT))
+        # workflow 只比對內嵌的程式，避免每次重生的 uuid 造成假性差異
+        if WF_OUT.exists():
+            embedded = json.loads(WF_OUT.read_text(encoding="utf-8"))
+            code_node = [n for n in embedded["nodes"]
+                         if n["type"] == "n8n-nodes-base.code"]
+            if not code_node or code_node[0]["parameters"]["pythonCode"] != body:
+                problems.append(str(WF_OUT))
+        else:
+            problems.append(str(WF_OUT))
+        if problems:
+            print("✗ 與 converter/ 來源不同步，請重新產生：\n  - " + "\n  - ".join(problems))
             sys.exit(1)
-        if OUT.read_text(encoding="utf-8") != body:
-            print(f"✗ {OUT} 與 converter/ 來源不同步，請重新產生")
-            sys.exit(1)
-        print(f"✓ {OUT} 與來源同步")
+        print("✓ 產物與來源同步")
         return
 
     OUT.parent.mkdir(parents=True, exist_ok=True)
     OUT.write_text(body, encoding="utf-8")
     print(f"✓ 已產生 {OUT}（{len(body.splitlines())} 行）")
-    print("  貼進 n8n Code node（Mode: Run Once for All Items、Language: Python）")
+
+    WF_OUT.write_text(json.dumps(build_workflow(body), ensure_ascii=False, indent=2),
+                      encoding="utf-8")
+    print(f"✓ 已產生 {WF_OUT}（可直接匯入 n8n）")
 
 
 if __name__ == "__main__":
