@@ -106,7 +106,7 @@ Callout 首行若為粗體獨立行 → alert_title，其餘內容 → alert_des
 
 | 內容 | 處理 |
 | --- | --- |
-| `*Last updated: ...*` 開頭行 | 剔除，由同步日期自動重新生成 |
+| `*Last updated: ...*` 開頭行 | **沿用 Notion 上標記的日期**（那是寫作者標記的「內容實質更新日」，不是同步時間，不可被同步當天覆蓋）；Notion 未標記時才退回同步日期 |
 | `**SEO Meta**` 段（Title／Meta description） | 不進頁面；寫入 All in One SEO 欄位（`_aioseo_title`／`_aioseo_description`） |
 | Version History 段（`### vN - 日期`） | 不同步，僅留 Notion 內部追蹤 |
 | 內部審核筆記（帶 toggle 的 callout、標題含「Content Review Notes」） | 不同步，自動剔除 |

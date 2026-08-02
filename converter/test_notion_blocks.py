@@ -446,3 +446,20 @@ def test_nested_step_image_uses_alt_and_caption_separately():
     step = [w for w in ws if w["widgetType"] == "docly_list_item"][0]["settings"]["ul_icon_list"][1]["text"]
     assert f'alt="{alt}"' in step          # img 的 alt 用 alt text
     assert f"</a> {cap}[/caption]" in step  # 可見圖說用 caption
+
+
+def test_last_updated_uses_notion_date_not_sync_date():
+    """Last updated 是寫作者標記的「內容實質更新日」，不可被同步當天覆蓋。"""
+    blocks = [
+        blk("paragraph", {"rich_text": [rt("Last updated: June 23, 2026", italic=True)]}),
+        head(2, "Overview"), para("Body."),
+    ]
+    _md, ws, _ = to_elementor(blocks)
+    first = ws[0]["settings"]["editor"]
+    assert "June 23, 2026" in first
+    assert "July 24, 2026" not in first          # to_elementor 傳的 sync_date
+
+
+def test_last_updated_falls_back_to_sync_date_when_absent():
+    _md, ws, _ = to_elementor([head(2, "Overview"), para("Body.")])
+    assert "July 24, 2026" in ws[0]["settings"]["editor"]

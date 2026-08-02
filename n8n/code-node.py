@@ -575,9 +575,12 @@ def parse_blocks(md):
                 i += 1
             blocks.append({"t": "list", "items": items})
             continue
-        # Last updated 行（斜體開頭）→ 標記，輸出時以同步日期重生
-        if re.match(r"^\*Last updated:", stripped):
-            blocks.append({"t": "last_updated"})
+        # Last updated 行（斜體開頭）→ 取出其中的日期。
+        # 這個日期是寫作者手動標記的「內容實質更新日」，不是同步時間，
+        # 因此原樣沿用；只有 Notion 上沒寫時才退回同步日期。
+        lu = re.match(r"^\*Last updated:\s*(.*?)\*?\s*$", stripped)
+        if lu:
+            blocks.append({"t": "last_updated", "date": lu.group(1).strip().rstrip("*").strip()})
             i += 1
             continue
         # 一般段落
@@ -678,9 +681,15 @@ def convert(md, article_title, faq_group_slug, sync_date=None):
             containers.append(container(cur))
             cur = []
 
-    # 開頭：Last updated container
+    # 開頭：Last updated container。
+    # 優先沿用 Notion 文章上手動標記的日期（內容實質更新日）；沒有才用同步日期。
+    doc_date = sync_date
+    for _b in blocks:
+        if _b["t"] == "last_updated" and _b.get("date"):
+            doc_date = _b["date"]
+            break
     containers.append(container([widget("text-editor", {
-        "editor": f"<p><em>Last updated: {sync_date}</em></p>"})]))
+        "editor": f"<p><em>Last updated: {doc_date}</em></p>"})]))
 
     for b in page_blocks:
         if b["t"] == "last_updated":
