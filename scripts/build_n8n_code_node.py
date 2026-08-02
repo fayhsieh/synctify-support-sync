@@ -38,6 +38,10 @@ TEST_PAGE_ID = "3822f2ede27d80f1bd47d73c6314bec4"
 TEST_TITLE = "Manage Exception Orders"
 TEST_FAQ_GROUP = "manage-exception-orders"
 
+# n8n 憑證「引用」——只是識別碼，不含任何密鑰（CLAUDE.md：匯出時確認為引用而非明文）
+NOTION_CRED_ID = "xfGHH7Wx4EucMC0X"
+NOTION_CRED_NAME = "Support Center Sync"
+
 HEADER = '''# ══════════════════════════════════════════════════════════════════
 #  自動產生，請勿直接編輯
 #  來源：converter/notion_blocks.py + converter/notion2elementor.py
@@ -189,6 +193,8 @@ def build_workflow(code):
             "id": nid(), "name": "Notion：取得頁面 blocks",
             "type": "n8n-nodes-base.notion", "typeVersion": 2.2,
             "position": [240, 300],
+            # 憑證「引用」（非明文），省去每次匯入重選；值取自 Fay 的實際匯出檔
+            "credentials": {"notionApi": {"id": NOTION_CRED_ID, "name": NOTION_CRED_NAME}},
             "notes": "務必確認 Return All 與 Also Fetch Nested Blocks 兩個開關都開啟；"
                      "表格的列(table_row)與步驟下的圖片都是巢狀 block，沒開會抓不到。",
         },
@@ -208,10 +214,13 @@ def build_workflow(code):
         },
         {
             "parameters": {
-                "mode": "runOnceForAllItems",
-                # n8n 2.x（原生 Python runner）的語言值為 "Python"，非舊版 Pyodide 時期的
-                # 小寫 "python" —— 用小寫匯入時下拉選單會選不到（Fay 於 2.32.6 實測確認）
-                "language": "Python",
+                # ⚠️ 語言值必須是 "pythonNative"（n8n 2.x 原生 Python runner）。
+                # 舊版 Pyodide 的 "python" 或 UI 標籤 "Python" 都不合法，n8n 會把整個
+                # 節點重設為預設值——連 pythonCode 一起丟掉，導致跑的是預設範本程式
+                # 而非我們的轉換器（且不會報錯，很容易誤判成成功）。
+                # 值取自 n8n 2.32.6 的實際匯出檔。
+                "language": "pythonNative",
+                # mode 不指定，沿用預設的 Run Once for All Items（n8n 匯出時亦不帶此鍵）
                 "pythonCode": code,
             },
             "id": nid(), "name": "轉換：blocks → Elementor JSON",
