@@ -32,6 +32,7 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 CONVERTER = ROOT / "converter"
 OUT = ROOT / "n8n" / "code-node.py"
 WF_OUT = ROOT / "n8n" / "notion-to-elementor-test.workflow.json"
+DRAFT_WF_OUT = ROOT / "n8n" / "notion-to-wp-draft.workflow.json"
 
 # 測試用 Notion 頁面：Manage Exception Orders v2（已有手工轉換版本可比對）
 TEST_PAGE_ID = "3822f2ede27d80f1bd47d73c6314bec4"
@@ -41,6 +42,9 @@ TEST_FAQ_GROUP = "manage-exception-orders"
 # n8n 憑證「引用」——只是識別碼，不含任何密鑰（CLAUDE.md：匯出時確認為引用而非明文）
 NOTION_CRED_ID = "xfGHH7Wx4EucMC0X"
 NOTION_CRED_NAME = "Support Center Sync"
+
+# 測試站（CLAUDE.md：WP 端改動一律先在測試站驗證）
+WP_BASE = "https://support.synctify.io"
 
 HEADER = '''# ══════════════════════════════════════════════════════════════════
 #  自動產生，請勿直接編輯
@@ -92,15 +96,27 @@ def _run(blocks, meta):
     title = meta["title"] if "title" in meta else "Untitled"
     faq_group = meta["faq_group"] if "faq_group" in meta else "untitled"
     sync_date = meta["sync_date"] if "sync_date" in meta else None
+    # image_mode：placeholder（預設）＝ 未上傳的圖換成佔位圖，人工補
+    #             keep         ＝ 保留來源網址（Notion S3 預簽章，一小時後失效，僅除錯用）
+    image_mode = meta["image_mode"] if "image_mode" in meta else "placeholder"
 
     markdown, blocks_report = blocks_to_markdown(blocks)
     template, faq_items, report = convert(markdown, title, faq_group, sync_date=sync_date)
     report["blocks"] = blocks_report
+
+    images_todo = []
+    if image_mode == "placeholder":
+        images_todo = apply_placeholder_images(template, report)
+    report["images_todo"] = images_todo
+
     return {
         "template": template,
         "faq_items": faq_items,
         "report": report,
         "markdown": markdown,
+        # 方便下游 HTTP 節點直接取用
+        "elementor_data": template["content"],
+        "title": title,
     }
 
 
@@ -257,6 +273,116 @@ def build_workflow(code):
     }
 
 
+def build_draft_workflow(code):
+    """第一階段 workflow：Notion → 轉換（圖片用佔位圖）→ WP 建草稿 → 寫入 Elementor。
+
+    刻意不含：圖片上傳、FAQ 寫入、發佈、Notion 回寫、Switch 分路。
+    這些在第一階段由人工處理，待此段穩定後再逐步加。
+    """
+    def nid():
+        return str(uuid.uuid4())
+
+    CONV_NODE = "轉換：blocks → Elementor JSON"
+
+    def http(method, url, body=None):
+        p = {
+            "method": method,
+            "url": url,
+            "authentication": "genericCredentialType",
+            "genericAuthType": "httpBasicAuth",
+            "options": {},
+        }
+        if body is not None:
+            p.update({"sendBody": True, "specifyBody": "json", "jsonBody": body})
+        return p
+
+    nodes = [
+        {"parameters": {}, "id": nid(), "name": "手動觸發",
+         "type": "n8n-nodes-base.manualTrigger", "typeVersion": 1, "position": [-200, 300]},
+
+        {"parameters": {
+            "resource": "block", "operation": "getAll",
+            "blockId": {"__rl": True, "value": TEST_PAGE_ID, "mode": "id"},
+            "returnAll": True, "fetchNestedBlocks": True, "simplifyOutput": False,
+         },
+         "id": nid(), "name": "Notion：取得頁面 blocks",
+         "type": "n8n-nodes-base.notion", "typeVersion": 2.2, "position": [20, 300],
+         "credentials": {"notionApi": {"id": NOTION_CRED_ID, "name": NOTION_CRED_NAME}},
+         "notes": "Return All 與 Also Fetch Nested Blocks 需開啟、Simplify Output 需關閉。"},
+
+        {"parameters": {
+            "assignments": {"assignments": [
+                {"id": nid(), "name": "title", "value": TEST_TITLE, "type": "string"},
+                {"id": nid(), "name": "faq_group", "value": TEST_FAQ_GROUP, "type": "string"},
+            ]},
+            "includeOtherFields": True, "options": {},
+         },
+         "id": nid(), "name": "補上標題與 FAQ group",
+         "type": "n8n-nodes-base.set", "typeVersion": 3.4, "position": [240, 300],
+         "notes": "Include Other Fields 必須開啟，否則 block 內容會被覆蓋掉。\n"
+                  "換文章時改這裡的 title / faq_group，以及 Notion 節點的 Block ID。"},
+
+        {"parameters": {"language": "pythonNative", "pythonCode": code},
+         "id": nid(), "name": CONV_NODE,
+         "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [460, 300],
+         "notes": "自動產生，請勿直接編輯。改 converter/*.py 後跑 "
+                  "scripts/build_n8n_code_node.py 重新產生。\n"
+                  "圖片預設走 placeholder 模式（換成 Elementor 佔位圖並標「待補圖 N」）。"},
+
+        {"parameters": http(
+            "POST", f"{WP_BASE}/wp-json/wp/v2/docs",
+            '={{ { "title": $json.title, "status": "draft" } }}'),
+         "id": nid(), "name": "WP：建立草稿",
+         "type": "n8n-nodes-base.httpRequest", "typeVersion": 4.2, "position": [680, 300],
+         "notes": "建立 docs 草稿。每執行一次就會多一篇草稿——重跑前記得清掉舊的。"},
+
+        {"parameters": http(
+            # URL 內含表達式時必須以 `=` 開頭，否則 n8n 會當成字面字串，
+            # {{ $json.id }} 不會被求值
+            "POST", f"={WP_BASE}/wp-json/synctify/v1/elementor/{{{{ $json.id }}}}",
+            '={{ { "elementor_data": $(\'' + CONV_NODE + '\').item.json.elementor_data } }}'),
+         "id": nid(), "name": "WP：寫入 Elementor 版面",
+         "type": "n8n-nodes-base.httpRequest", "typeVersion": 4.2, "position": [900, 300],
+         "notes": "自訂端點，寫入前會自動備份最近 3 版。"},
+
+        {"parameters": {
+            "assignments": {"assignments": [
+                {"id": nid(), "name": "post_id",
+                 "value": "={{ $('WP：建立草稿').item.json.id }}", "type": "number"},
+                {"id": nid(), "name": "編輯連結",
+                 "value": "={{ '" + WP_BASE + "/wp-admin/post.php?post=' + "
+                          "$('WP：建立草稿').item.json.id + '&action=elementor' }}", "type": "string"},
+                {"id": nid(), "name": "待補圖",
+                 "value": "={{ $('" + CONV_NODE + "').item.json.report.images_todo }}",
+                 "type": "array"},
+                {"id": nid(), "name": "FAQ 待人工建立",
+                 "value": "={{ $('" + CONV_NODE + "').item.json.faq_items }}", "type": "array"},
+            ]},
+            "options": {},
+         },
+         "id": nid(), "name": "結果摘要",
+         "type": "n8n-nodes-base.set", "typeVersion": 3.4, "position": [1120, 300],
+         "notes": "給人工接手用：草稿連結、要補哪幾張圖、要手動建立的 FAQ 問答。"},
+    ]
+
+    order = ["手動觸發", "Notion：取得頁面 blocks", "補上標題與 FAQ group", CONV_NODE,
+             "WP：建立草稿", "WP：寫入 Elementor 版面", "結果摘要"]
+    connections = {}
+    for a, b in zip(order, order[1:]):
+        connections[a] = {"main": [[{"node": b, "type": "main", "index": 0}]]}
+
+    return {
+        "name": "Synctify — Notion→WP 草稿（第一階段）",
+        "nodes": nodes,
+        "connections": connections,
+        "active": False,
+        "settings": {"executionOrder": "v1"},
+        "meta": {"synctify_note": "第一階段：只建草稿並寫入版面。"
+                                  "圖片用佔位圖、FAQ 與發佈由人工處理。"},
+        "tags": [],
+    }
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--check", action="store_true",
@@ -289,7 +415,11 @@ def main():
 
     WF_OUT.write_text(json.dumps(build_workflow(body), ensure_ascii=False, indent=2),
                       encoding="utf-8")
-    print(f"✓ 已產生 {WF_OUT}（可直接匯入 n8n）")
+    print(f"✓ 已產生 {WF_OUT}（唯讀測試）")
+
+    DRAFT_WF_OUT.write_text(json.dumps(build_draft_workflow(body), ensure_ascii=False, indent=2),
+                            encoding="utf-8")
+    print(f"✓ 已產生 {DRAFT_WF_OUT}（第一階段：建 WP 草稿）")
 
 
 if __name__ == "__main__":

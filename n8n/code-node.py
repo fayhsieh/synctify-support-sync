@@ -730,6 +730,114 @@ def convert(md, article_title, faq_group_slug, sync_date=None):
 def in_faq_title(text):
     return text.lower() in ("faqs", "faq", "troubleshooting")
 
+# ---------- 圖片：佔位圖模式 ----------
+
+PLACEHOLDER_IMAGE = ("https://support.synctify.net/wp-content/plugins/elementor/"
+                     "assets/images/placeholder.png")
+
+
+def apply_placeholder_images(template, report, placeholder_url=PLACEHOLDER_IMAGE):
+    """把尚未上傳的圖片換成 Elementor 佔位圖，並標上「待補圖 N」。
+
+    第一階段（自動產出草稿、圖片人工補）用。來源網址是 Notion S3 預簽章網址，
+    一小時後失效——直接寫進 WP 會在一小時內變破圖；換成佔位圖則是乾淨的灰底，
+    人工一眼就知道哪幾張要補。
+
+    回傳待補圖清單 [{"index", "alt"}]，供呼叫端產生補圖對照表。
+    """
+    pending = {img["url"] for img in report.get("images", []) if img.get("pending_upload")}
+    todo = []
+
+    def walk(elements):
+        for el in elements:
+            s = el.get("settings") or {}
+            if el.get("widgetType") == "image":
+                img = s.get("image") or {}
+                if img.get("url") in pending:
+                    alt = img.get("alt", "")
+                    todo.append({"index": len(todo) + 1, "alt": alt})
+                    img["url"] = placeholder_url
+                    s["caption_source"] = "custom"
+                    s["caption"] = f"🖼 待補圖 {len(todo)}：{alt}"
+            if el.get("widgetType") == "docly_list_item":
+                for it in s.get("ul_icon_list") or []:
+                    for src in pending:
+                        if src in it.get("text", ""):
+                            alt = ""
+                            m = re.search(r'alt="([^"]*)"', it["text"])
+                            if m:
+                                alt = m.group(1)
+                            todo.append({"index": len(todo) + 1, "alt": alt})
+                            it["text"] = it["text"].replace(src, placeholder_url)
+                            it["text"] = it["text"].replace(
+                                "[/caption]", f" 🖼 待補圖 {len(todo)}[/caption]")
+            walk(el.get("elements") or [])
+
+    walk(template.get("content") or [])
+    return todo
+
+
+# ---------- 圖片上傳後回填版面 ----------
+
+def apply_media_map(template, media_map):
+    """把版面中的來源圖片網址換成 WP 媒體庫網址（上傳完成後呼叫）。
+
+    media_map: { 來源網址: {"id", "full_url", "large_url", "width", "height"} }
+      —— 即 `POST /synctify/v1/media/sideload` 回傳的每張圖資訊。
+
+    處理兩種圖片形態：
+      1. image widget → `settings.image.url` 換成原圖，並補上 media `id`
+      2. 數字清單步驟內嵌的 [caption] shortcode → `<a href>` 指原圖（Link To = Media File）、
+         `<img src>` 指 large 尺寸、補 `wp-image-{id}` class 與 `attachment_{id}`，
+         寬高改用實際值（非 16:9 的圖高度不是 576）
+
+    Notion S3 網址帶預簽章查詢字串且一小時後失效，故必須在寫入 WP 前完成替換。
+    回傳實際替換的圖片數。
+    """
+    replaced = 0
+
+    def patch_caption(text):
+        nonlocal replaced
+        for src, m in media_map.items():
+            if src not in text:
+                continue
+            w = m.get("width") or 1024
+            h = m.get("height") or 576
+            mid = m.get("id")
+            # <a href="來源"> → 原圖
+            text = text.replace(f'<a href="{src}">', f'<a href="{m["full_url"]}">')
+            # <img ... src="來源" ...> → large 尺寸＋wp-image class＋實際寬高
+            text = text.replace(f'src="{src}"', f'src="{m["large_url"]}"')
+            text = text.replace('<img class="size-large"',
+                                f'<img class="wp-image-{mid} size-large"')
+            text = re.sub(r'width="1024" height="576"', f'width="{w}" height="{h}"', text)
+            text = text.replace('[caption align=', f'[caption id="attachment_{mid}" align=')
+            text = re.sub(r'(\[caption[^\]]*?)width="1024"', rf'\g<1>width="{w}"', text)
+            replaced += 1
+        return text
+
+    def walk(elements):
+        nonlocal replaced
+        for el in elements:
+            s = el.get("settings") or {}
+            if el.get("widgetType") == "image":
+                img = s.get("image") or {}
+                m = media_map.get(img.get("url"))
+                if m:
+                    img["url"] = m["full_url"]
+                    img["id"] = m["id"]
+                    replaced += 1
+            if el.get("widgetType") == "docly_list_item":
+                for it in s.get("ul_icon_list") or []:
+                    if "[caption" in it.get("text", ""):
+                        it["text"] = patch_caption(it["text"])
+            if s.get("editor") and "[caption" in s["editor"]:
+                s["editor"] = patch_caption(s["editor"])
+            walk(el.get("elements") or [])
+
+    walk(template.get("content") or [])
+    return replaced
+
 # ---------- CLI ----------
 
 
@@ -773,15 +881,27 @@ def _run(blocks, meta):
     title = meta["title"] if "title" in meta else "Untitled"
     faq_group = meta["faq_group"] if "faq_group" in meta else "untitled"
     sync_date = meta["sync_date"] if "sync_date" in meta else None
+    # image_mode：placeholder（預設）＝ 未上傳的圖換成佔位圖，人工補
+    #             keep         ＝ 保留來源網址（Notion S3 預簽章，一小時後失效，僅除錯用）
+    image_mode = meta["image_mode"] if "image_mode" in meta else "placeholder"
 
     markdown, blocks_report = blocks_to_markdown(blocks)
     template, faq_items, report = convert(markdown, title, faq_group, sync_date=sync_date)
     report["blocks"] = blocks_report
+
+    images_todo = []
+    if image_mode == "placeholder":
+        images_todo = apply_placeholder_images(template, report)
+    report["images_todo"] = images_todo
+
     return {
         "template": template,
         "faq_items": faq_items,
         "report": report,
         "markdown": markdown,
+        # 方便下游 HTTP 節點直接取用
+        "elementor_data": template["content"],
+        "title": title,
     }
 
 

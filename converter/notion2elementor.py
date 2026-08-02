@@ -438,6 +438,53 @@ def convert(md, article_title, faq_group_slug, sync_date=None):
 def in_faq_title(text):
     return text.lower() in ("faqs", "faq", "troubleshooting")
 
+# ---------- 圖片：佔位圖模式 ----------
+
+PLACEHOLDER_IMAGE = ("https://support.synctify.net/wp-content/plugins/elementor/"
+                     "assets/images/placeholder.png")
+
+
+def apply_placeholder_images(template, report, placeholder_url=PLACEHOLDER_IMAGE):
+    """把尚未上傳的圖片換成 Elementor 佔位圖，並標上「待補圖 N」。
+
+    第一階段（自動產出草稿、圖片人工補）用。來源網址是 Notion S3 預簽章網址，
+    一小時後失效——直接寫進 WP 會在一小時內變破圖；換成佔位圖則是乾淨的灰底，
+    人工一眼就知道哪幾張要補。
+
+    回傳待補圖清單 [{"index", "alt"}]，供呼叫端產生補圖對照表。
+    """
+    pending = {img["url"] for img in report.get("images", []) if img.get("pending_upload")}
+    todo = []
+
+    def walk(elements):
+        for el in elements:
+            s = el.get("settings") or {}
+            if el.get("widgetType") == "image":
+                img = s.get("image") or {}
+                if img.get("url") in pending:
+                    alt = img.get("alt", "")
+                    todo.append({"index": len(todo) + 1, "alt": alt})
+                    img["url"] = placeholder_url
+                    s["caption_source"] = "custom"
+                    s["caption"] = f"🖼 待補圖 {len(todo)}：{alt}"
+            if el.get("widgetType") == "docly_list_item":
+                for it in s.get("ul_icon_list") or []:
+                    for src in pending:
+                        if src in it.get("text", ""):
+                            alt = ""
+                            m = re.search(r'alt="([^"]*)"', it["text"])
+                            if m:
+                                alt = m.group(1)
+                            todo.append({"index": len(todo) + 1, "alt": alt})
+                            it["text"] = it["text"].replace(src, placeholder_url)
+                            it["text"] = it["text"].replace(
+                                "[/caption]", f" 🖼 待補圖 {len(todo)}[/caption]")
+            walk(el.get("elements") or [])
+
+    walk(template.get("content") or [])
+    return todo
+
+
 # ---------- 圖片上傳後回填版面 ----------
 
 def apply_media_map(template, media_map):

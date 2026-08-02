@@ -116,3 +116,26 @@ def test_unmapped_image_left_alone():
     assert n == 0
     img = [w for w in _widgets(tpl["content"]) if w["widgetType"] == "image"][0]
     assert img["settings"]["image"]["url"] == S3      # 保持原樣
+
+
+def test_placeholder_mode_swaps_expiring_urls():
+    """第一階段：未上傳的圖換成佔位圖並標「待補圖 N」，避免把會過期的 S3 網址寫進 WP。"""
+    blocks = [
+        {"id": "h", "type": "heading_2", "heading_2": {"rich_text": [{"plain_text": "S"}]}},
+        {"id": "i", "type": "image",
+         "image": {"external": {"url": S3}, "caption": [{"plain_text": "Errors list"}]}},
+        {"id": "n1", "type": "numbered_list_item", "has_children": True,
+         "numbered_list_item": {"rich_text": [{"plain_text": "Step"}]},
+         "children": [{"id": "img2", "type": "image",
+                       "image": {"external": {"url": S3.replace("shot", "menu")},
+                                 "caption": [{"plain_text": "Action menu"}]}}]},
+    ]
+    tpl, rep = _build(blocks)
+    todo = n2e.apply_placeholder_images(tpl, rep)
+
+    assert len(todo) == 2                      # 獨立圖 + 步驟內嵌圖
+    blob = str(tpl)
+    assert "X-Amz" not in blob                 # 會過期的網址完全清除
+    assert n2e.PLACEHOLDER_IMAGE in blob
+    assert "待補圖 1" in blob and "待補圖 2" in blob
+    assert todo[0]["alt"] == "Errors list"
