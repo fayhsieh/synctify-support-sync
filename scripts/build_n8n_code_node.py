@@ -458,6 +458,7 @@ def build_polling_workflow(code):
 
     LOOP, PICK = "逐篇處理", "取出本列資訊"
     CONV, PARAMS = "轉換：blocks → Elementor JSON", "組裝參數"
+    MOTHER = "Notion：取得母列"
 
     def notion_http(method, url, body=None):
         p = {"method": method, "url": url,
@@ -535,6 +536,11 @@ def build_polling_workflow(code):
             {"id": nid(), "name": "doc_name",
              "value": "={{ $json.properties['Doc name'].title[0].plain_text }}",
              "type": "string"},
+            # 狀態與 WP Post ID 記在「母列」（一篇 guide 的穩定身分）。
+            # 沒有 Parent item 時代表這一列本身就是母列，用自己。
+            {"id": nid(), "name": "mother_id",
+             "value": "={{ ($json.properties['Parent item']?.relation?.[0]?.id "
+                      "?? $json.id).replace(/-/g, '') }}", "type": "string"},
         ]}, "options": {}},
          "id": nid(), "name": PICK, "type": "n8n-nodes-base.set",
          "typeVersion": 3.4, "position": [640, 300],
@@ -615,27 +621,85 @@ def build_polling_workflow(code):
          "notes": "與轉換節點同一份程式，靠 mode=apply_media 走回填分支。\n"
                   "上傳失敗的圖會退回佔位圖，避免把會過期的網址寫進 WP。"},
 
-        {"parameters": wp_http("POST", f"{WP_BASE}/wp-json/wp/v2/docs",
-                               '={{ { "title": $json.title, "status": "draft" } }}'),
-         "id": nid(), "name": "WP：建立草稿", "type": "n8n-nodes-base.httpRequest",
+        {"parameters": notion_http(
+            "GET", "=https://api.notion.com/v1/pages/{{ " + f"$('{PICK}').first().json.mother_id" + " }}"),
+         "id": nid(), "name": MOTHER, "type": "n8n-nodes-base.httpRequest",
          "typeVersion": 4.2, "position": [2400, 300],
-         "notes": "⚠️ 每次觸發都建立新草稿——尚未依 WP Post ID 去重或更新既有文章。"},
+         "credentials": {"notionApi": {"id": NOTION_CRED_ID, "name": NOTION_CRED_NAME}},
+         "notes": "母列存放 WP Post ID／上稿狀態——判斷要新建還是更新既有文章的依據。"},
+
+        {"parameters": {"conditions": {
+            "options": {"caseSensitive": True, "typeValidation": "loose", "version": 2},
+            "conditions": [{"id": nid(),
+                            "leftValue": "={{ $json.properties['WP Post ID']"
+                                         "?.rich_text?.[0]?.plain_text ?? '' }}",
+                            "operator": {"type": "string", "operation": "notEmpty",
+                                         "singleValue": True}, "rightValue": ""}],
+            "combinator": "and"}},
+         "id": nid(), "name": "母列有 WP Post ID？", "type": "n8n-nodes-base.if",
+         "typeVersion": 2.2, "position": [2620, 300]},
+
+        {"parameters": wp_http("GET",
+            "=" + WP_BASE + "/wp-json/wp/v2/docs/{{ $json.properties['WP Post ID']"
+            ".rich_text[0].plain_text }}?context=edit"),
+         "id": nid(), "name": "WP：查詢既有文章", "type": "n8n-nodes-base.httpRequest",
+         "typeVersion": 4.2, "position": [2840, 180],
+         "notes": "取得既有文章的 status，決定要直接更新草稿還是寫成 Elementor 草稿。"},
+
+        {"parameters": {"assignments": {"assignments": [
+            {"id": nid(), "name": "target_post_id", "value": "={{ $json.id }}",
+             "type": "number"},
+            # 已發佈的文章不直接覆蓋版面，改寫入 Elementor 草稿（/draft），前台不受影響
+            {"id": nid(), "name": "write_path",
+             "value": "={{ $json.status === 'publish' ? '/draft' : '' }}", "type": "string"},
+            {"id": nid(), "name": "sync_status",
+             "value": "={{ $json.status === 'publish' ? '待確認發佈' : '草稿已建立' }}",
+             "type": "string"},
+        ]}, "options": {}},
+         "id": nid(), "name": "目標：更新既有", "type": "n8n-nodes-base.set",
+         "typeVersion": 3.4, "position": [3060, 180]},
+
+        {"parameters": wp_http("POST", f"{WP_BASE}/wp-json/wp/v2/docs",
+            '={{ { "title": $(\'回填媒體網址\').item.json.title, "status": "draft" } }}'),
+         "id": nid(), "name": "WP：建立新草稿", "type": "n8n-nodes-base.httpRequest",
+         "typeVersion": 4.2, "position": [2840, 420],
+         "notes": "母列沒有 WP Post ID → 這是第一次上稿，建立新草稿。"},
+
+        {"parameters": {"assignments": {"assignments": [
+            {"id": nid(), "name": "target_post_id", "value": "={{ $json.id }}",
+             "type": "number"},
+            {"id": nid(), "name": "write_path", "value": "", "type": "string"},
+            {"id": nid(), "name": "sync_status", "value": "草稿已建立", "type": "string"},
+        ]}, "options": {}},
+         "id": nid(), "name": "目標：新建", "type": "n8n-nodes-base.set",
+         "typeVersion": 3.4, "position": [3060, 420]},
 
         {"parameters": wp_http(
-            "POST", f"={WP_BASE}/wp-json/synctify/v1/elementor/{{{{ $json.id }}}}",
+            "POST",
+            "=" + WP_BASE + "/wp-json/synctify/v1/elementor/"
+            "{{ $json.target_post_id }}{{ $json.write_path }}",
             '={{ { "elementor_data": $(\'回填媒體網址\').item.json.elementor_data } }}'),
          "id": nid(), "name": "WP：寫入 Elementor 版面",
-         "type": "n8n-nodes-base.httpRequest", "typeVersion": 4.2, "position": [2620, 300]},
+         "type": "n8n-nodes-base.httpRequest", "typeVersion": 4.2, "position": [3280, 300],
+         "notes": "路徑由上游決定：空＝直接寫入版面（新建／草稿）；"
+                  "/draft＝已發佈文章，只寫 Elementor 草稿，前台不受影響。"},
 
         {"parameters": notion_http(
-            "PATCH", "=https://api.notion.com/v1/pages/{{ " + page_id + " }}",
-            '={{ { "properties": { "最後同步時間": { "date": '
-            '{ "start": $now.toISO() } } } } }}'),
-         "id": nid(), "name": "Notion：記錄同步時間",
-         "type": "n8n-nodes-base.httpRequest", "typeVersion": 4.2, "position": [2840, 300],
+            "PATCH",
+            "=https://api.notion.com/v1/pages/{{ " + f"$('{PICK}').first().json.mother_id" + " }}",
+            '={{ { "properties": { '
+            '"WP Post ID": { "rich_text": [ { "text": { "content": '
+            'String($(\'WP：寫入 Elementor 版面\').item.json.post_id) } } ] }, '
+            # 上稿狀態由寫入回應判斷：/draft 端點會回 autosave_id，一般端點不會。
+            # 這樣不必跨分路取值（$json 此時是寫入回應，沒有上游的 sync_status）
+            '"上稿狀態": { "select": { "name": '
+            '$json.autosave_id ? "待確認發佈" : "草稿已建立" } }, '
+            '"最後同步時間": { "date": { "start": $now.toISO() } } } } }}'),
+         "id": nid(), "name": "Notion：回寫母列",
+         "type": "n8n-nodes-base.httpRequest", "typeVersion": 4.2, "position": [3500, 300],
          "credentials": {"notionApi": {"id": NOTION_CRED_ID, "name": NOTION_CRED_NAME}},
-         "notes": "本篇處理完後回到「逐篇處理」取下一篇。\n"
-                  "第一階段只寫時間；WP Post ID 與上稿狀態屬母列，待去重階段再處理。"},
+         "notes": "把 WP Post ID／上稿狀態／同步時間寫回母列——下次同步靠它判斷\n"
+                  "要新建還是更新。寫完回到「逐篇處理」取下一篇。"},
     ]
 
     conns = {
@@ -651,12 +715,22 @@ def build_polling_workflow(code):
             [{"node": PICK, "type": "main", "index": 0}]]},
     }
     chain = [PICK, "先取消勾選（認領）", "Notion：取得頁面 blocks", PARAMS, CONV,
-             "WP：上傳圖片", "組合回填輸入", "回填媒體網址",
-             "WP：建立草稿", "WP：寫入 Elementor 版面", "Notion：記錄同步時間"]
+             "WP：上傳圖片", "組合回填輸入", "回填媒體網址", MOTHER, "母列有 WP Post ID？"]
     for a, b in zip(chain, chain[1:]):
         conns[a] = {"main": [[{"node": b, "type": "main", "index": 0}]]}
+
+    # 分路：有 Post ID → 查既有文章狀態；沒有 → 建新草稿。兩路都匯到寫入版面。
+    conns["母列有 WP Post ID？"] = {"main": [
+        [{"node": "WP：查詢既有文章", "type": "main", "index": 0}],
+        [{"node": "WP：建立新草稿", "type": "main", "index": 0}]]}
+    conns["WP：查詢既有文章"] = {"main": [[{"node": "目標：更新既有", "type": "main", "index": 0}]]}
+    conns["WP：建立新草稿"] = {"main": [[{"node": "目標：新建", "type": "main", "index": 0}]]}
+    for n in ("目標：更新既有", "目標：新建"):
+        conns[n] = {"main": [[{"node": "WP：寫入 Elementor 版面", "type": "main", "index": 0}]]}
+    conns["WP：寫入 Elementor 版面"] = {"main": [
+        [{"node": "Notion：回寫母列", "type": "main", "index": 0}]]}
     # 本篇跑完 → 回到迴圈取下一篇
-    conns["Notion：記錄同步時間"] = {"main": [[{"node": LOOP, "type": "main", "index": 0}]]}
+    conns["Notion：回寫母列"] = {"main": [[{"node": LOOP, "type": "main", "index": 0}]]}
 
     return {
         "name": "Synctify — Notion 勾選 → WP 草稿（輪詢）",
