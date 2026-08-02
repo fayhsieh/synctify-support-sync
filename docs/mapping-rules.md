@@ -107,10 +107,46 @@ Callout 首行若為粗體獨立行 → alert_title，其餘內容 → alert_des
 | 內容 | 處理 |
 | --- | --- |
 | `*Last updated: ...*` 開頭行 | **沿用 Notion 上標記的日期**（那是寫作者標記的「內容實質更新日」，不是同步時間，不可被同步當天覆蓋）；Notion 未標記時才退回同步日期 |
-| `**SEO Meta**` 段（Title／Meta description） | 不進頁面；寫入 All in One SEO 欄位（`_aioseo_title`／`_aioseo_description`） |
+| `**SEO Meta**` 段（Title／Meta description） | 不進頁面；**擷取**進 `report["seo"]`，由 `POST /synctify/v1/seo/{id}` 寫入 All in One SEO。段內是 quote block，寫法為「粗體標籤＋軟換行＋內容」（同一個 rich_text 陣列，純文字為 `Title\n實際標題`）；標籤認 Title／SEO Title／Meta description／Description，大小寫與結尾冒號皆容忍 |
 | Version History 段（`### vN - 日期`） | 不同步，僅留 Notion 內部追蹤 |
 | 內部審核筆記（帶 toggle 的 callout、標題含「Content Review Notes」） | 不同步，自動剔除 |
 | Notion 留言標記（discussion span）、notionvc 註解 | 剔除 |
+
+## 六之二、Notion 沒有、但 WP 每篇必填的欄位
+
+由 `POST /synctify/v1/doc/defaults/{id}` 統一套用。值是從測試站 23 篇既有文章反推，
+非設計而來（23/23 一致）。**一律以名稱解析、不寫死 ID**——`opengraph.png` 在測試站是
+attachment 5988，正式站不保證同號，分類頁 ID 同理。
+
+| 欄位 | 值 | 解析方式 |
+| --- | --- | --- |
+| 封面照 | `opengraph.png`（1200×630） | 媒體庫 slug `opengraph` |
+| 作者 | The Synctify Team | 使用者顯示名稱精確比對 |
+| 討論 | `comment_status` / `ping_status` 皆 closed | 固定值 |
+| Parent | 依 Notion `Category` 對應的分類頁 | `Synctify Documentation` 底下、標題與 Category 去掉序號前綴後同名者 |
+
+Notion `Category` → WP 分類頁（測試站 ID 僅供對照，程式不使用）：
+
+| Notion Category | WP 分類頁 | 測試站 ID |
+| --- | --- | --- |
+| 1. Getting Started | Getting Started | 5953 |
+| 2. Settings | Settings | 5599 |
+| 3. Products | Products | 5633 |
+| 4. Integrations | Integrations | 5918 |
+| 5. Orders | Orders | 5930 |
+| 6. Inventory | Inventory | 5933 |
+| 7. Reports | Reports | 5936 |
+| 8. Overview | Overview | 6083 |
+| 9. Automation | **尚無對應分類頁** | — |
+| 10. Finance | Finance | 7148 |
+| 0. Troubleshooting | Troubleshooting | 5939 |
+
+分類在站上找不到時端點回 **422 並附可用清單**，刻意不靜默把文章留在根目錄
+（那會讓它掉出側邊欄結構）。
+
+**已發佈文章的保護**：`/doc/defaults` 與 `/seo` 對 `post_status=publish` 的文章
+預設只回報差異、不寫入，需明確傳 `allow_published=true`。AIOSEO meta 沒有草稿
+機制，寫下去即線上生效，因此比照「已發佈文章不能直接覆蓋」處理。
 
 ## 七、寫作端注意事項（給 Support Center Writer Skill）
 

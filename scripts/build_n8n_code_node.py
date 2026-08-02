@@ -122,6 +122,8 @@ def _run(blocks, meta):
         # 方便下游 HTTP 節點直接取用
         "elementor_data": template["content"],
         "title": title,
+        # SEO Meta 段不進正文，改寫進 AIOSEO（POST /synctify/v1/seo/{id}）
+        "seo": blocks_report["seo"],
     }
 
 
@@ -541,6 +543,11 @@ def build_polling_workflow(code):
             {"id": nid(), "name": "mother_id",
              "value": "={{ ($json.properties['Parent item']?.relation?.[0]?.id "
                       "?? $json.id).replace(/-/g, '') }}", "type": "string"},
+            # Notion Category（如 "5. Orders"）→ WP 上 Synctify Documentation 底下的
+            # 同名分類頁。序號前綴由 /doc/defaults 端點負責剝除。
+            {"id": nid(), "name": "category",
+             "value": "={{ $json.properties['Category']?.select?.name ?? '' }}",
+             "type": "string"},
         ]}, "options": {}},
          "id": nid(), "name": PICK, "type": "n8n-nodes-base.set",
          "typeVersion": 3.4, "position": [640, 300],
@@ -684,6 +691,33 @@ def build_polling_workflow(code):
          "notes": "路徑由上游決定：空＝直接寫入版面（新建／草稿）；"
                   "/draft＝已發佈文章，只寫 Elementor 草稿，前台不受影響。"},
 
+        {"parameters": wp_http(
+            "POST",
+            "=" + WP_BASE + "/wp-json/synctify/v1/doc/defaults/"
+            "{{ $('WP：寫入 Elementor 版面').item.json.post_id }}",
+            '={{ { "category": ' + f"$('{PICK}').first().json.category" + ' } }}'),
+         "id": nid(), "name": "WP：套用站方預設欄位",
+         "type": "n8n-nodes-base.httpRequest", "typeVersion": 4.2, "position": [3500, 300],
+         "notes": "封面照 opengraph／作者 The Synctify Team／討論 closed／\n"
+                  "Parent 依 Notion Category 對到分類頁。\n"
+                  "兩條分路都會經過：新草稿會實際套用；已發佈文章端點只回報 diff "
+                  "不寫入（要改需 allow_published=true）。\n"
+                  "分類在站上找不到會回 422 並附可用清單——刻意不靜默留在根目錄。"},
+
+        {"parameters": wp_http(
+            "POST",
+            "=" + WP_BASE + "/wp-json/synctify/v1/seo/"
+            "{{ $('WP：寫入 Elementor 版面').item.json.post_id }}",
+            # 用 ?. ——文章若沒寫 SEO Meta 段，seo 是空物件，兩個欄位皆 undefined，
+            # 序列化後直接消失，端點會視為「未指定」而保留站上現值。
+            '={{ { "title": ' + f"$('{CONV}').item.json.seo?.title" + ', '
+            '"description": ' + f"$('{CONV}').item.json.seo?.description" + ' } }}'),
+         "id": nid(), "name": "WP：寫入 SEO meta",
+         "type": "n8n-nodes-base.httpRequest", "typeVersion": 4.2, "position": [3720, 300],
+         "notes": "取自 Notion 文末的 SEO Meta 段（不進正文）。\n"
+                  "AIOSEO meta 沒有草稿機制，寫下去即線上生效，故已發佈文章\n"
+                  "端點預設只回報 previous/proposed 差異，不實際寫入。"},
+
         {"parameters": notion_http(
             "PATCH",
             "=https://api.notion.com/v1/pages/{{ " + f"$('{PICK}').first().json.mother_id" + " }}",
@@ -693,10 +727,11 @@ def build_polling_workflow(code):
             # 上稿狀態由寫入回應判斷：/draft 端點會回 autosave_id，一般端點不會。
             # 這樣不必跨分路取值（$json 此時是寫入回應，沒有上游的 sync_status）
             '"上稿狀態": { "select": { "name": '
-            '$json.autosave_id ? "待確認發佈" : "草稿已建立" } }, '
+            '$(\'WP：寫入 Elementor 版面\').item.json.autosave_id '
+            '? "待確認發佈" : "草稿已建立" } }, '
             '"最後同步時間": { "date": { "start": $now.toISO() } } } } }}'),
          "id": nid(), "name": "Notion：回寫母列",
-         "type": "n8n-nodes-base.httpRequest", "typeVersion": 4.2, "position": [3500, 300],
+         "type": "n8n-nodes-base.httpRequest", "typeVersion": 4.2, "position": [3940, 300],
          "credentials": {"notionApi": {"id": NOTION_CRED_ID, "name": NOTION_CRED_NAME}},
          "notes": "把 WP Post ID／上稿狀態／同步時間寫回母列——下次同步靠它判斷\n"
                   "要新建還是更新。寫完回到「逐篇處理」取下一篇。"},
@@ -727,8 +762,11 @@ def build_polling_workflow(code):
     conns["WP：建立新草稿"] = {"main": [[{"node": "目標：新建", "type": "main", "index": 0}]]}
     for n in ("目標：更新既有", "目標：新建"):
         conns[n] = {"main": [[{"node": "WP：寫入 Elementor 版面", "type": "main", "index": 0}]]}
-    conns["WP：寫入 Elementor 版面"] = {"main": [
-        [{"node": "Notion：回寫母列", "type": "main", "index": 0}]]}
+    # 寫完版面 → 套站方預設欄位 → 寫 SEO meta → 回寫母列
+    for a, b in (("WP：寫入 Elementor 版面", "WP：套用站方預設欄位"),
+                 ("WP：套用站方預設欄位", "WP：寫入 SEO meta"),
+                 ("WP：寫入 SEO meta", "Notion：回寫母列")):
+        conns[a] = {"main": [[{"node": b, "type": "main", "index": 0}]]}
     # 本篇跑完 → 回到迴圈取下一篇
     conns["Notion：回寫母列"] = {"main": [[{"node": LOOP, "type": "main", "index": 0}]]}
 
