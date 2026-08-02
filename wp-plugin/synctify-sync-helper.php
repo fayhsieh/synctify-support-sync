@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Synctify Sync Helper
  * Description: Notion → n8n → WordPress 自動上稿流程的輔助端點：開啟 Arconix FAQ REST、寫入 Elementor data、讀寫 TranslatePress 字典表、寫入 AIOSEO meta。
- * Version: 0.1.4
+ * Version: 0.1.5
  * Author: Synctify Marketing (Fay)
  *
  * 安裝：外掛 → 上傳外掛（打包成 zip），或直接放入 wp-content/mu-plugins/
@@ -265,8 +265,11 @@ add_action( 'rest_api_init', function () {
 				'ok'                 => (bool) $saved,
 				'post_id'            => $post_id,
 				'post_status'        => $post->post_status,
-				'autosave_id'        => method_exists( $autosave, 'get_main_id' )
-				                        ? $autosave->get_main_id() : null,
+				// 注意：get_main_id() 回的是「母文章」ID，不是 autosave 本身。
+				// 取 autosave 的 WP_Post->ID 才是實際建立的 revision（可用
+				// GET /wp/v2/docs/{id}/autosaves 對照）。
+				'autosave_id'        => ( method_exists( $autosave, 'get_post' ) && $autosave->get_post() )
+				                        ? (int) $autosave->get_post()->ID : null,
 				// 兩者相同代表主文章版面沒被動到——前台不受影響
 				'live_data_unchanged' => ( $before === $after ),
 				'note'               => '實驗性端點：請在 Elementor 開啟此文章確認是否出現'
