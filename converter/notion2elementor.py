@@ -302,11 +302,6 @@ def list_to_html_v2(items):
 # ---------- 主轉換 ----------
 
 def convert(md, article_title, faq_group_slug, sync_date=None):
-    if not sync_date:
-        # 延遲載入：呼叫端（n8n／service）通常會帶入 sync_date，
-        # 不帶時才需要 datetime，避免核心路徑多一個 import 相依。
-        from datetime import date
-        sync_date = date.today().strftime("%B %d, %Y")
     global _eid_counter
     _eid_counter = 0          # 每次轉換重置，確保同輸入產生同 ID
     blocks = parse_blocks(md)
@@ -349,12 +344,20 @@ def convert(md, article_title, faq_group_slug, sync_date=None):
             cur = []
 
     # 開頭：Last updated container。
-    # 優先沿用 Notion 文章上手動標記的日期（內容實質更新日）；沒有才用同步日期。
-    doc_date = sync_date
+    # 取值優先序：Notion 文章上手動標記的日期（內容實質更新日）
+    #           → 呼叫端傳入的 sync_date → 今天。
+    # datetime 只在前兩者都沒有時才載入——實際文章都有 Last updated 行，
+    # 因此正常路徑完全不需要 datetime（n8n runner 的 allowlist 只給 re）。
+    doc_date = None
     for _b in blocks:
         if _b["t"] == "last_updated" and _b.get("date"):
             doc_date = _b["date"]
             break
+    if not doc_date:
+        doc_date = sync_date
+    if not doc_date:
+        from datetime import date
+        doc_date = date.today().strftime("%B %d, %Y")
     containers.append(container([widget("text-editor", {
         "editor": f"<p><em>Last updated: {doc_date}</em></p>"})]))
 
