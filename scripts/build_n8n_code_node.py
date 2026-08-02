@@ -393,8 +393,12 @@ def build_draft_workflow(code):
 
 WEBHOOK_PATH = "synctify-draft"
 
-# Content Hub 資料庫（見 .env NOTION_CONTENT_HUB_DB_ID）
-NOTION_DB_ID = "3272f2ed-e27d-80f9-8e2d-000be0502aa8"
+# Content Hub 的 **database** ID（REST API /v1/databases/{id}/query 要的是這個）。
+# ⚠️ 別跟 **collection（data source）** ID 3272f2ed-e27d-80f9-8e2d-000be0502aa8 搞混——
+# 那個是 Notion 新版 API 的資料源識別碼，丟給 /v1/databases 會回
+# 404 object_not_found（2026-08-02 實際踩過）。
+# 已用 Notion API 確認此 ID 的 metadata type 為 database、標題為 Support Center Content Hub。
+NOTION_DB_ID = "3272f2ed-e27d-807e-9fac-f2313dd2d0de"
 # 觸發用的 checkbox 屬性名稱（需在 Notion 手動新增；勿與既有的 Button 屬性同名）
 TRIGGER_PROP = "待同步"
 POLL_MINUTES = 1
