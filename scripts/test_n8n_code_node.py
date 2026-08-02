@@ -114,6 +114,26 @@ def main():
         print(f"    {'✅' if v else '❌'} {k}")
     failures += [k for k, v in checks.items() if not v]
 
+    # ── 情境 2b：n8n Notion 節點的原生形狀（一個 block 一個 item）──
+    # Set 節點會把 title/faq_group 加到每個 item 上
+    items_per_block = [{"json": dict(b, title="Manage Exception Orders",
+                                     faq_group="manage-exception-orders",
+                                     sync_date="July 29, 2026")} for b in blocks]
+    out_b = run_as_n8n(source, items=items_per_block)
+    rb = out_b[0]["json"]
+    ws_b = widgets(rb["template"]["content"])
+    olists_b = [w for w in ws_b if w["widgetType"] == "docly_list_item"]
+    checks_b = {
+        "一個 block 一個 item 也能處理": len(olists_b) == 1
+                                       and len(olists_b[0]["settings"]["ul_icon_list"]) == 3,
+        "title 從 item 上讀到": rb["template"]["title"] == "Manage Exception Orders",
+        "與單一 item 形狀結果一致": rb["template"]["content"] == tpl["content"],
+    }
+    print("\n情境 2b｜Notion 節點原生形狀（一個 block 一個 item）")
+    for k, v in checks_b.items():
+        print(f"    {'✅' if v else '❌'} {k}")
+    failures += [k for k, v in checks_b.items() if not v]
+
     # ── 情境 3：確認 re 以外的 import 真的被擋（證明沙箱有效）──
     try:
         run_as_n8n("import json\nreturn []", items=[])

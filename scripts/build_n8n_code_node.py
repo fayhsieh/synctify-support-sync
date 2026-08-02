@@ -58,11 +58,28 @@ _SELFTEST_BLOCKS = [
 ]
 
 
-def _run(payload):
-    blocks = payload["blocks"] if "blocks" in payload else []
-    title = payload["title"] if "title" in payload else "Untitled"
-    faq_group = payload["faq_group"] if "faq_group" in payload else "untitled"
-    sync_date = payload["sync_date"] if "sync_date" in payload else None
+def _collect(payloads):
+    """從 n8n 輸入取出 (blocks, meta)。支援兩種上游接法：
+
+      A) 一個 block 一個 item —— n8n Notion 節點 Get Child Blocks 的原生輸出
+      B) 單一 item 帶 blocks 陣列 —— 上游接了 Aggregate／Code 整併過
+
+    title／faq_group 由 Set 節點加在 item 上（A 的情況會加在每個 item，取第一個即可）。
+    """
+    if not payloads:
+        return [], {}
+    first = payloads[0]
+    if "blocks" in first:
+        return first["blocks"], first
+    if "type" in first:          # item 本身就是 Notion block
+        return payloads, first
+    return [], first
+
+
+def _run(blocks, meta):
+    title = meta["title"] if "title" in meta else "Untitled"
+    faq_group = meta["faq_group"] if "faq_group" in meta else "untitled"
+    sync_date = meta["sync_date"] if "sync_date" in meta else None
 
     markdown, blocks_report = blocks_to_markdown(blocks)
     template, faq_items, report = convert(markdown, title, faq_group, sync_date=sync_date)
@@ -79,12 +96,12 @@ _payloads = []
 for _it in _items:
     _payloads.append(_it["json"])
 
-_has_input = len(_payloads) > 0 and "blocks" in _payloads[0] and _payloads[0]["blocks"]
+_blocks, _meta = _collect(_payloads)
 
-if not _has_input:
+if not _blocks:
     # 沒有真實輸入 → 跑自我測試，確認執行環境與程式本身都正常
-    _out = _run({"blocks": _SELFTEST_BLOCKS, "title": "Self Test",
-                 "faq_group": "self-test", "sync_date": "July 29, 2026"})
+    _out = _run(_SELFTEST_BLOCKS, {"title": "Self Test", "faq_group": "self-test",
+                                   "sync_date": "July 29, 2026"})
     _steps = 0
     _direction_ok = False
     for _c in _out["template"]["content"]:
@@ -107,7 +124,7 @@ if not _has_input:
         "note": "未收到 blocks 輸入，這是自我測試。接上 Notion 節點後會轉換真實內容。",
     }}]
 
-return [{"json": _run(p)} for p in _payloads]
+return [{"json": _run(_blocks, _meta)}]
 '''
 
 
