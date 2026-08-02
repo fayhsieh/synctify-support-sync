@@ -112,6 +112,23 @@ def _code_language(lang):
     return lang.replace(" ", "") or "markdown"
 
 
+# Notion API 不提供圖片 alt text（只有 caption），因此寫作端以標記把兩段文字
+# 放進同一個圖說：`可見圖說 [alt: 無障礙描述]`。
+# 沒有標記時 alt 與 caption 同值，行為與舊文章一致（向下相容）。
+_ALT_MARKER = re.compile(r"^(.*?)\s*\[alt:\s*(.*?)\]\s*$", re.S | re.I)
+
+
+def split_caption_alt(text):
+    """圖說 → (可見 caption, alt text)。無標記時兩者相同。"""
+    text = (text or "").strip()
+    m = _ALT_MARKER.match(text)
+    if not m:
+        return text, text
+    caption = m.group(1).strip()
+    alt = m.group(2).strip()
+    return caption, (alt or caption)
+
+
 def _heading_level(btype):
     """heading_N → markdown 井字號數（夾在轉換器認得的 [2, 4]）；非標題回 None。"""
     if not btype or not btype.startswith("heading_"):
@@ -237,12 +254,15 @@ def _render(blocks, lines, report, indent):
 
         elif btype == "image":
             url = (data.get("file") or {}).get("url") or (data.get("external") or {}).get("url", "")
-            caption = rich_text(data.get("caption"))
+            caption, alt = split_caption_alt(rich_text(data.get("caption")))
+            # 用 markdown 的 title 欄位（引號那格）帶 alt text：![可見圖說](url "alt")
+            # 兩者相同時省略，維持與舊輸出一致
+            suffix = f' "{alt}"' if alt and alt != caption else ""
             if indent:
-                lines.append(f"{tab}![{caption}]({url})")   # 巢狀在步驟下 → [caption] shortcode
+                lines.append(f"{tab}![{caption}]({url}{suffix})")   # 巢狀 → [caption] shortcode
             else:
                 _blank(lines)
-                lines.append(f"![{caption}]({url})")
+                lines.append(f"![{caption}]({url}{suffix})")
 
         elif btype == "callout":
             icon = data.get("icon") or {}
@@ -510,10 +530,11 @@ def parse_blocks(md):
                 sub = []
                 while i < len(lines) and lines[i].startswith("\t") and lines[i].strip():
                     sline = lines[i].strip()
-                    im = re.match(r"^!\[(.*?)\]\((.*?)\)$", sline)
+                    im = re.match(r'^!\[(.*?)\]\((\S+?)(?:\s+"([^"]*)")?\)$', sline)
                     bm = re.match(r"^-\s+(.*)$", sline)
                     if im:                       # 步驟下的巢狀圖片
-                        sub.append(("image", im.group(1), im.group(2)))
+                        sub.append(("image", im.group(1), im.group(2),
+                                    im.group(3) or im.group(1)))
                     elif bm:                     # 巢狀 bullet
                         sub.append(("text", bm.group(1)))
                     else:                        # 接續說明
@@ -536,10 +557,13 @@ def parse_blocks(md):
             blocks.append({"t": "heading", "level": 4, "text": bm.group(1)})
             i += 1
             continue
-        # 圖片
-        im = re.match(r"^!\[(.*?)\]\((.*?)\)$", stripped)
+        # 圖片：![可見圖說](url "alt text")——引號那格為選填的 alt，
+        # 因 Notion API 不提供 alt，由上游從圖說的 [alt: ...] 標記拆出後放這裡
+        im = re.match(r'^!\[(.*?)\]\((\S+?)(?:\s+"([^"]*)")?\)$', stripped)
         if im:
-            blocks.append({"t": "image", "alt": im.group(1), "url": im.group(2)})
+            cap = im.group(1)
+            blocks.append({"t": "image", "caption": cap, "url": im.group(2),
+                           "alt": im.group(3) or cap})
             i += 1
             continue
         # 清單（含巢狀，以 tab 縮排）
@@ -683,16 +707,18 @@ def convert(md, article_title, faq_group_slug, sync_date=None):
                     if sub[0] == "image":
                         # 步驟下的巢狀圖片 → 內嵌 [caption] shortcode（保留圖說＋lightbox，
                         # 且不佔圓圈編號）。結構逆向自實站範本 7915。
-                        alt, iurl = sub[1], sub[2]
+                        cap, iurl = sub[1], sub[2]
+                        alt = sub[3] if len(sub) > 3 else cap
                         pending = "prod-files-secure" in iurl
                         if not pending:
                             iurl = re.sub(r"-\d+x\d+(\.\w+)$", r"\1", iurl)
-                        report_images.append({"url": iurl, "alt": alt, "pending_upload": pending})
+                        report_images.append({"url": iurl, "alt": alt, "caption": cap,
+                                              "pending_upload": pending})
                         # 標準：Link To = Media File（<a href> 包 img）、Size = Large 1024x576
                         # （size-large class＋width/height）。對齊實站 7915 與站方統一規範。
                         html += (f'[caption align="alignnone" width="1024"]'
                                  f'<a href="{iurl}"><img class="size-large" src="{iurl}" '
-                                 f'alt="{alt}" width="1024" height="576" /></a> {alt}[/caption]')
+                                 f'alt="{alt}" width="1024" height="576" /></a> {cap}[/caption]')
                     else:
                         # 巢狀 bullet／接續說明 → 內嵌縮排段落（非 <li>，不被編號 counter 計入）
                         html += f'<p style="padding-left: 40px;">{inline_md_to_html(sub[1])}</p>'
@@ -714,7 +740,9 @@ def convert(md, article_title, faq_group_slug, sync_date=None):
             if not pending:
                 # 已在 WP 媒體庫：還原原始檔（去掉 -WxH 尺寸後綴）
                 url = re.sub(r"-\d+x\d+(\.\w+)$", r"\1", url)
-            report_images.append({"url": url, "alt": b["alt"], "pending_upload": pending})
+            report_images.append({"url": url, "alt": b["alt"],
+                                  "caption": b.get("caption", b["alt"]),
+                                  "pending_upload": pending})
             cur.append(widget("image", {
                 "image": {"url": url, "size": "", "alt": b["alt"], "source": "library"},
                 "caption_source": "attachment", "link_to": "file", "open_lightbox": "yes"}))

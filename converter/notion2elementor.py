@@ -197,10 +197,11 @@ def parse_blocks(md):
                 sub = []
                 while i < len(lines) and lines[i].startswith("\t") and lines[i].strip():
                     sline = lines[i].strip()
-                    im = re.match(r"^!\[(.*?)\]\((.*?)\)$", sline)
+                    im = re.match(r'^!\[(.*?)\]\((\S+?)(?:\s+"([^"]*)")?\)$', sline)
                     bm = re.match(r"^-\s+(.*)$", sline)
                     if im:                       # 步驟下的巢狀圖片
-                        sub.append(("image", im.group(1), im.group(2)))
+                        sub.append(("image", im.group(1), im.group(2),
+                                    im.group(3) or im.group(1)))
                     elif bm:                     # 巢狀 bullet
                         sub.append(("text", bm.group(1)))
                     else:                        # 接續說明
@@ -223,10 +224,13 @@ def parse_blocks(md):
             blocks.append({"t": "heading", "level": 4, "text": bm.group(1)})
             i += 1
             continue
-        # 圖片
-        im = re.match(r"^!\[(.*?)\]\((.*?)\)$", stripped)
+        # 圖片：![可見圖說](url "alt text")——引號那格為選填的 alt，
+        # 因 Notion API 不提供 alt，由上游從圖說的 [alt: ...] 標記拆出後放這裡
+        im = re.match(r'^!\[(.*?)\]\((\S+?)(?:\s+"([^"]*)")?\)$', stripped)
         if im:
-            blocks.append({"t": "image", "alt": im.group(1), "url": im.group(2)})
+            cap = im.group(1)
+            blocks.append({"t": "image", "caption": cap, "url": im.group(2),
+                           "alt": im.group(3) or cap})
             i += 1
             continue
         # 清單（含巢狀，以 tab 縮排）
@@ -370,16 +374,18 @@ def convert(md, article_title, faq_group_slug, sync_date=None):
                     if sub[0] == "image":
                         # 步驟下的巢狀圖片 → 內嵌 [caption] shortcode（保留圖說＋lightbox，
                         # 且不佔圓圈編號）。結構逆向自實站範本 7915。
-                        alt, iurl = sub[1], sub[2]
+                        cap, iurl = sub[1], sub[2]
+                        alt = sub[3] if len(sub) > 3 else cap
                         pending = "prod-files-secure" in iurl
                         if not pending:
                             iurl = re.sub(r"-\d+x\d+(\.\w+)$", r"\1", iurl)
-                        report_images.append({"url": iurl, "alt": alt, "pending_upload": pending})
+                        report_images.append({"url": iurl, "alt": alt, "caption": cap,
+                                              "pending_upload": pending})
                         # 標準：Link To = Media File（<a href> 包 img）、Size = Large 1024x576
                         # （size-large class＋width/height）。對齊實站 7915 與站方統一規範。
                         html += (f'[caption align="alignnone" width="1024"]'
                                  f'<a href="{iurl}"><img class="size-large" src="{iurl}" '
-                                 f'alt="{alt}" width="1024" height="576" /></a> {alt}[/caption]')
+                                 f'alt="{alt}" width="1024" height="576" /></a> {cap}[/caption]')
                     else:
                         # 巢狀 bullet／接續說明 → 內嵌縮排段落（非 <li>，不被編號 counter 計入）
                         html += f'<p style="padding-left: 40px;">{inline_md_to_html(sub[1])}</p>'
@@ -401,7 +407,9 @@ def convert(md, article_title, faq_group_slug, sync_date=None):
             if not pending:
                 # 已在 WP 媒體庫：還原原始檔（去掉 -WxH 尺寸後綴）
                 url = re.sub(r"-\d+x\d+(\.\w+)$", r"\1", url)
-            report_images.append({"url": url, "alt": b["alt"], "pending_upload": pending})
+            report_images.append({"url": url, "alt": b["alt"],
+                                  "caption": b.get("caption", b["alt"]),
+                                  "pending_upload": pending})
             cur.append(widget("image", {
                 "image": {"url": url, "size": "", "alt": b["alt"], "source": "library"},
                 "caption_source": "attachment", "link_to": "file", "open_lightbox": "yes"}))

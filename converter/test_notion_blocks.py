@@ -399,3 +399,50 @@ def test_various_code_languages_parse():
         assert code and code[0]["settings"]["lng_type"] == expect, f"{lang} → {expect}"
         heads = [w["settings"]["title"] for w in ws if w["widgetType"] == "heading"]
         assert "After" in heads, f"{lang}: 後續內容被吞掉了"
+
+
+def test_caption_alt_marker_splits_into_two_fields():
+    """Notion API 不給 alt text，寫作端以 `可見圖說 [alt: 描述]` 標記把兩段放進圖說。"""
+    cap = "Review on-hold orders and their hold reasons from the On-Hold tab."
+    alt = "Synctify OMS On-Hold tab showing on-hold orders, hold reasons, and actions."
+    blocks = [
+        head(2, "S"),
+        blk("image", {"external": {"url": "https://x/a.png"},
+                      "caption": [rt(f"{cap} [alt: {alt}]")]}),
+    ]
+    md, ws, _ = to_elementor(blocks)
+    # markdown 用 title 欄位帶 alt：![可見圖說](url "alt")
+    assert f'![{cap}](https://x/a.png "{alt}")' in md
+
+    img = [w for w in ws if w["widgetType"] == "image"][0]
+    assert img["settings"]["image"]["alt"] == alt          # widget 用 alt
+    _tpl, _f, rep = n2e.convert(md, "T", "t", sync_date="Aug 2, 2026")
+    assert rep["images"][0]["alt"] == alt
+    assert rep["images"][0]["caption"] == cap              # 上傳時分開送
+
+
+def test_caption_without_marker_is_backward_compatible():
+    """沒有標記的舊文章：alt 與 caption 同值，行為與先前一致。"""
+    text = "A plain caption."
+    blocks = [head(2, "S"),
+              blk("image", {"external": {"url": "https://x/b.png"}, "caption": [rt(text)]})]
+    md, ws, _ = to_elementor(blocks)
+    assert f'![{text}](https://x/b.png)' in md      # 無多餘的 title 欄位
+    _tpl, _f, rep = n2e.convert(md, "T", "t", sync_date="Aug 2, 2026")
+    assert rep["images"][0]["alt"] == text
+    assert rep["images"][0]["caption"] == text
+
+
+def test_nested_step_image_uses_alt_and_caption_separately():
+    cap, alt = "The action menu.", "Screenshot of the row action menu with Reinstate Order."
+    blocks = [
+        head(2, "Steps"),
+        num("Open the menu"),
+        num("Select it", children=[
+            blk("image", {"external": {"url": "https://x/c.png"},
+                          "caption": [rt(f"{cap} [alt: {alt}]")]})]),
+    ]
+    _md, ws, _ = to_elementor(blocks)
+    step = [w for w in ws if w["widgetType"] == "docly_list_item"][0]["settings"]["ul_icon_list"][1]["text"]
+    assert f'alt="{alt}"' in step          # img 的 alt 用 alt text
+    assert f"</a> {cap}[/caption]" in step  # 可見圖說用 caption

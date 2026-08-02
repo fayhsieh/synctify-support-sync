@@ -59,8 +59,17 @@ Callout 首行若為粗體獨立行 → alert_title，其餘內容 → alert_des
 
 **⚠️ Notion API 不提供 alt text**（2026-08-02 以實際 API 回應確認）。image block 的
 `image` 物件只有 `caption`／`type`／`file`，沒有任何 alt 欄位——即使在 Notion UI 裡
-設定了 alt text 也讀不到。因此 alt 與 caption 都取自 Notion 的**圖說**。
-寫作端在 Notion 填的 alt text 不會同步到 WP，圖說本身要寫成足以當 alt 的描述。
+設定了 alt text 也讀不到。
+
+**因此改以圖說內的標記承載兩段文字**（唯一 API 看得到的通道）：
+
+```
+可見圖說文字 [alt: 無障礙描述文字]
+```
+
+轉換器拆成 caption（可見圖說）與 alt（alt text），分別寫入 WP 的 Caption 與 Alt text。
+**無標記時兩者同值**，舊文章行為不變（向下相容）。
+中介 markdown 用 title 欄位攜帶 alt：`![可見圖說](url "alt text")`。
 
 **WP 媒體庫三個文字欄位的儲存位置不同**（很容易寫錯）：
 
@@ -111,5 +120,6 @@ Callout 首行若為粗體獨立行 → alert_title，其餘內容 → alert_des
 - 程式碼區塊務必標語言（http／markdown／json 等），會直接變成 WP 端語法高亮的語言設定
 - 內部筆記請放在帶 toggle 的 callout 內，或標題含「Content Review Notes」，確保不會被同步
 - FAQ 問題用 `###` 或 `####` 皆可，一題一個標題，答案直接接在下方
-- **圖片的圖說要寫成足以當 alt text 的描述**：Notion API 讀不到 alt text 欄位，
-  自動同步時 alt 與 caption 都取自圖說。在 Notion UI 填 alt text 不會同步到 WP
+- **圖片的 alt text 要寫在圖說裡**，用 `可見圖說 [alt: 無障礙描述]` 格式。
+  Notion API 讀不到 image block 的 alt text 欄位，在 Notion UI 填的 alt 不會同步到 WP；
+  只有寫進圖說的才抓得到。不加標記時 alt 會沿用圖說文字

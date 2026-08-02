@@ -591,7 +591,7 @@ def build_polling_workflow(code):
             "POST", f"{WP_BASE}/wp-json/synctify/v1/media/sideload",
             "={{ { \"images\": $json.report.images"
             ".filter(i => i.pending_upload)"
-            ".map(i => ({ url: i.url, alt: i.alt, caption: i.alt })) } }}"),
+            ".map(i => ({ url: i.url, alt: i.alt, caption: i.caption ?? i.alt })) } }}"),
          "id": nid(), "name": "WP：上傳圖片", "type": "n8n-nodes-base.httpRequest",
          "typeVersion": 4.2, "position": [1740, 300],
          "notes": "把 Notion S3 上的圖 sideload 進 WP 媒體庫。\n"

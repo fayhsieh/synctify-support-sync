@@ -104,6 +104,23 @@ def _code_language(lang):
     return lang.replace(" ", "") or "markdown"
 
 
+# Notion API 不提供圖片 alt text（只有 caption），因此寫作端以標記把兩段文字
+# 放進同一個圖說：`可見圖說 [alt: 無障礙描述]`。
+# 沒有標記時 alt 與 caption 同值，行為與舊文章一致（向下相容）。
+_ALT_MARKER = re.compile(r"^(.*?)\s*\[alt:\s*(.*?)\]\s*$", re.S | re.I)
+
+
+def split_caption_alt(text):
+    """圖說 → (可見 caption, alt text)。無標記時兩者相同。"""
+    text = (text or "").strip()
+    m = _ALT_MARKER.match(text)
+    if not m:
+        return text, text
+    caption = m.group(1).strip()
+    alt = m.group(2).strip()
+    return caption, (alt or caption)
+
+
 def _heading_level(btype):
     """heading_N → markdown 井字號數（夾在轉換器認得的 [2, 4]）；非標題回 None。"""
     if not btype or not btype.startswith("heading_"):
@@ -229,12 +246,15 @@ def _render(blocks, lines, report, indent):
 
         elif btype == "image":
             url = (data.get("file") or {}).get("url") or (data.get("external") or {}).get("url", "")
-            caption = rich_text(data.get("caption"))
+            caption, alt = split_caption_alt(rich_text(data.get("caption")))
+            # 用 markdown 的 title 欄位（引號那格）帶 alt text：![可見圖說](url "alt")
+            # 兩者相同時省略，維持與舊輸出一致
+            suffix = f' "{alt}"' if alt and alt != caption else ""
             if indent:
-                lines.append(f"{tab}![{caption}]({url})")   # 巢狀在步驟下 → [caption] shortcode
+                lines.append(f"{tab}![{caption}]({url}{suffix})")   # 巢狀 → [caption] shortcode
             else:
                 _blank(lines)
-                lines.append(f"![{caption}]({url})")
+                lines.append(f"![{caption}]({url}{suffix})")
 
         elif btype == "callout":
             icon = data.get("icon") or {}
