@@ -143,11 +143,20 @@ def split_caption_alt(text):
 
 
 def _capture_seo(data, report):
-    """SEO Meta 段裡的一個 quote／paragraph → report["seo"]。無法辨識的行忽略。"""
+    """SEO Meta 段裡的一個 quote／paragraph → report["seo"]。無法辨識的行忽略。
+
+    標籤與內容的分隔在 Notion 是軟換行（plain_text 裡的 \\n）。若寫作者是手打
+    `<br>` 而非按 Shift+Enter，純文字裡就會是字面的 <br>——兩種都接受。
+    """
     raw = _plain(_rt_items(data))
-    if "\n" not in raw:
+    sep = "\n" if "\n" in raw else ("<br>" if "<br>" in raw.lower() else None)
+    if not sep:
         return
-    label, _, value = raw.partition("\n")
+    if sep == "<br>":
+        idx = raw.lower().index("<br>")
+        label, value = raw[:idx], raw[idx + 4:]
+    else:
+        label, _, value = raw.partition("\n")
     key = _SEO_LABELS.get(label.strip().rstrip(":：").lower())
     if key and value.strip():
         report["seo"][key] = value.strip()

@@ -526,3 +526,13 @@ def test_review_notes_section_still_fully_dropped():
     md, report = nb.blocks_to_markdown(blocks)
     assert report["seo"] == {}
     assert "SHOULD NOT LEAK" not in md
+
+
+def test_seo_accepts_literal_br_separator():
+    """寫作者手打 <br> 而非 Shift+Enter 時也要解析得出來。"""
+    blocks = [
+        head(2, "Overview"), para("Body."), para("SEO Meta"),
+        blk("quote", {"rich_text": [rt("Title<br>", bold=True), rt(SEO_TITLE)]}),
+    ]
+    _md, report = nb.blocks_to_markdown(blocks)
+    assert report["seo"] == {"title": SEO_TITLE}
