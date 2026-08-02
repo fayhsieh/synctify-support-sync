@@ -52,10 +52,11 @@ def rich_text(items):
     """Notion rich_text 陣列 → 行內 markdown（順序：code → bold → italic → link）"""
     out = []
     for t in items or []:
-        if not hasattr(t, "get"):        # Simplify 模式可能直接給字串
-            out.append(str(t))
+        try:
+            s = t.get("plain_text") or (t.get("text") or {}).get("content") or ""
+        except AttributeError:
+            out.append(str(t))           # Simplify 模式可能直接給字串
             continue
-        s = t.get("plain_text") or (t.get("text") or {}).get("content") or ""
         if not s:
             continue
         a = t.get("annotations") or {}
@@ -75,10 +76,10 @@ def rich_text(items):
 def _plain(items):
     out = []
     for t in items or []:
-        if not hasattr(t, "get"):
-            out.append(str(t))
-        else:
+        try:
             out.append(t.get("plain_text") or (t.get("text") or {}).get("content") or "")
+        except AttributeError:
+            out.append(str(t))
     return "".join(out)
 
 

@@ -18,9 +18,18 @@ import textwrap
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 CODE = ROOT / "n8n" / "code-node.py"
 
+# n8n v2 的 Python runner 會拒絕「不安全的內建函式」。實測 `hasattr` 即被擋
+# （錯誤：name 'hasattr' is not defined），故此處以保守清單模擬：
+# 內省／動態執行／IO 類一律視為不可用，只留純資料處理需要的內建。
+BLOCKED_BUILTINS = {
+    "hasattr", "getattr", "setattr", "delattr", "vars", "dir",
+    "globals", "locals", "eval", "exec", "compile", "__import__",
+    "open", "input", "breakpoint", "memoryview", "id", "callable",
+}
+
 
 def run_as_n8n(source, items, allow={"re"}):
-    """把 source 包成函式並在受限 import 環境下執行，回傳其 return 值。"""
+    """把 source 包成函式並在受限環境下執行（限制 import 與內建函式），回傳其 return 值。"""
     wrapped = "def __n8n_main(_items):\n" + textwrap.indent(source, "    ")
 
     real_import = builtins.__import__
@@ -28,16 +37,20 @@ def run_as_n8n(source, items, allow={"re"}):
     def guarded(name, *a, **k):
         root = name.split(".")[0]
         if root not in allow and root not in sys.builtin_module_names:
-            raise ImportError(f"BLOCKED: {name}（模擬 n8n runner allowlist）")
+            raise ImportError(f"BLOCKED: {name}（模擬 n8n runner import allowlist）")
         return real_import(name, *a, **k)
 
-    ns = {}
-    builtins.__import__ = guarded
+    # 以剔除過的 __builtins__ 執行，模擬 runner 拒絕不安全內建的行為
+    safe_builtins = {k: v for k, v in vars(builtins).items()
+                     if k not in BLOCKED_BUILTINS}
+    safe_builtins["__import__"] = guarded
+
+    ns = {"__builtins__": safe_builtins}
     try:
         exec(compile(wrapped, "n8n-code-node", "exec"), ns)
         return ns["__n8n_main"](items)
     finally:
-        builtins.__import__ = real_import
+        pass
 
 
 def main():
@@ -134,13 +147,20 @@ def main():
         print(f"    {'✅' if v else '❌'} {k}")
     failures += [k for k, v in checks_b.items() if not v]
 
-    # ── 情境 3：確認 re 以外的 import 真的被擋（證明沙箱有效）──
+    # ── 情境 3：確認沙箱真的有在擋（import 與不安全內建）──
+    print("\n情境 3｜沙箱自我驗證")
     try:
         run_as_n8n("import json\nreturn []", items=[])
         failures.append("沙箱失效：import json 竟然成功")
-        print("\n情境 3｜❌ 沙箱失效")
+        print("    ❌ import json 未被擋")
     except ImportError:
-        print("\n情境 3｜✅ 沙箱有效（import json 被正確擋下）")
+        print("    ✅ import json 被正確擋下")
+    try:
+        run_as_n8n("return [hasattr({}, 'get')]", items=[])
+        failures.append("沙箱失效：hasattr 竟然可用")
+        print("    ❌ hasattr 未被擋")
+    except NameError:
+        print("    ✅ hasattr 被正確擋下（對應 n8n 實測錯誤）")
 
     print("\n" + "=" * 55)
     if failures:
