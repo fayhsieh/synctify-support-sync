@@ -320,6 +320,36 @@ def test_realistic_article_matches_handmade_shape():
     assert not report["unsupported"]
 
 
+def test_faq_questions_extracted_for_h3_and_h4():
+    """FAQ 問題用 h3 或 h4 都要抽得到。
+
+    Style Guide 寫 h3，但實際文章多用 h4。若只認 h3，h4 的問答會既不進
+    faq_items 也不進頁面內容——整段靜默消失（2026-08-02 首次端到端測試發現）。
+    """
+    for level in (3, 4):
+        blocks = [
+            head(2, "Overview"), para("Intro."),
+            head(2, "FAQ"),
+            head(level, "Why is an order under Exception Orders?"),
+            para("Because Synctify detected an issue."),
+            head(level, "What is the difference?"),
+            para("Errors need correction."),
+        ]
+        md, report = nb.blocks_to_markdown(blocks)
+        tpl, faqs, _rep = n2e.convert(md, "T", "manage-exception-orders",
+                                      sync_date="August 2, 2026")
+        assert len(faqs) == 2, f"h{level} 的 FAQ 未被抽取"
+        assert faqs[0]["question"] == "Why is an order under Exception Orders?"
+        assert "Synctify detected an issue" in faqs[0]["answer_html"]
+        assert faqs[1]["question"] == "What is the difference?"
+
+        # 頁面上只留 h2 標題＋shortcode，問答本身不重複出現在頁面
+        ws = widgets(tpl["content"])
+        shortcodes = [w["settings"]["shortcode"] for w in ws
+                      if w["widgetType"] == "shortcode"]
+        assert any('[faq group="manage-exception-orders"' in s for s in shortcodes)
+
+
 def test_unsupported_block_recorded_not_crash():
     blocks = [head(1, "S"), para("ok"), blk("equation", {"expression": "x^2"})]
     md, _ws, report = to_elementor(blocks)

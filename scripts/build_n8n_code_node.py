@@ -193,7 +193,8 @@ def build_workflow(code):
                 # rich_text／icon／color 都取不到，導致標題、段落、清單、callout
                 # 的文字全部變成空字串（表格與圖片因讀 cells/caption 反而正常，
                 # 很容易誤判成只是部分內容遺失）。
-                "simple": False,
+                # 參數名為 simplifyOutput（取自實際匯出檔；先前猜的 simple 無效）。
+                "simplifyOutput": False,
             },
             "id": nid(), "name": "Notion：取得頁面 blocks",
             "type": "n8n-nodes-base.notion", "typeVersion": 2.2,

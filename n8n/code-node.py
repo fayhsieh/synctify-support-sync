@@ -606,7 +606,9 @@ def convert(md, article_title, faq_group_slug, sync_date=None):
                 continue
             in_faq = False
         if in_faq:
-            if b["t"] == "heading" and b["level"] == 3:
+            # 問題標題接受 h3 與 h4：Style Guide 寫 h3，但實際文章多用 h4。
+            # 若只認 h3，h4 的問答會既不進 faq_items 也不進頁面——整段靜默消失。
+            if b["t"] == "heading" and b["level"] in (3, 4):
                 current_q = {"question": b["text"], "answer_html": ""}
                 faq_items.append(current_q)
             elif current_q is not None:
