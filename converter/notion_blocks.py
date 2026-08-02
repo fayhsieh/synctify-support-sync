@@ -18,10 +18,14 @@ Notion API blocks → Notion-flavored Markdown
 """
 import re
 
-# Notion 只有 heading_1/2/3；站上文章的最上層章節是 `##`（h2）。
-# 因此 Notion H1 → `##`、H2 → `###`、H3 → `####`。
-# ⚠️ 此偏移是依現有文章寫作慣例推定，尚未用真實 block 資料驗證過。
-HEADING_OFFSET = 1
+# Notion 標題層級 → markdown 井字號數，1:1 對應（heading_2 → `##`、heading_4 → `####`）。
+# 依真實 block 資料確認（2026-08-02）：文章主章節為 heading_2、FAQ 問題為 heading_4，
+# 與 Notion 匯出的 markdown 完全吻合。
+#
+# 轉換器的 parse_blocks 只認得 `##`～`####`，故層級夾在 [2, 4]：
+# heading_1 併入 `##`（同為最上層章節），heading_5/6 併入 `####`，
+# 避免產生 `#` 或 `#####` 被當成一般段落而靜默漏掉內容。
+MIN_HEADING, MAX_HEADING = 2, 4
 
 # 不同步的段落（CLAUDE.md）：內部審核筆記、SEO Meta、Version History
 _SKIP_SECTION_PATTERNS = [
@@ -33,11 +37,25 @@ _SKIP_SECTION_PATTERNS = [
 
 # ---------- rich text → 行內 markdown ----------
 
+def _rt_items(data):
+    """取出 block 的 rich text 陣列。
+
+    Notion API 原生用 `rich_text`；n8n Notion 節點若開啟 Simplify Output 會改用 `text`。
+    兩者都接受，避免因上游設定差異導致所有文字靜默變成空字串。
+    """
+    if not data:
+        return []
+    return data.get("rich_text") or data.get("text") or []
+
+
 def rich_text(items):
     """Notion rich_text 陣列 → 行內 markdown（順序：code → bold → italic → link）"""
     out = []
     for t in items or []:
-        s = t.get("plain_text", "")
+        if not hasattr(t, "get"):        # Simplify 模式可能直接給字串
+            out.append(str(t))
+            continue
+        s = t.get("plain_text") or (t.get("text") or {}).get("content") or ""
         if not s:
             continue
         a = t.get("annotations") or {}
@@ -55,7 +73,23 @@ def rich_text(items):
 
 
 def _plain(items):
-    return "".join(t.get("plain_text", "") for t in items or [])
+    out = []
+    for t in items or []:
+        if not hasattr(t, "get"):
+            out.append(str(t))
+        else:
+            out.append(t.get("plain_text") or (t.get("text") or {}).get("content") or "")
+    return "".join(out)
+
+
+def _heading_level(btype):
+    """heading_N → markdown 井字號數（夾在轉換器認得的 [2, 4]）；非標題回 None。"""
+    if not btype or not btype.startswith("heading_"):
+        return None
+    suffix = btype[len("heading_"):]
+    if not suffix.isdigit():
+        return None
+    return max(MIN_HEADING, min(MAX_HEADING, int(suffix)))
 
 
 # ---------- 扁平清單 → 樹 ----------
@@ -117,32 +151,31 @@ def _render(blocks, lines, report, indent):
 
         # ── 段落級剔除：遇到 SEO Meta / Version History / Review Notes 起跳過，
         #    直到出現同級或更高級的標題為止
+        heading_level = _heading_level(btype)
+
         if skip_until_heading_level is not None:
-            if btype in ("heading_1", "heading_2", "heading_3"):
-                lvl = int(btype[-1])
-                if lvl <= skip_until_heading_level:
+            if heading_level is not None:
+                if heading_level <= skip_until_heading_level:
                     skip_until_heading_level = None
                 else:
                     continue
             else:
                 continue
 
-        text = _plain(data.get("rich_text"))
-        if btype in ("heading_1", "heading_2", "heading_3", "paragraph") and text:
+        text = _plain(_rt_items(data))
+        if (heading_level is not None or btype == "paragraph") and text:
             if any(p.search(text) for p in _SKIP_SECTION_PATTERNS):
-                lvl = int(btype[-1]) if btype.startswith("heading_") else 9
-                skip_until_heading_level = lvl
+                skip_until_heading_level = heading_level if heading_level is not None else 9
                 report["skipped_sections"].append(text.strip()[:60])
                 continue
 
         # ── 各 block 類型
-        if btype in ("heading_1", "heading_2", "heading_3"):
-            level = int(btype[-1]) + HEADING_OFFSET
+        if heading_level is not None:
             _blank(lines)
-            lines.append(f"{'#' * level} {rich_text(data.get('rich_text'))}")
+            lines.append(f"{'#' * heading_level} {rich_text(_rt_items(data))}")
 
         elif btype == "paragraph":
-            body = rich_text(data.get("rich_text"))
+            body = rich_text(_rt_items(data))
             if body.strip():
                 if indent:
                     lines.append(f"{tab}{body}")   # 數字清單下的接續說明
@@ -152,24 +185,24 @@ def _render(blocks, lines, report, indent):
             _render(children, lines, report, indent)
 
         elif btype == "bulleted_list_item":
-            lines.append(f"{tab}- {rich_text(data.get('rich_text'))}")
+            lines.append(f"{tab}- {rich_text(_rt_items(data))}")
             # 項目符號的子項再縮一層（轉換器用 tab 數判斷巢狀層級）
             _render(children, lines, report, indent + 1)
 
         elif btype == "to_do":
-            lines.append(f"{tab}- {rich_text(data.get('rich_text'))}")
+            lines.append(f"{tab}- {rich_text(_rt_items(data))}")
             _render(children, lines, report, indent + 1)
 
         elif btype == "numbered_list_item":
             # 連續編號之間不可有空行；子內容以 tab 縮排接在後面
-            lines.append(f"{tab}1. {rich_text(data.get('rich_text'))}")
+            lines.append(f"{tab}1. {rich_text(_rt_items(data))}")
             _render(children, lines, report, indent + 1)
 
         elif btype == "code":
             _blank(lines)
             lang = data.get("language") or "markdown"
             lines.append(f"```{lang}")
-            lines.extend(_plain(data.get("rich_text")).split("\n"))
+            lines.extend(_plain(_rt_items(data)).split("\n"))
             lines.append("```")
 
         elif btype == "image":
@@ -189,7 +222,7 @@ def _render(blocks, lines, report, indent):
             color = data.get("color") or ""
             body_lines = []
             _render(children, body_lines, report, 0)
-            first = rich_text(data.get("rich_text"))
+            first = rich_text(_rt_items(data))
             _blank(lines)
             lines.append(f'<callout icon="{icon_s}" color="{color}">')
             if first.strip():
@@ -209,7 +242,7 @@ def _render(blocks, lines, report, indent):
 
         elif btype == "quote":
             _blank(lines)
-            lines.append(rich_text(data.get("rich_text")))
+            lines.append(rich_text(_rt_items(data)))
             _render(children, lines, report, indent)
 
         elif btype == "toggle":

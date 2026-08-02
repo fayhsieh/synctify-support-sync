@@ -83,13 +83,45 @@ def to_elementor(blocks):
 
 # ---------- 測試 ----------
 
-def test_heading_offset_maps_notion_h1_to_h2():
-    md, ws, _ = to_elementor([head(1, "Overview"), para("Body text.")])
+def test_heading_levels_map_one_to_one():
+    """Notion heading_N → N 個井字號，夾在轉換器認得的 [2,4]。
+
+    依 2026-08-02 真實 block 資料確認：主章節為 heading_2、FAQ 問題為 heading_4。
+    """
+    md, ws, _ = to_elementor([
+        head(2, "Overview"), para("Body text."),
+        head(3, "Sub section"),
+        head(4, "FAQ question"),
+    ])
     assert md.startswith("## Overview")
+    assert "### Sub section" in md
+    assert "#### FAQ question" in md
     heads = [w for w in ws if w["widgetType"] == "heading"]
-    assert heads[0]["settings"]["title"] == "Overview"
-    # Notion H1 → ## → h2（無 header_size 即預設 h2）
-    assert "header_size" not in heads[0]["settings"]
+    assert [h["settings"]["title"] for h in heads] == ["Overview", "Sub section", "FAQ question"]
+    assert "header_size" not in heads[0]["settings"]          # ## → 預設 h2
+    assert heads[1]["settings"]["header_size"] == "h3"
+    assert heads[2]["settings"]["header_size"] == "h4"
+
+
+def test_heading_1_and_deep_headings_are_clamped():
+    """heading_1 併入 ##（否則 `#` 會被當段落靜默漏掉）；heading_5/6 併入 ####。"""
+    md, _ws, _ = to_elementor([head(1, "Top"), head(5, "Deep"), head(6, "Deeper")])
+    assert "## Top" in md and "# Top" not in md.replace("## Top", "")
+    assert "#### Deep" in md
+    assert "#### Deeper" in md
+    assert "#####" not in md
+
+
+def test_simplify_output_shape_still_parses():
+    """n8n Notion 節點若開了 Simplify Output 會用 `text` 而非 `rich_text`——兩者都要能讀。"""
+    blocks = [
+        {"id": "h", "type": "heading_2", "heading_2": {"text": [{"plain_text": "Overview"}]}},
+        {"id": "p", "type": "paragraph",
+         "paragraph": {"text": [{"text": {"content": "Body via text.content"}}]}},
+    ]
+    md, _report = nb.blocks_to_markdown(blocks)
+    assert "## Overview" in md
+    assert "Body via text.content" in md
 
 
 def test_numbered_list_contiguous_single_widget():
