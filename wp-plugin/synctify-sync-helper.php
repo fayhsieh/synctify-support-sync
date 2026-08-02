@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Synctify Sync Helper
  * Description: Notion → n8n → WordPress 自動上稿流程的輔助端點：開啟 Arconix FAQ REST、寫入 Elementor data、讀寫 TranslatePress 字典表、寫入 AIOSEO meta。
- * Version: 0.1.3
+ * Version: 0.1.4
  * Author: Synctify Marketing (Fay)
  *
  * 安裝：外掛 → 上傳外掛（打包成 zip），或直接放入 wp-content/mu-plugins/
@@ -146,6 +146,9 @@ add_action( 'rest_api_init', function () {
 					continue;
 				}
 				$alt = isset( $img['alt'] ) ? sanitize_text_field( $img['alt'] ) : '';
+				// Notion 的圖片只有「圖說」一個欄位，預設同時作為 alt 與 caption；
+				// 呼叫端可另外指定 caption 以區隔兩者。
+				$caption = isset( $img['caption'] ) ? sanitize_text_field( $img['caption'] ) : $alt;
 
 				// 檔名：優先用呼叫端指定的，否則取網址路徑（去掉查詢字串——S3 預簽章參數很長）
 				$filename = isset( $img['filename'] ) && $img['filename']
@@ -167,6 +170,9 @@ add_action( 'rest_api_init', function () {
 					) ),
 				) );
 				if ( ! empty( $existing ) ) {
+					// 重用既有附件時也同步更新文字欄位，讓 Notion 端的修正能傳遞過來
+					// （否則第一次上傳寫錯的內容永遠改不掉，除非人工刪除媒體重跑）
+					synctify_apply_media_text( (int) $existing[0], $alt, $caption );
 					$out[] = synctify_media_payload( (int) $existing[0], $url, true );
 					continue;
 				}
@@ -178,16 +184,18 @@ add_action( 'rest_api_init', function () {
 					continue;
 				}
 				$file_array = array( 'name' => $filename, 'tmp_name' => $tmp );
-				$attach_id  = media_handle_sideload( $file_array, $post_id, $alt );
+				// 第 3 參數 $desc → post_title；第 4 參數可直接帶入 post_excerpt（＝媒體庫的 Caption）
+				$attach_id  = media_handle_sideload(
+					$file_array, $post_id, $alt,
+					array( 'post_excerpt' => $caption )
+				);
 				if ( is_wp_error( $attach_id ) ) {
 					@unlink( $tmp );
 					$out[] = array( 'ok' => false, 'source_url' => $url,
 					                'error' => 'sideload failed: ' . $attach_id->get_error_message() );
 					continue;
 				}
-				if ( $alt ) {
-					update_post_meta( $attach_id, '_wp_attachment_image_alt', $alt );
-				}
+				synctify_apply_media_text( (int) $attach_id, $alt, $caption );
 				update_post_meta( $attach_id, '_synctify_source_filename', $filename );
 				$out[] = synctify_media_payload( (int) $attach_id, $url, false );
 			}
@@ -375,6 +383,21 @@ add_action( 'rest_api_init', function () {
  *   large_url  large 尺寸（<img src>，站方統一 1024 寬）
  *   width/height 實際尺寸（非 16:9 的圖高度不是 576，需用實際值）
  * ------------------------------------------------------------- */
+/**
+ * 寫入附件的文字欄位。三者在 WP 是不同的儲存位置，很容易寫錯：
+ *   Alt text → post meta `_wp_attachment_image_alt`
+ *   Caption  → `post_excerpt`（不是 post_content，後者是 Description）
+ *   Title    → `post_title`（由 media_handle_sideload 的 $desc 帶入）
+ */
+function synctify_apply_media_text( $attach_id, $alt, $caption ) {
+	if ( '' !== $alt ) {
+		update_post_meta( $attach_id, '_wp_attachment_image_alt', $alt );
+	}
+	if ( '' !== $caption ) {
+		wp_update_post( array( 'ID' => $attach_id, 'post_excerpt' => $caption ) );
+	}
+}
+
 function synctify_media_payload( $attach_id, $source_url, $reused ) {
 	$full  = wp_get_attachment_image_src( $attach_id, 'full' );
 	$large = wp_get_attachment_image_src( $attach_id, 'large' );
@@ -388,6 +411,8 @@ function synctify_media_payload( $attach_id, $source_url, $reused ) {
 		'width'      => $large ? (int) $large[1] : null,
 		'height'     => $large ? (int) $large[2] : null,
 		'alt'        => get_post_meta( $attach_id, '_wp_attachment_image_alt', true ),
+		'caption'    => get_post_field( 'post_excerpt', $attach_id ),
+		'title'      => get_post_field( 'post_title', $attach_id ),
 	);
 }
 
