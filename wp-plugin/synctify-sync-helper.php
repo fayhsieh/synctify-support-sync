@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Synctify Sync Helper
  * Description: Notion → n8n → WordPress 自動上稿流程的輔助端點：開啟 Arconix FAQ REST、寫入 Elementor data、讀寫 TranslatePress 字典表、寫入 AIOSEO meta。
- * Version: 0.1.5
+ * Version: 0.1.6
  * Author: Synctify Marketing (Fay)
  *
  * 安裝：外掛 → 上傳外掛（打包成 zip），或直接放入 wp-content/mu-plugins/
@@ -274,6 +274,74 @@ add_action( 'rest_api_init', function () {
 				'live_data_unchanged' => ( $before === $after ),
 				'note'               => '實驗性端點：請在 Elementor 開啟此文章確認是否出現'
 				                        . '「有較新的草稿版本」提示，並確認前台仍為舊內容。',
+			);
+		},
+	) );
+
+	/* 2b-2. 刪除「Elementor 草稿」（autosave 版本）
+	 * DELETE /wp-json/synctify/v1/elementor/<post_id>/draft
+	 * body（可選）: { "autosave_id": 6650 }   不給就刪這篇目前唯一的 autosave
+	 *
+	 * 為什麼需要這支：WP core 完全不給從 REST 刪 autosave——
+	 *   * /wp/v2/<type>/<id>/autosaves 只註冊 GET 與 POST，沒有 DELETE
+	 *   * 改走 /revisions/<id> 會被擋（map_meta_cap 對 revision 的 delete_post 回 do_not_allow）
+	 * 而 Elementor UI 的 Discard 只處理「當前登入者自己的」autosave，
+	 * 若草稿是別的帳號（例如自動化用的 Application Password 使用者）寫的就點不掉。
+	 *
+	 * 安全閘門：只刪 post_type=revision、post_parent 等於指定文章、且 post_name 含
+	 * `-autosave` 的那一筆。一般編輯歷史（`-revision-vN`）永遠不會被這支端點碰到。
+	 */
+	register_rest_route( 'synctify/v1', '/elementor/(?P<id>\d+)/draft', array(
+		'methods'             => 'DELETE',
+		'permission_callback' => $permission,
+		'callback'            => function ( WP_REST_Request $req ) {
+			$post_id = (int) $req['id'];
+			$post    = get_post( $post_id );
+			if ( ! $post ) {
+				return new WP_Error( 'not_found', 'Post not found', array( 'status' => 404 ) );
+			}
+
+			// 刪除前後比對主文章版面指紋，確認前台內容沒被牽連
+			$before = md5( (string) get_post_meta( $post_id, '_elementor_data', true ) );
+
+			$target = (int) $req->get_param( 'autosave_id' );
+			if ( ! $target ) {
+				// 第二個參數留 0 = 不限作者，才抓得到自動化帳號寫進去的那筆
+				$autosave = wp_get_post_autosave( $post_id );
+				if ( ! $autosave ) {
+					return new WP_Error( 'no_autosave', 'This post has no autosave to delete',
+					                     array( 'status' => 404 ) );
+				}
+				$target = (int) $autosave->ID;
+			}
+
+			$rev = get_post( $target );
+			if ( ! $rev
+			     || 'revision' !== $rev->post_type
+			     || (int) $rev->post_parent !== $post_id
+			     || false === strpos( (string) $rev->post_name, '-autosave' ) ) {
+				return new WP_Error( 'not_autosave',
+					'Refusing to delete: target is not an autosave revision of this post',
+					array( 'status' => 400 ) );
+			}
+
+			$deleted = wp_delete_post_revision( $target );
+
+			$after = md5( (string) get_post_meta( $post_id, '_elementor_data', true ) );
+
+			$remaining = array();
+			foreach ( wp_get_post_revisions( $post_id, array( 'check_enabled' => false ) ) as $r ) {
+				if ( false !== strpos( (string) $r->post_name, '-autosave' ) ) {
+					$remaining[] = (int) $r->ID;
+				}
+			}
+
+			return array(
+				'ok'                  => ( ! is_wp_error( $deleted ) && ! empty( $deleted ) ),
+				'post_id'             => $post_id,
+				'deleted_autosave_id' => $target,
+				'live_data_unchanged' => ( $before === $after ),
+				'remaining_autosaves' => $remaining,
 			);
 		},
 	) );

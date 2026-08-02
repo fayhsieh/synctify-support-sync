@@ -44,6 +44,9 @@ WordPress 端的自訂 REST 端點，補足標準 REST API 做不到的部分。
 | --- | --- |
 | `POST /synctify/v1/elementor/{id}` | 寫入 `_elementor_data`（覆蓋前自動備份最近 3 版） |
 | `POST /synctify/v1/elementor/{id}/restore` | 還原備份 |
+| `POST /synctify/v1/elementor/{id}/draft` | 只寫入 Elementor autosave 版本，主文章與前台完全不動（已發佈文章的更新走這條） |
+| `DELETE /synctify/v1/elementor/{id}/draft` | 刪掉上面那筆 autosave。WP core 不允許從 REST 刪 autosave，Elementor UI 的 Discard 也只清得掉「當前登入者自己寫的」那筆，所以需要這支 |
+| `POST /synctify/v1/media/sideload` | 把 Notion 的 S3 暫存圖匯入媒體庫，並寫入 title / alt / caption |
 | `POST /synctify/v1/tp/lookup` | 查詢 TranslatePress 字典表（取得未翻譯字串） |
 | `POST /synctify/v1/tp/update` | 寫入譯文（status=2 人工翻譯永不覆蓋） |
 | `POST /synctify/v1/seo/{id}` | 寫入 AIOSEO meta title / description |
