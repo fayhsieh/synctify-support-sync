@@ -175,7 +175,14 @@ def build_workflow(code):
             "parameters": {
                 "resource": "block",
                 "operation": "getAll",
-                "blockId": TEST_PAGE_ID,
+                # blockId 是 resource locator，必須給物件；給純字串會讓 mode 未設定，
+                # 底層呼叫失敗且 n8n 的 prepareNotionError 會跟著崩
+                # （錯誤訊息會變成 "Cannot read properties of undefined (reading 'match')"）
+                "blockId": {
+                    "__rl": True,
+                    "value": TEST_PAGE_ID,
+                    "mode": "id",
+                },
                 "returnAll": True,
                 "fetchNestedBlocks": True,
             },
@@ -202,7 +209,9 @@ def build_workflow(code):
         {
             "parameters": {
                 "mode": "runOnceForAllItems",
-                "language": "python",
+                # n8n 2.x（原生 Python runner）的語言值為 "Python"，非舊版 Pyodide 時期的
+                # 小寫 "python" —— 用小寫匯入時下拉選單會選不到（Fay 於 2.32.6 實測確認）
+                "language": "Python",
                 "pythonCode": code,
             },
             "id": nid(), "name": "轉換：blocks → Elementor JSON",
