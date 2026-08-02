@@ -463,3 +463,66 @@ def test_last_updated_uses_notion_date_not_sync_date():
 def test_last_updated_falls_back_to_sync_date_when_absent():
     _md, ws, _ = to_elementor([head(2, "Overview"), para("Body.")])
     assert "July 24, 2026" in ws[0]["settings"]["editor"]
+
+
+# ---------- SEO Meta 擷取 ----------
+# fixture 依 5-6 New Order Frozen Period 的真實頁面結構建構（2026-08-02 由 Notion 讀出）：
+# `**SEO Meta**` 段落後接兩個 quote，quote 內是「粗體標籤＋軟換行＋內容」，
+# 兩者同屬一個 rich_text 陣列，故純文字為 "Title\n實際標題"。
+
+def _seo_quote(label, value):
+    return blk("quote", {"rich_text": [rt(label + "\n", bold=True), rt(value)]})
+
+
+SEO_TITLE = "New Order Frozen Period - Synctify Support Center"
+SEO_DESC = ("Learn how to use New Order Frozen Period to automatically hold new "
+            "orders before fulfillment, review changes or cancellations.")
+
+
+def test_seo_meta_is_extracted_not_just_dropped():
+    blocks = [
+        head(2, "Overview"), para("Body."),
+        blk("divider", {}),
+        para("SEO Meta"),
+        _seo_quote("Title", SEO_TITLE),
+        _seo_quote("Meta description", SEO_DESC),
+    ]
+    md, report = nb.blocks_to_markdown(blocks)
+    assert report["seo"] == {"title": SEO_TITLE, "description": SEO_DESC}
+    # 仍然不可流入正文
+    assert SEO_TITLE not in md
+    assert SEO_DESC not in md
+    assert "SEO Meta" not in md
+
+
+def test_seo_labels_tolerate_case_and_colon():
+    blocks = [
+        head(2, "Overview"), para("Body."), para("**SEO Meta**"),
+        _seo_quote("SEO Title:", "T"), _seo_quote("meta description：", "D"),
+    ]
+    _md, report = nb.blocks_to_markdown(blocks)
+    assert report["seo"] == {"title": "T", "description": "D"}
+
+
+def test_seo_capture_stops_at_next_heading():
+    """SEO Meta 後若還有正常章節，該章節要照常輸出，且不被誤當 SEO 欄位。"""
+    blocks = [
+        head(2, "Overview"), para("Body."), para("SEO Meta"),
+        _seo_quote("Title", SEO_TITLE),
+        head(2, "Appendix"), para("Tail content."),
+    ]
+    md, report = nb.blocks_to_markdown(blocks)
+    assert report["seo"] == {"title": SEO_TITLE}
+    assert "## Appendix" in md and "Tail content." in md
+
+
+def test_review_notes_section_still_fully_dropped():
+    """只有 SEO Meta 段改成擷取；內部審核筆記仍必須完全消失（CLAUDE.md）。"""
+    blocks = [
+        head(2, "Overview"), para("Body."),
+        para("Content Review Notes"),
+        _seo_quote("Title", "SHOULD NOT LEAK"),
+    ]
+    md, report = nb.blocks_to_markdown(blocks)
+    assert report["seo"] == {}
+    assert "SHOULD NOT LEAK" not in md

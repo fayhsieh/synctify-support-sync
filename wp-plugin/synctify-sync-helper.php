@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Synctify Sync Helper
  * Description: Notion → n8n → WordPress 自動上稿流程的輔助端點：開啟 Arconix FAQ REST、寫入 Elementor data、讀寫 TranslatePress 字典表、寫入 AIOSEO meta。
- * Version: 0.1.6
+ * Version: 0.1.7
  * Author: Synctify Marketing (Fay)
  *
  * 安裝：外掛 → 上傳外掛（打包成 zip），或直接放入 wp-content/mu-plugins/
@@ -10,6 +10,12 @@
  */
 
 if ( ! defined( 'ABSPATH' ) ) exit;
+
+/* 站方統一規範：Notion 沒有、但 WP 每篇文章都必填的欄位。
+ * 一律以「名稱」定義而非 ID——測試站與正式站的 ID 不保證相同。 */
+define( 'SYNCTIFY_DOC_ROOT',       'Synctify Documentation' );  // 分類頁的共同上層
+define( 'SYNCTIFY_FEATURED_SLUG',  'opengraph' );               // 封面照（媒體庫 slug）
+define( 'SYNCTIFY_AUTHOR_NAME',    'The Synctify Team' );       // 作者顯示名稱
 
 /* ---------------------------------------------------------------
  * 1. Arconix FAQ post type 開啟 REST
@@ -346,6 +352,167 @@ add_action( 'rest_api_init', function () {
 		},
 	) );
 
+	/* 2b-3. 套用站方統一的文章預設欄位
+	 * POST /wp-json/synctify/v1/doc/defaults/<post_id>
+	 * body: { "category": "5. Orders", "allow_published": false }
+	 *
+	 * Notion 沒有、但 WP 上每篇都必填的四項（值由站上實況反推，23/23 篇一致）：
+	 *   封面照  → 媒體庫 slug=opengraph 的附件
+	 *   作者    → 顯示名稱 The Synctify Team
+	 *   討論    → comment_status / ping_status 皆 closed
+	 *   Parent  → Synctify Documentation 底下、與 Notion Category 同名的分類頁
+	 *
+	 * 刻意**不寫死 ID**：opengraph.png 在測試站是 5988，正式站不保證同號，
+	 * 分類頁 ID 同理。全部在站上依名稱解析，同一份程式兩站通用。
+	 *
+	 * 已發佈文章預設只回報差異不寫入（見 CLAUDE.md「已發佈文章不能直接覆蓋」），
+	 * 要真的改必須明確傳 allow_published=true。
+	 */
+	register_rest_route( 'synctify/v1', '/doc/defaults/(?P<id>\d+)', array(
+		'methods'             => 'POST',
+		'permission_callback' => $permission,
+		'callback'            => function ( WP_REST_Request $req ) {
+			$post_id = (int) $req['id'];
+			$post    = get_post( $post_id );
+			if ( ! $post ) {
+				return new WP_Error( 'not_found', 'Post not found', array( 'status' => 404 ) );
+			}
+			$p        = (array) $req->get_json_params();
+			$category = isset( $p['category'] ) ? (string) $p['category'] : '';
+
+			$resolved = array();
+			$desired  = array(
+				'comment_status' => 'closed',
+				'ping_status'    => 'closed',
+			);
+
+			// ── 封面照：媒體庫 slug=opengraph
+			$att = get_posts( array(
+				'post_type'      => 'attachment',
+				'name'           => SYNCTIFY_FEATURED_SLUG,
+				'posts_per_page' => 1,
+				'post_status'    => 'inherit',
+				'fields'         => 'ids',
+			) );
+			if ( ! $att ) {
+				return new WP_Error( 'featured_not_found',
+					'No attachment with slug "' . SYNCTIFY_FEATURED_SLUG . '"',
+					array( 'status' => 422 ) );
+			}
+			$resolved['featured_media'] = (int) $att[0];
+
+			// ── 作者：依顯示名稱精確比對（使用者數量少，直接掃即可）
+			$author_id = 0;
+			foreach ( get_users( array( 'fields' => array( 'ID', 'display_name' ) ) ) as $u ) {
+				if ( SYNCTIFY_AUTHOR_NAME === $u->display_name ) {
+					$author_id = (int) $u->ID;
+					break;
+				}
+			}
+			if ( ! $author_id ) {
+				return new WP_Error( 'author_not_found',
+					'No user with display name "' . SYNCTIFY_AUTHOR_NAME . '"',
+					array( 'status' => 422 ) );
+			}
+			$resolved['author'] = $author_id;
+
+			// ── Parent：Notion Category（"5. Orders"）去掉序號前綴後，
+			//    比對 Synctify Documentation 底下的分類頁標題
+			if ( '' !== $category ) {
+				$root_id = 0;
+				foreach ( get_posts( array(
+					'post_type'      => $post->post_type,
+					'post_parent'    => 0,
+					'posts_per_page' => -1,
+					'post_status'    => 'any',
+				) ) as $r ) {
+					if ( SYNCTIFY_DOC_ROOT === $r->post_title ) {
+						$root_id = (int) $r->ID;
+						break;
+					}
+				}
+				if ( ! $root_id ) {
+					return new WP_Error( 'root_not_found',
+						'No root doc titled "' . SYNCTIFY_DOC_ROOT . '"',
+						array( 'status' => 422 ) );
+				}
+
+				$want   = trim( preg_replace( '/^\s*\d+\.\s*/', '', $category ) );
+				$parent = 0;
+				$available = array();
+				foreach ( get_posts( array(
+					'post_type'      => $post->post_type,
+					'post_parent'    => $root_id,
+					'posts_per_page' => -1,
+					'post_status'    => 'any',
+				) ) as $c ) {
+					$t = html_entity_decode( $c->post_title, ENT_QUOTES, 'UTF-8' );
+					$available[] = $t;
+					if ( 0 === strcasecmp( $t, $want ) ) {
+						$parent = (int) $c->ID;
+					}
+				}
+				if ( ! $parent ) {
+					// 失敗要大聲：靜默留在根目錄會讓文章掉出側邊欄結構
+					return new WP_Error( 'category_not_found',
+						'No category page titled "' . $want . '" under "' . SYNCTIFY_DOC_ROOT . '"',
+						array( 'status' => 422, 'available' => $available ) );
+				}
+				$resolved['parent'] = $parent;
+			}
+
+			$desired = array_merge( $desired, $resolved );
+
+			$current = array(
+				'featured_media' => (int) get_post_thumbnail_id( $post_id ),
+				'author'         => (int) $post->post_author,
+				'comment_status' => $post->comment_status,
+				'ping_status'    => $post->ping_status,
+				'parent'         => (int) $post->post_parent,
+			);
+			$diff = array();
+			foreach ( $desired as $k => $v ) {
+				if ( $current[ $k ] != $v ) {
+					$diff[ $k ] = array( 'from' => $current[ $k ], 'to' => $v );
+				}
+			}
+
+			$allow = ! empty( $p['allow_published'] );
+			if ( 'publish' === $post->post_status && ! $allow ) {
+				return array(
+					'ok'      => true,
+					'post_id' => $post_id,
+					'applied' => false,
+					'reason'  => 'post_is_published',
+					'diff'    => $diff,
+					'note'    => '已發佈文章不自動改欄位，只回報差異。'
+					             . '確定要改請帶 allow_published=true。',
+				);
+			}
+
+			if ( $diff ) {
+				$update = array( 'ID' => $post_id );
+				if ( isset( $desired['author'] ) )         $update['post_author']    = $desired['author'];
+				if ( isset( $desired['parent'] ) )         $update['post_parent']    = $desired['parent'];
+				$update['comment_status'] = 'closed';
+				$update['ping_status']    = 'closed';
+				$res = wp_update_post( $update, true );
+				if ( is_wp_error( $res ) ) {
+					return $res;
+				}
+				set_post_thumbnail( $post_id, $desired['featured_media'] );
+			}
+
+			return array(
+				'ok'       => true,
+				'post_id'  => $post_id,
+				'applied'  => (bool) $diff,
+				'resolved' => $desired,
+				'diff'     => $diff,
+			);
+		},
+	) );
+
 	/* 2c. TranslatePress 字典表查詢
 	 * POST /wp-json/synctify/v1/tp/lookup
 	 * body: { "language": "zh_CN", "strings": [ "原文1", "原文2", ... ] }
@@ -431,19 +598,58 @@ add_action( 'rest_api_init', function () {
 		'permission_callback' => $permission,
 		'callback'            => function ( WP_REST_Request $req ) {
 			$post_id = (int) $req['id'];
-			if ( ! get_post( $post_id ) ) {
+			$post    = get_post( $post_id );
+			if ( ! $post ) {
 				return new WP_Error( 'not_found', 'Post not found', array( 'status' => 404 ) );
 			}
-			$p = $req->get_json_params();
+			$p = (array) $req->get_json_params();
 			if ( ! function_exists( 'aioseo' ) ) {
 				return new WP_Error( 'no_aioseo', 'AIOSEO not active', array( 'status' => 501 ) );
 			}
 			$aioseo_post = \AIOSEO\Plugin\Common\Models\Post::getPost( $post_id );
 			$aioseo_post->post_id = $post_id;
-			if ( isset( $p['title'] ) )       $aioseo_post->title       = sanitize_text_field( $p['title'] );
-			if ( isset( $p['description'] ) ) $aioseo_post->description = sanitize_text_field( $p['description'] );
-			$aioseo_post->save();
-			return array( 'ok' => true, 'post_id' => $post_id );
+
+			// AIOSEO meta 沒有草稿機制，寫下去就是線上生效。既有文章預設只回報
+			// 差異，跟 /doc/defaults 一致，避免在人工確認前就動到已發佈文章。
+			$previous = array(
+				'title'       => (string) $aioseo_post->title,
+				'description' => (string) $aioseo_post->description,
+			);
+			$next = array(
+				'title'       => isset( $p['title'] )
+				                 ? sanitize_text_field( $p['title'] ) : $previous['title'],
+				'description' => isset( $p['description'] )
+				                 ? sanitize_text_field( $p['description'] ) : $previous['description'],
+			);
+			$changed = array_keys( array_diff_assoc( $next, $previous ) );
+
+			if ( 'publish' === $post->post_status && empty( $p['allow_published'] ) ) {
+				return array(
+					'ok'       => true,
+					'post_id'  => $post_id,
+					'applied'  => false,
+					'reason'   => 'post_is_published',
+					'previous' => $previous,
+					'proposed' => $next,
+					'changed'  => $changed,
+					'note'     => 'AIOSEO meta 無草稿機制，已發佈文章預設不寫入。'
+					              . '確定要改請帶 allow_published=true。',
+				);
+			}
+
+			if ( $changed ) {
+				$aioseo_post->title       = $next['title'];
+				$aioseo_post->description = $next['description'];
+				$aioseo_post->save();
+			}
+			return array(
+				'ok'       => true,
+				'post_id'  => $post_id,
+				'applied'  => (bool) $changed,
+				'previous' => $previous,
+				'current'  => $next,
+				'changed'  => $changed,
+			);
 		},
 	) );
 } );

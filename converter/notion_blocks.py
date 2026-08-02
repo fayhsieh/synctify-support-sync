@@ -28,11 +28,24 @@ import re
 MIN_HEADING, MAX_HEADING = 2, 4
 
 # 不同步的段落（CLAUDE.md）：內部審核筆記、SEO Meta、Version History
+_SEO_META_PATTERN = re.compile(r"^\s*\**\s*SEO\s*Meta\s*\**\s*$", re.I)
 _SKIP_SECTION_PATTERNS = [
-    re.compile(r"^\s*\**\s*SEO\s*Meta\s*\**\s*$", re.I),
+    _SEO_META_PATTERN,
     re.compile(r"^\s*Version\s+History\s*$", re.I),
     re.compile(r"Content\s+Review\s+Notes", re.I),
 ]
+
+# SEO Meta 段不進正文，但要擷取出來寫進 AIOSEO（POST /synctify/v1/seo/{id}）。
+# Notion 的寫法是 quote block 內「粗體標籤＋軟換行＋內容」，兩者在同一個
+# rich_text 陣列裡，所以純文字會長成：
+#     "Title\nNew Order Frozen Period - Synctify Support Center"
+# 標籤大小寫、結尾冒號都容忍。
+_SEO_LABELS = {
+    "title": "title",
+    "seo title": "title",
+    "meta description": "description",
+    "description": "description",
+}
 
 
 # ---------- rich text → 行內 markdown ----------
@@ -121,6 +134,17 @@ def split_caption_alt(text):
     return caption, (alt or caption)
 
 
+def _capture_seo(data, report):
+    """SEO Meta 段裡的一個 quote／paragraph → report["seo"]。無法辨識的行忽略。"""
+    raw = _plain(_rt_items(data))
+    if "\n" not in raw:
+        return
+    label, _, value = raw.partition("\n")
+    key = _SEO_LABELS.get(label.strip().rstrip(":：").lower())
+    if key and value.strip():
+        report["seo"][key] = value.strip()
+
+
 def _heading_level(btype):
     """heading_N → markdown 井字號數（夾在轉換器認得的 [2, 4]）；非標題回 None。"""
     if not btype or not btype.startswith("heading_"):
@@ -169,7 +193,7 @@ def _parent_id(b):
 
 def blocks_to_markdown(blocks, root_id=None):
     """回傳 (markdown, report)。report 記錄被剔除與不支援的區塊。"""
-    report = {"skipped_sections": [], "unsupported": [], "excluded_toggles": 0}
+    report = {"skipped_sections": [], "unsupported": [], "excluded_toggles": 0, "seo": {}}
     tree = build_tree(list(blocks), root_id)
     lines = []
     _render(tree, lines, report, indent=0)
@@ -182,6 +206,7 @@ def _render(blocks, lines, report, indent):
     """把 block 串列渲染成行。indent 為 tab 數（數字清單子內容用）。"""
     tab = "\t" * indent
     skip_until_heading_level = None
+    capture_seo = False          # 目前跳過的是不是 SEO Meta 段（要邊跳過邊擷取）
 
     for b in blocks:
         btype = b.get("type")
@@ -196,15 +221,25 @@ def _render(blocks, lines, report, indent):
             if heading_level is not None:
                 if heading_level <= skip_until_heading_level:
                     skip_until_heading_level = None
+                    capture_seo = False
                 else:
                     continue
             else:
+                if capture_seo and btype in ("quote", "paragraph"):
+                    _capture_seo(data, report)
                 continue
 
         text = _plain(_rt_items(data))
         if (heading_level is not None or btype == "paragraph") and text:
-            if any(p.search(text) for p in _SKIP_SECTION_PATTERNS):
+            hit = None
+            for p in _SKIP_SECTION_PATTERNS:
+                if p.search(text):
+                    hit = p
+                    break
+            if hit is not None:
                 skip_until_heading_level = heading_level if heading_level is not None else 9
+                # SEO Meta 段照樣不進正文，但底下的 quote 要撈出來給 AIOSEO
+                capture_seo = (hit is _SEO_META_PATTERN)
                 report["skipped_sections"].append(text.strip()[:60])
                 continue
 
