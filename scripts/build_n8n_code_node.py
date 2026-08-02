@@ -34,6 +34,7 @@ OUT = ROOT / "n8n" / "code-node.py"
 WF_OUT = ROOT / "n8n" / "notion-to-elementor-test.workflow.json"
 DRAFT_WF_OUT = ROOT / "n8n" / "notion-to-wp-draft.workflow.json"
 BUTTON_WF_OUT = ROOT / "n8n" / "notion-button-to-wp-draft.workflow.json"
+POLL_WF_OUT = ROOT / "n8n" / "notion-poll-to-wp-draft.workflow.json"
 
 # 測試用 Notion 頁面：Manage Exception Orders v2（已有手工轉換版本可比對）
 TEST_PAGE_ID = "3822f2ede27d80f1bd47d73c6314bec4"
@@ -392,6 +393,177 @@ def build_draft_workflow(code):
 
 WEBHOOK_PATH = "synctify-draft"
 
+# Content Hub 資料庫（見 .env NOTION_CONTENT_HUB_DB_ID）
+NOTION_DB_ID = "3272f2ed-e27d-80f9-8e2d-000be0502aa8"
+# 觸發用的 checkbox 屬性名稱（需在 Notion 手動新增；勿與既有的 Button 屬性同名）
+TRIGGER_PROP = "待同步"
+POLL_MINUTES = 1
+
+
+def build_polling_workflow(code):
+    """輪詢版：不需 Notion Plus 方案。
+
+    勾選 Content Hub 的「待同步」checkbox → n8n 定時查到 → 建草稿 → 取消勾選。
+
+    重點設計：**取消勾選放在流程開頭**（先認領）。若放結尾，處理時間一旦超過輪詢
+    間隔，下一輪會再抓到同一列而重複建草稿。開頭認領可根絕這個競態。
+    每輪只處理一列（page_size=1），避免多列同時進來時 Code node 的 item 混淆。
+    """
+    def nid():
+        return str(uuid.uuid4())
+
+    PICK, CONV, PARAMS = "解析待同步列", "轉換：blocks → Elementor JSON", "組裝參數"
+
+    def notion_http(method, url, body=None):
+        p = {"method": method, "url": url,
+             "authentication": "predefinedCredentialType",
+             "nodeCredentialType": "notionApi",
+             "sendHeaders": True,
+             "headerParameters": {"parameters": [
+                 {"name": "Notion-Version", "value": "2022-06-28"}]},
+             "options": {}}
+        if body is not None:
+            p.update({"sendBody": True, "specifyBody": "json", "jsonBody": body})
+        return p
+
+    def wp_http(method, url, body=None):
+        p = {"method": method, "url": url,
+             "authentication": "genericCredentialType",
+             "genericAuthType": "httpBasicAuth", "options": {}}
+        if body is not None:
+            p.update({"sendBody": True, "specifyBody": "json", "jsonBody": body})
+        return p
+
+    doc_name = f"$('{PICK}').first().json.doc_name"
+    clean_title = (f"({doc_name})"
+                   ".replace(/\\s+[-–]\\s*v\\d.*$/i, '')"
+                   ".replace(/\\s*\\(Current\\)\\s*$/i, '').trim()")
+
+    nodes = [
+        {"parameters": {"rule": {"interval": [{"field": "minutes",
+                                               "minutesInterval": POLL_MINUTES}]}},
+         "id": nid(), "name": "定時檢查", "type": "n8n-nodes-base.scheduleTrigger",
+         "typeVersion": 1.2, "position": [-260, 300],
+         "notes": f"每 {POLL_MINUTES} 分鐘檢查一次是否有勾選「{TRIGGER_PROP}」的列。"},
+
+        {"parameters": notion_http(
+            "POST", f"https://api.notion.com/v1/databases/{NOTION_DB_ID}/query",
+            '={{ { "filter": { "property": "' + TRIGGER_PROP + '", '
+            '"checkbox": { "equals": true } }, "page_size": 1 } }}'),
+         "id": nid(), "name": "查詢待同步列", "type": "n8n-nodes-base.httpRequest",
+         "typeVersion": 4.2, "position": [-40, 300],
+         "credentials": {"notionApi": {"id": NOTION_CRED_ID, "name": NOTION_CRED_NAME}},
+         "notes": f"只取 1 列（page_size=1）。多列勾選時會分幾輪依序處理，"
+                  "避免 Code node 的 item 混淆。"},
+
+        {"parameters": {"assignments": {"assignments": [
+            {"id": nid(), "name": "page_id",
+             "value": "={{ $json.results?.[0]?.id?.replace(/-/g, '') ?? '' }}",
+             "type": "string"},
+            {"id": nid(), "name": "doc_name",
+             "value": "={{ $json.results?.[0]?.properties?.['Doc name']?.title?.[0]"
+                      "?.plain_text ?? '' }}", "type": "string"},
+        ]}, "options": {}},
+         "id": nid(), "name": PICK, "type": "n8n-nodes-base.set",
+         "typeVersion": 3.4, "position": [180, 300]},
+
+        {"parameters": {"conditions": {
+            "options": {"caseSensitive": True, "typeValidation": "loose", "version": 2},
+            "conditions": [{"id": nid(), "leftValue": "={{ $json.page_id }}",
+                            "operator": {"type": "string", "operation": "notEmpty",
+                                         "singleValue": True}, "rightValue": ""}],
+            "combinator": "and"}},
+         "id": nid(), "name": "有待同步的列？", "type": "n8n-nodes-base.if",
+         "typeVersion": 2.2, "position": [400, 300]},
+
+        {"parameters": {}, "id": nid(), "name": "無事可做（結束）",
+         "type": "n8n-nodes-base.noOp", "typeVersion": 1, "position": [620, 480]},
+
+        {"parameters": notion_http(
+            "PATCH", "=https://api.notion.com/v1/pages/{{ $json.page_id }}",
+            '={{ { "properties": { "' + TRIGGER_PROP + '": { "checkbox": false } } } }}'),
+         "id": nid(), "name": "先取消勾選（認領）", "type": "n8n-nodes-base.httpRequest",
+         "typeVersion": 4.2, "position": [620, 300],
+         "credentials": {"notionApi": {"id": NOTION_CRED_ID, "name": NOTION_CRED_NAME}},
+         "notes": "⚠️ 刻意放在流程開頭。若移到結尾，處理時間超過輪詢間隔時，"
+                  "下一輪會再抓到同一列而重複建草稿。"},
+
+        {"parameters": {
+            "resource": "block", "operation": "getAll",
+            "blockId": {"__rl": True, "mode": "id",
+                        "value": "={{ $('" + PICK + "').first().json.page_id }}"},
+            "returnAll": True, "fetchNestedBlocks": True, "simplifyOutput": False},
+         "id": nid(), "name": "Notion：取得頁面 blocks",
+         "type": "n8n-nodes-base.notion", "typeVersion": 2.2, "position": [840, 300],
+         "credentials": {"notionApi": {"id": NOTION_CRED_ID, "name": NOTION_CRED_NAME}},
+         "notes": "Return All／Also Fetch Nested Blocks 開啟、Simplify Output 關閉。"},
+
+        {"parameters": {"assignments": {"assignments": [
+            {"id": nid(), "name": "title", "value": "={{ " + clean_title + " }}",
+             "type": "string"},
+            {"id": nid(), "name": "faq_group",
+             "value": "={{ (" + clean_title + ").toLowerCase()"
+                      ".replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '') }}",
+             "type": "string"},
+            {"id": nid(), "name": "wp_base", "value": WP_BASE, "type": "string"},
+        ]}, "includeOtherFields": True, "options": {}},
+         "id": nid(), "name": PARAMS, "type": "n8n-nodes-base.set",
+         "typeVersion": 3.4, "position": [1060, 300],
+         "notes": "標題取自 Doc name 並去掉「- vN」「(Current)」後綴。"
+                  "Include Other Fields 必須開啟。"},
+
+        {"parameters": {"language": "pythonNative", "pythonCode": code},
+         "id": nid(), "name": CONV, "type": "n8n-nodes-base.code",
+         "typeVersion": 2, "position": [1280, 300],
+         "notes": "自動產生，請勿直接編輯。改 converter/*.py 後重新產生。"},
+
+        {"parameters": wp_http("POST", f"{WP_BASE}/wp-json/wp/v2/docs",
+                               '={{ { "title": $json.title, "status": "draft" } }}'),
+         "id": nid(), "name": "WP：建立草稿", "type": "n8n-nodes-base.httpRequest",
+         "typeVersion": 4.2, "position": [1500, 300],
+         "notes": "⚠️ 每次觸發都建立新草稿——尚未依 WP Post ID 去重或更新既有文章。"},
+
+        {"parameters": wp_http(
+            "POST", f"={WP_BASE}/wp-json/synctify/v1/elementor/{{{{ $json.id }}}}",
+            '={{ { "elementor_data": $(\'' + CONV + '\').item.json.elementor_data } }}'),
+         "id": nid(), "name": "WP：寫入 Elementor 版面",
+         "type": "n8n-nodes-base.httpRequest", "typeVersion": 4.2, "position": [1720, 300]},
+
+        {"parameters": notion_http(
+            "PATCH",
+            "=https://api.notion.com/v1/pages/{{ $('" + PICK + "').first().json.page_id }}",
+            '={{ { "properties": { "最後同步時間": { "date": '
+            '{ "start": $now.toISO() } } } } }}'),
+         "id": nid(), "name": "Notion：記錄同步時間",
+         "type": "n8n-nodes-base.httpRequest", "typeVersion": 4.2, "position": [1940, 300],
+         "credentials": {"notionApi": {"id": NOTION_CRED_ID, "name": NOTION_CRED_NAME}},
+         "notes": "第一階段只寫時間。WP Post ID 與上稿狀態屬於母列，"
+                  "待去重／更新既有文章那階段再一併處理。"},
+    ]
+
+    conns = {
+        "定時檢查": {"main": [[{"node": "查詢待同步列", "type": "main", "index": 0}]]},
+        "查詢待同步列": {"main": [[{"node": PICK, "type": "main", "index": 0}]]},
+        PICK: {"main": [[{"node": "有待同步的列？", "type": "main", "index": 0}]]},
+        "有待同步的列？": {"main": [
+            [{"node": "先取消勾選（認領）", "type": "main", "index": 0}],
+            [{"node": "無事可做（結束）", "type": "main", "index": 0}]]},
+    }
+    chain = ["先取消勾選（認領）", "Notion：取得頁面 blocks", PARAMS, CONV,
+             "WP：建立草稿", "WP：寫入 Elementor 版面", "Notion：記錄同步時間"]
+    for a, b in zip(chain, chain[1:]):
+        conns[a] = {"main": [[{"node": b, "type": "main", "index": 0}]]}
+
+    return {
+        "name": "Synctify — Notion 勾選 → WP 草稿（輪詢）",
+        "nodes": nodes, "connections": conns, "active": False,
+        "settings": {"executionOrder": "v1"},
+        "meta": {"synctify_note":
+                 f"每 {POLL_MINUTES} 分鐘輪詢；勾選「{TRIGGER_PROP}」即觸發，"
+                 "開頭先取消勾選以避免重複。不去重、不更新既有文章。"},
+        "tags": [],
+    }
+
 
 def build_button_workflow(code):
     """由 Notion 按鈕觸發的建草稿 workflow（第一階段 + webhook 觸發）。
@@ -586,7 +758,11 @@ def main():
 
     BUTTON_WF_OUT.write_text(json.dumps(build_button_workflow(body), ensure_ascii=False, indent=2),
                              encoding="utf-8")
-    print(f"✓ 已產生 {BUTTON_WF_OUT}（Notion 按鈕觸發）")
+    print(f"✓ 已產生 {BUTTON_WF_OUT}（Notion 按鈕觸發，需 Plus 方案）")
+
+    POLL_WF_OUT.write_text(json.dumps(build_polling_workflow(body), ensure_ascii=False, indent=2),
+                           encoding="utf-8")
+    print(f"✓ 已產生 {POLL_WF_OUT}（Notion 勾選觸發，輪詢）")
 
 
 if __name__ == "__main__":
