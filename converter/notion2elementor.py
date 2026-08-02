@@ -440,11 +440,17 @@ def in_faq_title(text):
 
 # ---------- 圖片：佔位圖模式 ----------
 
-PLACEHOLDER_IMAGE = ("https://support.synctify.net/wp-content/plugins/elementor/"
-                     "assets/images/placeholder.png")
+# Elementor 內建佔位圖的站內路徑。**必須用文章所在站台自己的網址**——
+# 跨站取圖會被 CDN／WAF 擋掉（正式站此路徑已回 403，圖會變破圖）。
+PLACEHOLDER_PATH = "/wp-content/plugins/elementor/assets/images/placeholder.png"
 
 
-def apply_placeholder_images(template, report, placeholder_url=PLACEHOLDER_IMAGE):
+def placeholder_url_for(wp_base):
+    """依目標站台組出佔位圖網址。"""
+    return (wp_base or "").rstrip("/") + PLACEHOLDER_PATH
+
+
+def apply_placeholder_images(template, report, placeholder_url=PLACEHOLDER_PATH):
     """把尚未上傳的圖片換成 Elementor 佔位圖，並標上「待補圖 N」。
 
     第一階段（自動產出草稿、圖片人工補）用。來源網址是 Notion S3 預簽章網址，

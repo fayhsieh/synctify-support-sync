@@ -106,7 +106,10 @@ def _run(blocks, meta):
 
     images_todo = []
     if image_mode == "placeholder":
-        images_todo = apply_placeholder_images(template, report)
+        # 佔位圖必須取自文章所在站台；跨站會被 CDN／WAF 擋掉而變破圖
+        wp_base = meta["wp_base"] if "wp_base" in meta else ""
+        images_todo = apply_placeholder_images(
+            template, report, placeholder_url_for(wp_base))
     report["images_todo"] = images_todo
 
     return {
@@ -314,13 +317,16 @@ def build_draft_workflow(code):
             "assignments": {"assignments": [
                 {"id": nid(), "name": "title", "value": TEST_TITLE, "type": "string"},
                 {"id": nid(), "name": "faq_group", "value": TEST_FAQ_GROUP, "type": "string"},
+                # 佔位圖要取自文章所在站台；跨站會被 CDN／WAF 擋掉變破圖
+                {"id": nid(), "name": "wp_base", "value": WP_BASE, "type": "string"},
             ]},
             "includeOtherFields": True, "options": {},
          },
          "id": nid(), "name": "補上標題與 FAQ group",
          "type": "n8n-nodes-base.set", "typeVersion": 3.4, "position": [240, 300],
          "notes": "Include Other Fields 必須開啟，否則 block 內容會被覆蓋掉。\n"
-                  "換文章時改這裡的 title / faq_group，以及 Notion 節點的 Block ID。"},
+                  "換文章時改這裡的 title / faq_group，以及 Notion 節點的 Block ID。\n"
+                  "wp_base 決定佔位圖從哪個站台取，需與寫入的站台一致。"},
 
         {"parameters": {"language": "pythonNative", "pythonCode": code},
          "id": nid(), "name": CONV_NODE,

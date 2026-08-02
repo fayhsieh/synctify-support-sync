@@ -131,11 +131,13 @@ def test_placeholder_mode_swaps_expiring_urls():
                                  "caption": [{"plain_text": "Action menu"}]}}]},
     ]
     tpl, rep = _build(blocks)
-    todo = n2e.apply_placeholder_images(tpl, rep)
+    ph = n2e.placeholder_url_for("https://support.synctify.io")
+    todo = n2e.apply_placeholder_images(tpl, rep, ph)
 
     assert len(todo) == 2                      # 獨立圖 + 步驟內嵌圖
     blob = str(tpl)
     assert "X-Amz" not in blob                 # 會過期的網址完全清除
-    assert n2e.PLACEHOLDER_IMAGE in blob
+    assert ph in blob
+    assert "support.synctify.io" in blob      # 佔位圖須取自目標站台，不可跨站
     assert "待補圖 1" in blob and "待補圖 2" in blob
     assert todo[0]["alt"] == "Errors list"
