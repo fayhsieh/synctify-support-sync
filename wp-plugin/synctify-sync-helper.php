@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Synctify Sync Helper
  * Description: Notion → n8n → WordPress 自動上稿流程的輔助端點：開啟 Arconix FAQ REST、寫入 Elementor data、讀寫 TranslatePress 字典表、寫入 AIOSEO meta。
- * Version: 0.1.1
+ * Version: 0.1.2
  * Author: Synctify Marketing (Fay)
  *
  * 安裝：外掛 → 上傳外掛（打包成 zip），或直接放入 wp-content/mu-plugins/
@@ -101,6 +101,93 @@ add_action( 'rest_api_init', function () {
 				\Elementor\Plugin::$instance->files_manager->clear_cache();
 			}
 			return array( 'ok' => true, 'restored_from' => $backups[ $index ]['time'] );
+		},
+	) );
+
+	/* 2b-2. 由網址匯入圖片到媒體庫（sideload）
+	 * POST /wp-json/synctify/v1/media/sideload
+	 * body: {
+	 *   "images": [ { "url": "...", "alt": "...", "filename": "選填.png" }, ... ],
+	 *   "post_id": 123   // 選填，附加到該文章
+	 * }
+	 *
+	 * 為什麼放在 WP 端而不是 n8n：Notion 的 S3 網址是預簽章、一小時後失效，
+	 * 且 [caption] shortcode 需要 wp-image-{id} 與 -1024x576 縮圖網址——
+	 * 這些只有上傳完成後 WP 才知道，由端點一併回傳可省去 n8n 端的二進位處理與迴圈。
+	 *
+	 * 回傳每張圖的 media id、原圖網址、large 尺寸網址與實際寬高，供呼叫端回填版面。
+	 * 同名檔案已存在時直接重用，不重複上傳（可安全重跑）。
+	 */
+	register_rest_route( 'synctify/v1', '/media/sideload', array(
+		'methods'             => 'POST',
+		'permission_callback' => $permission,
+		'callback'            => function ( WP_REST_Request $req ) {
+			require_once ABSPATH . 'wp-admin/includes/file.php';
+			require_once ABSPATH . 'wp-admin/includes/media.php';
+			require_once ABSPATH . 'wp-admin/includes/image.php';
+
+			$params  = $req->get_json_params();
+			$images  = $params['images'] ?? array();
+			$post_id = isset( $params['post_id'] ) ? (int) $params['post_id'] : 0;
+			if ( ! is_array( $images ) || empty( $images ) ) {
+				return new WP_Error( 'bad_request', 'images (array) is required', array( 'status' => 400 ) );
+			}
+
+			$out = array();
+			foreach ( $images as $img ) {
+				$url = isset( $img['url'] ) ? esc_url_raw( $img['url'] ) : '';
+				if ( ! $url ) {
+					$out[] = array( 'ok' => false, 'error' => 'missing url' );
+					continue;
+				}
+				$alt = isset( $img['alt'] ) ? sanitize_text_field( $img['alt'] ) : '';
+
+				// 檔名：優先用呼叫端指定的，否則取網址路徑（去掉查詢字串——S3 預簽章參數很長）
+				$filename = isset( $img['filename'] ) && $img['filename']
+					? sanitize_file_name( $img['filename'] )
+					: sanitize_file_name( basename( parse_url( $url, PHP_URL_PATH ) ) );
+				if ( ! $filename ) {
+					$filename = 'synctify-image.png';
+				}
+
+				// 已有同名附件 → 重用，避免重跑時產生重複媒體
+				$existing = get_posts( array(
+					'post_type'      => 'attachment',
+					'post_status'    => 'inherit',
+					'posts_per_page' => 1,
+					'fields'         => 'ids',
+					'meta_query'     => array( array(
+						'key'     => '_synctify_source_filename',
+						'value'   => $filename,
+					) ),
+				) );
+				if ( ! empty( $existing ) ) {
+					$out[] = synctify_media_payload( (int) $existing[0], $url, true );
+					continue;
+				}
+
+				$tmp = download_url( $url, 60 );
+				if ( is_wp_error( $tmp ) ) {
+					$out[] = array( 'ok' => false, 'source_url' => $url,
+					                'error' => 'download failed: ' . $tmp->get_error_message() );
+					continue;
+				}
+				$file_array = array( 'name' => $filename, 'tmp_name' => $tmp );
+				$attach_id  = media_handle_sideload( $file_array, $post_id, $alt );
+				if ( is_wp_error( $attach_id ) ) {
+					@unlink( $tmp );
+					$out[] = array( 'ok' => false, 'source_url' => $url,
+					                'error' => 'sideload failed: ' . $attach_id->get_error_message() );
+					continue;
+				}
+				if ( $alt ) {
+					update_post_meta( $attach_id, '_wp_attachment_image_alt', $alt );
+				}
+				update_post_meta( $attach_id, '_synctify_source_filename', $filename );
+				$out[] = synctify_media_payload( (int) $attach_id, $url, false );
+			}
+
+			return array( 'ok' => true, 'images' => $out );
 		},
 	) );
 
@@ -205,6 +292,28 @@ add_action( 'rest_api_init', function () {
 		},
 	) );
 } );
+
+/* ---------------------------------------------------------------
+ * 媒體回傳格式：一次給齊呼叫端回填版面所需的資訊
+ *   full_url   原圖（[caption] 的 <a href>，即 Link To = Media File）
+ *   large_url  large 尺寸（<img src>，站方統一 1024 寬）
+ *   width/height 實際尺寸（非 16:9 的圖高度不是 576，需用實際值）
+ * ------------------------------------------------------------- */
+function synctify_media_payload( $attach_id, $source_url, $reused ) {
+	$full  = wp_get_attachment_image_src( $attach_id, 'full' );
+	$large = wp_get_attachment_image_src( $attach_id, 'large' );
+	return array(
+		'ok'         => true,
+		'source_url' => $source_url,
+		'reused'     => (bool) $reused,
+		'id'         => $attach_id,
+		'full_url'   => $full ? $full[0] : wp_get_attachment_url( $attach_id ),
+		'large_url'  => $large ? $large[0] : wp_get_attachment_url( $attach_id ),
+		'width'      => $large ? (int) $large[1] : null,
+		'height'     => $large ? (int) $large[2] : null,
+		'alt'        => get_post_meta( $attach_id, '_wp_attachment_image_alt', true ),
+	);
+}
 
 /* ---------------------------------------------------------------
  * TranslatePress 字典表名稱解析（依 TRP 設定驗證目標語言合法性）

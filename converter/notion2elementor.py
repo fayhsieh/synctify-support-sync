@@ -438,6 +438,67 @@ def convert(md, article_title, faq_group_slug, sync_date=None):
 def in_faq_title(text):
     return text.lower() in ("faqs", "faq", "troubleshooting")
 
+# ---------- 圖片上傳後回填版面 ----------
+
+def apply_media_map(template, media_map):
+    """把版面中的來源圖片網址換成 WP 媒體庫網址（上傳完成後呼叫）。
+
+    media_map: { 來源網址: {"id", "full_url", "large_url", "width", "height"} }
+      —— 即 `POST /synctify/v1/media/sideload` 回傳的每張圖資訊。
+
+    處理兩種圖片形態：
+      1. image widget → `settings.image.url` 換成原圖，並補上 media `id`
+      2. 數字清單步驟內嵌的 [caption] shortcode → `<a href>` 指原圖（Link To = Media File）、
+         `<img src>` 指 large 尺寸、補 `wp-image-{id}` class 與 `attachment_{id}`，
+         寬高改用實際值（非 16:9 的圖高度不是 576）
+
+    Notion S3 網址帶預簽章查詢字串且一小時後失效，故必須在寫入 WP 前完成替換。
+    回傳實際替換的圖片數。
+    """
+    replaced = 0
+
+    def patch_caption(text):
+        nonlocal replaced
+        for src, m in media_map.items():
+            if src not in text:
+                continue
+            w = m.get("width") or 1024
+            h = m.get("height") or 576
+            mid = m.get("id")
+            # <a href="來源"> → 原圖
+            text = text.replace(f'<a href="{src}">', f'<a href="{m["full_url"]}">')
+            # <img ... src="來源" ...> → large 尺寸＋wp-image class＋實際寬高
+            text = text.replace(f'src="{src}"', f'src="{m["large_url"]}"')
+            text = text.replace('<img class="size-large"',
+                                f'<img class="wp-image-{mid} size-large"')
+            text = re.sub(r'width="1024" height="576"', f'width="{w}" height="{h}"', text)
+            text = text.replace('[caption align=', f'[caption id="attachment_{mid}" align=')
+            text = re.sub(r'(\[caption[^\]]*?)width="1024"', rf'\g<1>width="{w}"', text)
+            replaced += 1
+        return text
+
+    def walk(elements):
+        nonlocal replaced
+        for el in elements:
+            s = el.get("settings") or {}
+            if el.get("widgetType") == "image":
+                img = s.get("image") or {}
+                m = media_map.get(img.get("url"))
+                if m:
+                    img["url"] = m["full_url"]
+                    img["id"] = m["id"]
+                    replaced += 1
+            if el.get("widgetType") == "docly_list_item":
+                for it in s.get("ul_icon_list") or []:
+                    if "[caption" in it.get("text", ""):
+                        it["text"] = patch_caption(it["text"])
+            if s.get("editor") and "[caption" in s["editor"]:
+                s["editor"] = patch_caption(s["editor"])
+            walk(el.get("elements") or [])
+
+    walk(template.get("content") or [])
+    return replaced
+
 # ---------- CLI ----------
 
 if __name__ == "__main__":
