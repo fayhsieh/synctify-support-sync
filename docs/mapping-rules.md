@@ -51,7 +51,24 @@ Callout 首行若為粗體獨立行 → alert_title，其餘內容 → alert_des
 | 情境 | 處理 |
 | --- | --- |
 | 圖片已在 WP 媒體庫（assets.synctify.net） | 去除檔名尺寸後綴（-1024x469）還原原始檔，反查 media ID 引用，不重複上傳 |
-| 圖片在 Notion（S3 暫存網址） | 下載 → 上傳 WP 媒體庫；檔名由圖說生成（`文章主題-動作描述.png` 慣例）；圖說寫入 alt text＋caption |
+| 圖片在 Notion（S3 暫存網址） | 由 `POST /synctify/v1/media/sideload` 下載並匯入媒體庫；Notion 圖說寫入 alt text＋caption |
+
+**Notion S3 網址會過期**：帶預簽章且 `X-Amz-Expires=3600`（一小時）。必須在寫入 WP
+版面「之前」完成上傳與網址替換，否則文章會在一小時內變破圖。上傳失敗時退回佔位圖，
+絕不可把來源網址寫進 WP。
+
+**⚠️ Notion API 不提供 alt text**（2026-08-02 以實際 API 回應確認）。image block 的
+`image` 物件只有 `caption`／`type`／`file`，沒有任何 alt 欄位——即使在 Notion UI 裡
+設定了 alt text 也讀不到。因此 alt 與 caption 都取自 Notion 的**圖說**。
+寫作端在 Notion 填的 alt text 不會同步到 WP，圖說本身要寫成足以當 alt 的描述。
+
+**WP 媒體庫三個文字欄位的儲存位置不同**（很容易寫錯）：
+
+| 媒體庫欄位 | 實際位置 |
+| --- | --- |
+| Title | `post_title` |
+| Alt text | post meta `_wp_attachment_image_alt` |
+| Caption | `post_excerpt`（**不是** `post_content`，後者是 Description）|
 
 ## 四、Icon button 對照表（Notion emoji → custom_icon shortcode）
 
@@ -93,4 +110,6 @@ Callout 首行若為粗體獨立行 → alert_title，其餘內容 → alert_des
 - Icon button 一律使用上表五種 emoji，並用 inline code 包住、附上英文標籤：`` `⏬ (Expand)` ``；不要用其他相近 emoji
 - 程式碼區塊務必標語言（http／markdown／json 等），會直接變成 WP 端語法高亮的語言設定
 - 內部筆記請放在帶 toggle 的 callout 內，或標題含「Content Review Notes」，確保不會被同步
-- FAQ 問題用 `###`，一題一個標題，答案直接接在下方
+- FAQ 問題用 `###` 或 `####` 皆可，一題一個標題，答案直接接在下方
+- **圖片的圖說要寫成足以當 alt text 的描述**：Notion API 讀不到 alt text 欄位，
+  自動同步時 alt 與 caption 都取自圖說。在 Notion UI 填 alt text 不會同步到 WP
