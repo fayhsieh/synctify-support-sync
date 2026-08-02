@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Synctify Sync Helper
  * Description: Notion → n8n → WordPress 自動上稿流程的輔助端點：開啟 Arconix FAQ REST、寫入 Elementor data、讀寫 TranslatePress 字典表、寫入 AIOSEO meta。
- * Version: 0.1.7
+ * Version: 0.1.8
  * Author: Synctify Marketing (Fay)
  *
  * 安裝：外掛 → 上傳外掛（打包成 zip），或直接放入 wp-content/mu-plugins/
@@ -621,19 +621,39 @@ add_action( 'rest_api_init', function () {
 				'description' => isset( $p['description'] )
 				                 ? sanitize_text_field( $p['description'] ) : $previous['description'],
 			);
+
+			// 站上有幾篇的 SEO 是人工用 AIOSEO 智慧標籤寫的模板，例如
+			//   #post_title: Requests &amp; Labels #separator_sa #site_title
+			// Notion 的 SEO Meta 是純文字，直接覆蓋會讓客製部分永久消失，且站名
+			// 之後改動也不會再跟著變。故現值含智慧標籤的欄位跳過不寫。
+			//
+			// 預設只保護 title：描述一律以 Notion 為準（Fay 2026-08-02 決定）。
+			// 呼叫端可用 preserve_smart_tags 覆寫，傳空陣列即全部照寫。
+			$protect = array_key_exists( 'preserve_smart_tags', $p )
+			           ? (array) $p['preserve_smart_tags']
+			           : array( 'title' );
+			$skipped = array();
+			foreach ( $protect as $field ) {
+				if ( isset( $previous[ $field ] ) && synctify_has_smart_tag( $previous[ $field ] ) ) {
+					$next[ $field ] = $previous[ $field ];
+					$skipped[]      = $field;
+				}
+			}
+
 			$changed = array_keys( array_diff_assoc( $next, $previous ) );
 
 			if ( 'publish' === $post->post_status && empty( $p['allow_published'] ) ) {
 				return array(
-					'ok'       => true,
-					'post_id'  => $post_id,
-					'applied'  => false,
-					'reason'   => 'post_is_published',
-					'previous' => $previous,
-					'proposed' => $next,
-					'changed'  => $changed,
-					'note'     => 'AIOSEO meta 無草稿機制，已發佈文章預設不寫入。'
-					              . '確定要改請帶 allow_published=true。',
+					'ok'                  => true,
+					'post_id'             => $post_id,
+					'applied'             => false,
+					'reason'              => 'post_is_published',
+					'previous'            => $previous,
+					'proposed'            => $next,
+					'changed'             => $changed,
+					'skipped_smart_tags'  => $skipped,
+					'note'                => 'AIOSEO meta 無草稿機制，已發佈文章預設不寫入。'
+					                         . '確定要改請帶 allow_published=true。',
 				);
 			}
 
@@ -643,12 +663,14 @@ add_action( 'rest_api_init', function () {
 				$aioseo_post->save();
 			}
 			return array(
-				'ok'       => true,
-				'post_id'  => $post_id,
-				'applied'  => (bool) $changed,
-				'previous' => $previous,
-				'current'  => $next,
-				'changed'  => $changed,
+				'ok'                 => true,
+				'post_id'            => $post_id,
+				'applied'            => (bool) $changed,
+				'previous'           => $previous,
+				'current'            => $next,
+				'changed'            => $changed,
+				// 現值是智慧標籤模板而被保留的欄位（非錯誤，是刻意保護）
+				'skipped_smart_tags' => $skipped,
 			);
 		},
 	) );
@@ -666,6 +688,16 @@ add_action( 'rest_api_init', function () {
  *   Caption  → `post_excerpt`（不是 post_content，後者是 Description）
  *   Title    → `post_title`（由 media_handle_sideload 的 $desc 帶入）
  */
+/**
+ * 這個值是不是 AIOSEO 智慧標籤模板（而非純文字）？
+ *
+ * AIOSEO 的標籤形如 #post_title、#separator_sa、#site_title、#post_excerpt。
+ * 要求 # 後至少 3 個小寫字母／底線，避免把 "#1 Guide" 這類正常標題誤判。
+ */
+function synctify_has_smart_tag( $value ) {
+	return (bool) preg_match( '/#[a-z][a-z0-9_]{2,}/', (string) $value );
+}
+
 function synctify_apply_media_text( $attach_id, $alt, $caption ) {
 	if ( '' !== $alt ) {
 		update_post_meta( $attach_id, '_wp_attachment_image_alt', $alt );

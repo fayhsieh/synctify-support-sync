@@ -720,7 +720,12 @@ def build_polling_workflow(code):
                   "AIOSEO meta 沒有草稿機制，寫下去即線上生效。\n"
                   "allow_published=true（Fay 2026-08-02 決定）：既有已發佈文章也直接寫，\n"
                   "理由是 SEO 文案與內文出自同一份已審核的 Notion 來源。\n"
-                  "回應的 previous 保留改動前的值，需要時可據以還原。"},
+                  "回應的 previous 保留改動前的值，需要時可據以還原。\n"
+                  "\n"
+                  "端點預設保護 title：站上現值若是 AIOSEO 智慧標籤模板\n"
+                  "（如 #post_title: Requests & Labels #separator_sa #site_title）\n"
+                  "則跳過不覆蓋，並在回應的 skipped_smart_tags 列出；description\n"
+                  "一律以 Notion 為準。要全部照寫可傳 preserve_smart_tags: []。"},
 
         {"parameters": notion_http(
             "PATCH",

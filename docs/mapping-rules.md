@@ -153,6 +153,16 @@ Notion `Category` → WP 分類頁（測試站 ID 僅供對照，程式不使用
 > 讓站上狀態不會漂移。內文本身仍受保護——走 Elementor autosave，前台不受影響。
 > `/seo` 回應的 `previous` 保留改動前的值，`/doc/defaults` 回應的 `diff` 列出改了什麼。
 
+**AIOSEO 智慧標籤保護**：站上有幾篇的 SEO 是人工用智慧標籤寫的模板，例如
+`#post_title: Requests & Labels #separator_sa #site_title`（7068）。Notion 的 SEO Meta
+是純文字，直接覆蓋會讓客製部分永久消失，站名日後改動也不會再跟著變。因此
+`/seo` 對**現值含智慧標籤**的欄位跳過不寫，並在回應的 `skipped_smart_tags` 列出。
+
+預設保護範圍是 `["title"]`——**標題保留智慧標籤，描述一律以 Notion 為準**
+（Fay 2026-08-02 決定）。呼叫端可用 `preserve_smart_tags` 覆寫，傳 `[]` 即全部照寫。
+偵測條件是 `#` 後接至少 3 個小寫字母／底線，因此 `#1 Guide` 這類正常標題不會誤判；
+真的誤判時方向也是「保留現值」，不會造成覆蓋。
+
 ## 七、寫作端注意事項（給 Support Center Writer Skill）
 
 - 可點擊 UI 路徑一律用 inline code；不可點擊 UI 文字用粗體（Style Guide §5）
