@@ -145,8 +145,13 @@ Notion `Category` → WP 分類頁（測試站 ID 僅供對照，程式不使用
 （那會讓它掉出側邊欄結構）。
 
 **已發佈文章的保護**：`/doc/defaults` 與 `/seo` 對 `post_status=publish` 的文章
-預設只回報差異、不寫入，需明確傳 `allow_published=true`。AIOSEO meta 沒有草稿
+**預設只回報差異、不寫入**，需明確傳 `allow_published=true`。AIOSEO meta 沒有草稿
 機制，寫下去即線上生效，因此比照「已發佈文章不能直接覆蓋」處理。
+
+> 同步 workflow 的這兩個節點**刻意帶了 `allow_published=true`**（Fay 2026-08-02 決定）：
+> 這四項欄位與 SEO 文案都以 Notion 為單一真實來源，既有已發佈文章也直接校正，
+> 讓站上狀態不會漂移。內文本身仍受保護——走 Elementor autosave，前台不受影響。
+> `/seo` 回應的 `previous` 保留改動前的值，`/doc/defaults` 回應的 `diff` 列出改了什麼。
 
 ## 七、寫作端注意事項（給 Support Center Writer Skill）
 

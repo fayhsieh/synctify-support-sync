@@ -695,13 +695,14 @@ def build_polling_workflow(code):
             "POST",
             "=" + WP_BASE + "/wp-json/synctify/v1/doc/defaults/"
             "{{ $('WP：寫入 Elementor 版面').item.json.post_id }}",
-            '={{ { "category": ' + f"$('{PICK}').first().json.category" + ' } }}'),
+            '={{ { "category": ' + f"$('{PICK}').first().json.category" + ', '
+            '"allow_published": true } }}'),
          "id": nid(), "name": "WP：套用站方預設欄位",
          "type": "n8n-nodes-base.httpRequest", "typeVersion": 4.2, "position": [3500, 300],
          "notes": "封面照 opengraph／作者 The Synctify Team／討論 closed／\n"
-                  "Parent 依 Notion Category 對到分類頁。\n"
-                  "兩條分路都會經過：新草稿會實際套用；已發佈文章端點只回報 diff "
-                  "不寫入（要改需 allow_published=true）。\n"
+                  "Parent 依 Notion Category 對到分類頁。兩條分路都會經過。\n"
+                  "allow_published=true（Fay 2026-08-02 決定）：既有已發佈文章也直接\n"
+                  "校正這四項，讓站上欄位始終以 Notion 為準。回應的 diff 會列出改了什麼。\n"
                   "分類在站上找不到會回 422 並附可用清單——刻意不靜默留在根目錄。"},
 
         {"parameters": wp_http(
@@ -711,12 +712,15 @@ def build_polling_workflow(code):
             # 用 ?. ——文章若沒寫 SEO Meta 段，seo 是空物件，兩個欄位皆 undefined，
             # 序列化後直接消失，端點會視為「未指定」而保留站上現值。
             '={{ { "title": ' + f"$('{CONV}').item.json.seo?.title" + ', '
-            '"description": ' + f"$('{CONV}').item.json.seo?.description" + ' } }}'),
+            '"description": ' + f"$('{CONV}').item.json.seo?.description" + ', '
+            '"allow_published": true } }}'),
          "id": nid(), "name": "WP：寫入 SEO meta",
          "type": "n8n-nodes-base.httpRequest", "typeVersion": 4.2, "position": [3720, 300],
          "notes": "取自 Notion 文末的 SEO Meta 段（不進正文）。\n"
-                  "AIOSEO meta 沒有草稿機制，寫下去即線上生效，故已發佈文章\n"
-                  "端點預設只回報 previous/proposed 差異，不實際寫入。"},
+                  "AIOSEO meta 沒有草稿機制，寫下去即線上生效。\n"
+                  "allow_published=true（Fay 2026-08-02 決定）：既有已發佈文章也直接寫，\n"
+                  "理由是 SEO 文案與內文出自同一份已審核的 Notion 來源。\n"
+                  "回應的 previous 保留改動前的值，需要時可據以還原。"},
 
         {"parameters": notion_http(
             "PATCH",
