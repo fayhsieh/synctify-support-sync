@@ -125,9 +125,44 @@ def _run(blocks, meta):
     }
 
 
+def _apply_media(payload):
+    """mode=apply_media：把上傳結果回填進版面。
+
+    上傳失敗的圖仍是會過期的 Notion S3 網址，直接寫進 WP 會在一小時內變破圖，
+    因此回填後再對「仍未替換的圖」套一次佔位圖當安全網。
+    """
+    template = payload["template"]
+    report = payload["report"] if "report" in payload else {"images": []}
+    wp_base = payload["wp_base"] if "wp_base" in payload else ""
+
+    media_map = {}
+    failed = []
+    for m in (payload["media"] if "media" in payload else []):
+        if m.get("ok") and m.get("source_url"):
+            media_map[m["source_url"]] = m
+        else:
+            failed.append(m)
+
+    replaced = apply_media_map(template, media_map)
+    fallback = apply_placeholder_images(template, report, placeholder_url_for(wp_base))
+
+    return {
+        "template": template,
+        "elementor_data": template["content"],
+        "title": payload["title"] if "title" in payload else "Untitled",
+        "faq_items": payload["faq_items"] if "faq_items" in payload else [],
+        "media_replaced": replaced,
+        "media_failed": failed,
+        "still_placeholder": fallback,
+    }
+
+
 _payloads = []
 for _it in _items:
     _payloads.append(_it["json"])
+
+if _payloads and "mode" in _payloads[0] and _payloads[0]["mode"] == "apply_media":
+    return [{"json": _apply_media(_payloads[0])}]
 
 _blocks, _meta = _collect(_payloads)
 
@@ -532,6 +567,9 @@ def build_polling_workflow(code):
                       ".replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '') }}",
              "type": "string"},
             {"id": nid(), "name": "wp_base", "value": WP_BASE, "type": "string"},
+            # keep = 先保留 Notion 來源網址，稍後由 sideload 上傳並回填；
+            # 若這裡用 placeholder，來源網址會先被換掉而無圖可上傳
+            {"id": nid(), "name": "image_mode", "value": "keep", "type": "string"},
         ]}, "includeOtherFields": True, "options": {}},
          "id": nid(), "name": PARAMS, "type": "n8n-nodes-base.set",
          "typeVersion": 3.4, "position": [1300, 300],
@@ -543,24 +581,58 @@ def build_polling_workflow(code):
          "typeVersion": 2, "position": [1520, 300],
          "notes": "自動產生，請勿直接編輯。改 converter/*.py 後重新產生。"},
 
+        {"parameters": wp_http(
+            "POST", f"{WP_BASE}/wp-json/synctify/v1/media/sideload",
+            "={{ { \"images\": $json.report.images"
+            ".filter(i => i.pending_upload)"
+            ".map(i => ({ url: i.url, alt: i.alt })) } }}"),
+         "id": nid(), "name": "WP：上傳圖片", "type": "n8n-nodes-base.httpRequest",
+         "typeVersion": 4.2, "position": [1740, 300],
+         "notes": "把 Notion S3 上的圖 sideload 進 WP 媒體庫。\n"
+                  "來源網址一小時後失效，故必須在寫入版面前完成。沒有待上傳圖片時回空陣列。"},
+
+        {"parameters": {"assignments": {"assignments": [
+            {"id": nid(), "name": "mode", "value": "apply_media", "type": "string"},
+            {"id": nid(), "name": "template",
+             "value": "={{ $('" + CONV + "').item.json.template }}", "type": "object"},
+            {"id": nid(), "name": "report",
+             "value": "={{ $('" + CONV + "').item.json.report }}", "type": "object"},
+            {"id": nid(), "name": "faq_items",
+             "value": "={{ $('" + CONV + "').item.json.faq_items }}", "type": "array"},
+            {"id": nid(), "name": "title",
+             "value": "={{ $('" + CONV + "').item.json.title }}", "type": "string"},
+            {"id": nid(), "name": "wp_base", "value": WP_BASE, "type": "string"},
+            {"id": nid(), "name": "media", "value": "={{ $json.images }}", "type": "array"},
+        ]}, "options": {}},
+         "id": nid(), "name": "組合回填輸入", "type": "n8n-nodes-base.set",
+         "typeVersion": 3.4, "position": [1960, 300],
+         "notes": "Code node（Python）只看得到自己的輸入，跨節點取值需先由此 Set 節點"
+                  "用表達式匯集（Set 用的是 JS 表達式，可引用其他節點）。"},
+
+        {"parameters": {"language": "pythonNative", "pythonCode": code},
+         "id": nid(), "name": "回填媒體網址", "type": "n8n-nodes-base.code",
+         "typeVersion": 2, "position": [2180, 300],
+         "notes": "與轉換節點同一份程式，靠 mode=apply_media 走回填分支。\n"
+                  "上傳失敗的圖會退回佔位圖，避免把會過期的網址寫進 WP。"},
+
         {"parameters": wp_http("POST", f"{WP_BASE}/wp-json/wp/v2/docs",
                                '={{ { "title": $json.title, "status": "draft" } }}'),
          "id": nid(), "name": "WP：建立草稿", "type": "n8n-nodes-base.httpRequest",
-         "typeVersion": 4.2, "position": [1740, 300],
+         "typeVersion": 4.2, "position": [2400, 300],
          "notes": "⚠️ 每次觸發都建立新草稿——尚未依 WP Post ID 去重或更新既有文章。"},
 
         {"parameters": wp_http(
             "POST", f"={WP_BASE}/wp-json/synctify/v1/elementor/{{{{ $json.id }}}}",
-            '={{ { "elementor_data": $(\'' + CONV + '\').item.json.elementor_data } }}'),
+            '={{ { "elementor_data": $(\'回填媒體網址\').item.json.elementor_data } }}'),
          "id": nid(), "name": "WP：寫入 Elementor 版面",
-         "type": "n8n-nodes-base.httpRequest", "typeVersion": 4.2, "position": [1960, 300]},
+         "type": "n8n-nodes-base.httpRequest", "typeVersion": 4.2, "position": [2620, 300]},
 
         {"parameters": notion_http(
             "PATCH", "=https://api.notion.com/v1/pages/{{ " + page_id + " }}",
             '={{ { "properties": { "最後同步時間": { "date": '
             '{ "start": $now.toISO() } } } } }}'),
          "id": nid(), "name": "Notion：記錄同步時間",
-         "type": "n8n-nodes-base.httpRequest", "typeVersion": 4.2, "position": [2180, 300],
+         "type": "n8n-nodes-base.httpRequest", "typeVersion": 4.2, "position": [2840, 300],
          "credentials": {"notionApi": {"id": NOTION_CRED_ID, "name": NOTION_CRED_NAME}},
          "notes": "本篇處理完後回到「逐篇處理」取下一篇。\n"
                   "第一階段只寫時間；WP Post ID 與上稿狀態屬母列，待去重階段再處理。"},
@@ -579,6 +651,7 @@ def build_polling_workflow(code):
             [{"node": PICK, "type": "main", "index": 0}]]},
     }
     chain = [PICK, "先取消勾選（認領）", "Notion：取得頁面 blocks", PARAMS, CONV,
+             "WP：上傳圖片", "組合回填輸入", "回填媒體網址",
              "WP：建立草稿", "WP：寫入 Elementor 版面", "Notion：記錄同步時間"]
     for a, b in zip(chain, chain[1:]):
         conns[a] = {"main": [[{"node": b, "type": "main", "index": 0}]]}

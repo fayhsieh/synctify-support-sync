@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Synctify Sync Helper
  * Description: Notion → n8n → WordPress 自動上稿流程的輔助端點：開啟 Arconix FAQ REST、寫入 Elementor data、讀寫 TranslatePress 字典表、寫入 AIOSEO meta。
- * Version: 0.1.2
+ * Version: 0.1.3
  * Author: Synctify Marketing (Fay)
  *
  * 安裝：外掛 → 上傳外掛（打包成 zip），或直接放入 wp-content/mu-plugins/
@@ -129,8 +129,13 @@ add_action( 'rest_api_init', function () {
 			$params  = $req->get_json_params();
 			$images  = $params['images'] ?? array();
 			$post_id = isset( $params['post_id'] ) ? (int) $params['post_id'] : 0;
-			if ( ! is_array( $images ) || empty( $images ) ) {
-				return new WP_Error( 'bad_request', 'images (array) is required', array( 'status' => 400 ) );
+			if ( ! is_array( $images ) ) {
+				return new WP_Error( 'bad_request', 'images must be an array', array( 'status' => 400 ) );
+			}
+			// 空陣列視為合法（文章沒有待上傳圖片時），回傳空結果即可，
+			// 讓呼叫端不必為了「這篇沒圖」而多開一條分支。
+			if ( empty( $images ) ) {
+				return array( 'ok' => true, 'images' => array() );
 			}
 
 			$out = array();
@@ -188,6 +193,77 @@ add_action( 'rest_api_init', function () {
 			}
 
 			return array( 'ok' => true, 'images' => $out );
+		},
+	) );
+
+	/* 2b-3. 【實驗性】把版面寫成 Elementor 草稿（不動前台）
+	 * POST /wp-json/synctify/v1/elementor/<post_id>/draft
+	 * body: { "elementor_data": [ ... ] }
+	 *
+	 * 目的：驗證「已發佈文章可存 Elementor 草稿、前台不受影響」能否從程式端達成。
+	 * 若可行，更新既有文章就不需要「影子草稿」那套（另建 [更新預覽] 文章再搬回）。
+	 *
+	 * 做法：取得該文章的 Elementor Document，透過 get_autosave(0, true) 取得／建立
+	 * autosave 版本，只對 autosave 寫入版面。主文章的 _elementor_data 完全不動。
+	 *
+	 * 回傳 autosave_id 與寫入前後的主文章 _elementor_data 雜湊，
+	 * 方便呼叫端確認「前台內容真的沒被改到」。
+	 */
+	register_rest_route( 'synctify/v1', '/elementor/(?P<id>\d+)/draft', array(
+		'methods'             => 'POST',
+		'permission_callback' => $permission,
+		'callback'            => function ( WP_REST_Request $req ) {
+			$post_id = (int) $req['id'];
+			$post    = get_post( $post_id );
+			if ( ! $post ) {
+				return new WP_Error( 'not_found', 'Post not found', array( 'status' => 404 ) );
+			}
+			$data = $req->get_json_params();
+			if ( empty( $data['elementor_data'] ) || ! is_array( $data['elementor_data'] ) ) {
+				return new WP_Error( 'bad_request', 'elementor_data (array) is required', array( 'status' => 400 ) );
+			}
+			if ( ! class_exists( '\Elementor\Plugin' ) ) {
+				return new WP_Error( 'no_elementor', 'Elementor not active', array( 'status' => 501 ) );
+			}
+
+			// 寫入前先記錄主文章版面的指紋，之後比對確認前台未被更動
+			$before = md5( (string) get_post_meta( $post_id, '_elementor_data', true ) );
+
+			$documents = \Elementor\Plugin::$instance->documents;
+			$document  = $documents->get( $post_id );
+			if ( ! $document ) {
+				return new WP_Error( 'no_document', 'Elementor document not found for this post',
+				                     array( 'status' => 500 ) );
+			}
+			if ( ! method_exists( $document, 'get_autosave' ) ) {
+				return new WP_Error( 'unsupported',
+					'This Elementor version has no Document::get_autosave()',
+					array( 'status' => 501 ) );
+			}
+
+			$autosave = $document->get_autosave( 0, true );   // 第二個參數 true = 沒有就建立
+			if ( ! $autosave ) {
+				return new WP_Error( 'autosave_failed', 'Could not create autosave document',
+				                     array( 'status' => 500 ) );
+			}
+
+			$saved = $autosave->save( array(
+				'elements' => $data['elementor_data'],
+			) );
+
+			$after = md5( (string) get_post_meta( $post_id, '_elementor_data', true ) );
+
+			return array(
+				'ok'                 => (bool) $saved,
+				'post_id'            => $post_id,
+				'post_status'        => $post->post_status,
+				'autosave_id'        => method_exists( $autosave, 'get_main_id' )
+				                        ? $autosave->get_main_id() : null,
+				// 兩者相同代表主文章版面沒被動到——前台不受影響
+				'live_data_unchanged' => ( $before === $after ),
+				'note'               => '實驗性端點：請在 Elementor 開啟此文章確認是否出現'
+				                        . '「有較新的草稿版本」提示，並確認前台仍為舊內容。',
+			);
 		},
 	) );
 

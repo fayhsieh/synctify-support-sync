@@ -378,7 +378,7 @@ def test_code_block_with_spaced_language_does_not_swallow_document():
     # 語言正規化為站上慣例
     code = [w for w in ws if w["widgetType"] == "docly_code_syntax_highlighter"]
     assert len(code) == 1
-    assert code[0]["settings"]["lng_type"] == "markdown"
+    assert code[0]["settings"]["lng_type"] == "plaintext"
     assert "Order held by" in code[0]["settings"]["source_code"]
 
     # 關鍵：程式碼區塊之後的內容必須完整保留，不可被吞
@@ -390,7 +390,7 @@ def test_code_block_with_spaced_language_does_not_swallow_document():
 
 def test_various_code_languages_parse():
     for lang, expect in [("json", "json"), ("http", "http"), ("", "markdown"),
-                         ("plain text", "markdown"), ("shell script", "shellscript")]:
+                         ("plain text", "plaintext"), ("shell script", "shellscript")]:
         blocks = [head(2, "S"),
                   blk("code", {"rich_text": [rt("body")], "language": lang}),
                   head(2, "After")]

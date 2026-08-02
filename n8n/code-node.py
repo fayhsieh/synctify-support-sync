@@ -92,12 +92,16 @@ def _plain(items):
 
 
 # Notion 的 code block 語言 → 站上 docly_code_syntax_highlighter 的 lng_type。
-# Notion 有些語言名帶空格（"plain text"、"shell script"），直接寫進 fence 會讓
-# markdown parser 難以辨識，故一律正規化。"plain text" 對到 markdown 是站上慣例
-# （實站範本 7978 的同一段程式碼區塊即為 lng_type=markdown）。
+# 兩個理由必須正規化：
+#   1. Notion 有些語言名帶空格（"plain text"、"shell script"），會干擾 fence 解析。
+#   2. lng_type 直接決定 Prism 用哪套文法上色。"plain text" 若對到 markdown，
+#      Prism 的 markdown 文法會把裸網址變成可點連結——實站的純文字區塊要求不可點
+#      （正式站同類區塊用 http，渲染為 <span class="token">，上色但不可點）。
+#      故對到 Prism 的中性語言 plaintext：不 tokenize、不產生連結。
 _CODE_LANG_MAP = {
-    "plain text": "markdown",
-    "plaintext": "markdown",
+    "plain text": "plaintext",
+    "text": "plaintext",
+    "none": "plaintext",
 }
 
 
@@ -934,9 +938,44 @@ def _run(blocks, meta):
     }
 
 
+def _apply_media(payload):
+    """mode=apply_media：把上傳結果回填進版面。
+
+    上傳失敗的圖仍是會過期的 Notion S3 網址，直接寫進 WP 會在一小時內變破圖，
+    因此回填後再對「仍未替換的圖」套一次佔位圖當安全網。
+    """
+    template = payload["template"]
+    report = payload["report"] if "report" in payload else {"images": []}
+    wp_base = payload["wp_base"] if "wp_base" in payload else ""
+
+    media_map = {}
+    failed = []
+    for m in (payload["media"] if "media" in payload else []):
+        if m.get("ok") and m.get("source_url"):
+            media_map[m["source_url"]] = m
+        else:
+            failed.append(m)
+
+    replaced = apply_media_map(template, media_map)
+    fallback = apply_placeholder_images(template, report, placeholder_url_for(wp_base))
+
+    return {
+        "template": template,
+        "elementor_data": template["content"],
+        "title": payload["title"] if "title" in payload else "Untitled",
+        "faq_items": payload["faq_items"] if "faq_items" in payload else [],
+        "media_replaced": replaced,
+        "media_failed": failed,
+        "still_placeholder": fallback,
+    }
+
+
 _payloads = []
 for _it in _items:
     _payloads.append(_it["json"])
+
+if _payloads and "mode" in _payloads[0] and _payloads[0]["mode"] == "apply_media":
+    return [{"json": _apply_media(_payloads[0])}]
 
 _blocks, _meta = _collect(_payloads)
 
