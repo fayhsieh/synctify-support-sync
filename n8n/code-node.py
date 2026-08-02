@@ -91,6 +91,23 @@ def _plain(items):
     return "".join(out)
 
 
+# Notion 的 code block 語言 → 站上 docly_code_syntax_highlighter 的 lng_type。
+# Notion 有些語言名帶空格（"plain text"、"shell script"），直接寫進 fence 會讓
+# markdown parser 難以辨識，故一律正規化。"plain text" 對到 markdown 是站上慣例
+# （實站範本 7978 的同一段程式碼區塊即為 lng_type=markdown）。
+_CODE_LANG_MAP = {
+    "plain text": "markdown",
+    "plaintext": "markdown",
+}
+
+
+def _code_language(lang):
+    lang = (lang or "").strip().lower()
+    if lang in _CODE_LANG_MAP:
+        return _CODE_LANG_MAP[lang]
+    return lang.replace(" ", "") or "markdown"
+
+
 def _heading_level(btype):
     """heading_N → markdown 井字號數（夾在轉換器認得的 [2, 4]）；非標題回 None。"""
     if not btype or not btype.startswith("heading_"):
@@ -209,7 +226,7 @@ def _render(blocks, lines, report, indent):
 
         elif btype == "code":
             _blank(lines)
-            lang = data.get("language") or "markdown"
+            lang = _code_language(data.get("language"))
             lines.append(f"```{lang}")
             lines.extend(_plain(_rt_items(data)).split("\n"))
             lines.append("```")
@@ -454,9 +471,12 @@ def parse_blocks(md):
                            "color": c.group(1) if c else "", "body": body})
             continue
         # 程式碼區塊（fenced code，含語言標記）
-        cm = re.match(r"^```(\w*)\s*$", stripped)
+        # 語言標記可能含空格（Notion 的 "plain text"、"shell script" 等）。
+        # 先前用 ^```(\w*)\s*$ 會漏認這類開頭 fence，結果「結尾的 ```」反而被當成開頭，
+        # 一路把文件剩餘內容全吞進程式碼區塊——後半篇文章整個消失。
+        cm = re.match(r"^```(.*)$", stripped)
         if cm:
-            lang, code = cm.group(1) or "markdown", []
+            lang, code = (cm.group(1).strip() or "markdown"), []
             i += 1
             while i < len(lines) and not lines[i].strip().startswith("```"):
                 code.append(lines[i])

@@ -355,3 +355,47 @@ def test_unsupported_block_recorded_not_crash():
     md, _ws, report = to_elementor(blocks)
     assert "ok" in md
     assert "equation" in report["unsupported"]
+
+
+def test_code_block_with_spaced_language_does_not_swallow_document():
+    """語言標記帶空格（Notion 的 "plain text"）不可讓後續內容被吞進程式碼區塊。
+
+    2026-08-02 實站發現：fence 正則 ^```(\\w*)\\s*$ 認不出 "```plain text"，
+    導致結尾的 ``` 被當成開頭，整篇後半段（標題、段落全部）被吞成一個程式碼區塊。
+    """
+    blocks = [
+        head(2, "Find orders on hold"),
+        para("Orders held by this feature will show a reason such as:"),
+        blk("code", {"rich_text": [rt("Order held by [Channel Name].")],
+                     "language": "plain text"}),
+        head(2, "Release an order before the frozen period ends"),
+        para("If you review an order and decide it can proceed."),
+        head(4, "Step 1: Go to the On-Hold tab"),
+        para("From the navigation bar."),
+    ]
+    md, ws, report = to_elementor(blocks)
+
+    # 語言正規化為站上慣例
+    code = [w for w in ws if w["widgetType"] == "docly_code_syntax_highlighter"]
+    assert len(code) == 1
+    assert code[0]["settings"]["lng_type"] == "markdown"
+    assert "Order held by" in code[0]["settings"]["source_code"]
+
+    # 關鍵：程式碼區塊之後的內容必須完整保留，不可被吞
+    heads = [w["settings"]["title"] for w in ws if w["widgetType"] == "heading"]
+    assert "Release an order before the frozen period ends" in heads
+    assert "Step 1: Go to the On-Hold tab" in heads
+    assert "##" not in code[0]["settings"]["source_code"]      # 標題沒被吞進去
+
+
+def test_various_code_languages_parse():
+    for lang, expect in [("json", "json"), ("http", "http"), ("", "markdown"),
+                         ("plain text", "markdown"), ("shell script", "shellscript")]:
+        blocks = [head(2, "S"),
+                  blk("code", {"rich_text": [rt("body")], "language": lang}),
+                  head(2, "After")]
+        _md, ws, _r = to_elementor(blocks)
+        code = [w for w in ws if w["widgetType"] == "docly_code_syntax_highlighter"]
+        assert code and code[0]["settings"]["lng_type"] == expect, f"{lang} → {expect}"
+        heads = [w["settings"]["title"] for w in ws if w["widgetType"] == "heading"]
+        assert "After" in heads, f"{lang}: 後續內容被吞掉了"

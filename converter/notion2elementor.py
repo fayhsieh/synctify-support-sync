@@ -162,9 +162,12 @@ def parse_blocks(md):
                            "color": c.group(1) if c else "", "body": body})
             continue
         # 程式碼區塊（fenced code，含語言標記）
-        cm = re.match(r"^```(\w*)\s*$", stripped)
+        # 語言標記可能含空格（Notion 的 "plain text"、"shell script" 等）。
+        # 先前用 ^```(\w*)\s*$ 會漏認這類開頭 fence，結果「結尾的 ```」反而被當成開頭，
+        # 一路把文件剩餘內容全吞進程式碼區塊——後半篇文章整個消失。
+        cm = re.match(r"^```(.*)$", stripped)
         if cm:
-            lang, code = cm.group(1) or "markdown", []
+            lang, code = (cm.group(1).strip() or "markdown"), []
             i += 1
             while i < len(lines) and not lines[i].strip().startswith("```"):
                 code.append(lines[i])

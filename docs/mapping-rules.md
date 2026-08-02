@@ -17,7 +17,7 @@ Notion 教學文件 → WordPress Elementor（Docly + EazyDocs）自動上稿轉
 | 8 | 行內程式碼 `` `UI 路徑` `` | `[direction]...[/direction]` shortcode | 可點擊 UI 路徑；路徑用 `>` 分隔放同一組。分隔符 `>` 輸出為 `&gt;`（否則 Docly shortcode 會渲染成箭頭圖示，站上要字面 `>`）|
 | 9 | 粗體 `**文字**` | `<strong>` | 不可點擊的 UI 文字、狀態名稱 |
 | 10 | 連結 `[文字](url)` | `<a href="..." target="_blank" rel="noopener">` | 連結文字一律去除粗體 |
-| 11 | 程式碼區塊（fenced，含語言標記） | docly_code_syntax_highlighter widget | 語言標記 → `lng_type`，內容 → `source_code` |
+| 11 | 程式碼區塊（fenced，含語言標記） | docly_code_syntax_highlighter widget | 語言標記 → `lng_type`，內容 → `source_code`。語言名可能含空格（Notion 的 `plain text`、`shell script`），一律正規化：`plain text` → `markdown`（站上慣例，範本 7978 確認），其餘去空格。⚠️ fence 解析須容許帶空格的語言標記，否則開頭 fence 認不出來、結尾 fence 被當開頭，會把文件剩餘內容整段吞掉 |
 | 12 | 表格 | text-editor widget 內 HTML `<table>` | |
 | 13 | 圖片＋圖說 | image widget | 圖說 → alt text＋caption；詳見「三、圖片規則」。**例外**：tab 縮排在數字清單步驟下的巢狀圖片 → 內嵌成該步驟 item 內的 `[caption]` shortcode（`<a href>` 保 lightbox、`[caption]` 保圖說、不佔圓圈編號），非獨立 widget。統一規範：**Link To = Media File**（`<a href>` 指原圖）、**Size = Large 1024×576**（`img` 帶 `size-large` class＋`width/height`）。結構逆向自實站範本 7915 |
 
