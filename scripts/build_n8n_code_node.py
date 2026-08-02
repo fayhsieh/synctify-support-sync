@@ -33,6 +33,7 @@ CONVERTER = ROOT / "converter"
 OUT = ROOT / "n8n" / "code-node.py"
 WF_OUT = ROOT / "n8n" / "notion-to-elementor-test.workflow.json"
 DRAFT_WF_OUT = ROOT / "n8n" / "notion-to-wp-draft.workflow.json"
+BUTTON_WF_OUT = ROOT / "n8n" / "notion-button-to-wp-draft.workflow.json"
 
 # 測試用 Notion 頁面：Manage Exception Orders v2（已有手工轉換版本可比對）
 TEST_PAGE_ID = "3822f2ede27d80f1bd47d73c6314bec4"
@@ -389,6 +390,162 @@ def build_draft_workflow(code):
     }
 
 
+WEBHOOK_PATH = "synctify-draft"
+
+
+def build_button_workflow(code):
+    """由 Notion 按鈕觸發的建草稿 workflow（第一階段 + webhook 觸發）。
+
+    與手動版的差別：page_id 由按鈕帶入、標題自 Notion 讀取（不再寫死），
+    因此換文章不必改 workflow。仍只建新草稿——不去重、不更新既有文章。
+    """
+    def nid():
+        return str(uuid.uuid4())
+
+    WH, CONV = "Webhook：Notion 按鈕", "轉換：blocks → Elementor JSON"
+    PAGE, PARAMS = "Notion：取得頁面屬性", "組裝參數"
+
+    def notion_http(url):
+        return {
+            "method": "GET", "url": url,
+            "authentication": "predefinedCredentialType",
+            "nodeCredentialType": "notionApi",
+            "sendHeaders": True,
+            "headerParameters": {"parameters": [
+                {"name": "Notion-Version", "value": "2022-06-28"}]},
+            "options": {},
+        }
+
+    def http(method, url, body=None):
+        p = {"method": method, "url": url,
+             "authentication": "genericCredentialType",
+             "genericAuthType": "httpBasicAuth", "options": {}}
+        if body is not None:
+            p.update({"sendBody": True, "specifyBody": "json", "jsonBody": body})
+        return p
+
+    # 標題：去掉版本後綴（子列的 Doc name 形如「… - v2 (Current)」）
+    raw_title = (f"$('{PAGE}').item.json.properties['Doc name'].title[0].plain_text")
+    clean_title = (f"({raw_title})"
+                   ".replace(/\\s+[-–]\\s*v\\d.*$/i, '')"
+                   ".replace(/\\s*\\(Current\\)\\s*$/i, '').trim()")
+
+    nodes = [
+        {"parameters": {"httpMethod": "POST", "path": WEBHOOK_PATH,
+                        "responseMode": "responseNode", "options": {}},
+         "id": nid(), "name": WH, "type": "n8n-nodes-base.webhook",
+         "typeVersion": 2, "position": [-260, 300], "webhookId": nid(),
+         "notes": "Notion 按鈕呼叫此網址，body 需含 page_id，header 需帶 x-synctify-token。"},
+
+        {"parameters": {"conditions": {
+            "options": {"caseSensitive": True, "typeValidation": "strict", "version": 2},
+            "conditions": [{"id": nid(),
+                            "leftValue": "={{ $json.headers['x-synctify-token'] }}",
+                            "operator": {"type": "string", "operation": "equals"},
+                            "rightValue": "={{ $env.N8N_WEBHOOK_TOKEN }}"}],
+            "combinator": "and"}},
+         "id": nid(), "name": "驗證 token", "type": "n8n-nodes-base.if",
+         "typeVersion": 2.2, "position": [-40, 300],
+         "notes": "需在 n8n 設環境變數 N8N_WEBHOOK_TOKEN。"},
+
+        {"parameters": {"respondWith": "json",
+                        "responseBody": '={{ { "error": "invalid or missing token" } }}',
+                        "options": {"responseCode": 401}},
+         "id": nid(), "name": "回應 401", "type": "n8n-nodes-base.respondToWebhook",
+         "typeVersion": 1, "position": [180, 480]},
+
+        # page_id 容錯擷取：Notion 按鈕的 payload 形狀依設定而異
+        {"parameters": {"assignments": {"assignments": [
+            {"id": nid(), "name": "page_id",
+             "value": "={{ ($json.body?.page_id ?? $json.body?.id ?? "
+                      "$json.body?.data?.id ?? $json.query?.page_id ?? '')"
+                      ".toString().replace(/-/g, '') }}", "type": "string"},
+            {"id": nid(), "name": "raw_body", "value": "={{ $json.body }}", "type": "object"},
+        ]}, "options": {}},
+         "id": nid(), "name": "解析 page_id", "type": "n8n-nodes-base.set",
+         "typeVersion": 3.4, "position": [180, 300],
+         "notes": "同時保留 raw_body，若擷取不到 page_id 可從回應中看見 Notion 實際送了什麼。"},
+
+        {"parameters": notion_http(
+            "=https://api.notion.com/v1/pages/{{ $json.page_id }}"),
+         "id": nid(), "name": PAGE, "type": "n8n-nodes-base.httpRequest",
+         "typeVersion": 4.2, "position": [400, 300],
+         "credentials": {"notionApi": {"id": NOTION_CRED_ID, "name": NOTION_CRED_NAME}},
+         "notes": "讀取頁面屬性以取得 Doc name 當文章標題。"},
+
+        {"parameters": {
+            "resource": "block", "operation": "getAll",
+            "blockId": {"__rl": True, "mode": "id",
+                        "value": "={{ $('解析 page_id').item.json.page_id }}"},
+            "returnAll": True, "fetchNestedBlocks": True, "simplifyOutput": False},
+         "id": nid(), "name": "Notion：取得頁面 blocks",
+         "type": "n8n-nodes-base.notion", "typeVersion": 2.2, "position": [620, 300],
+         "credentials": {"notionApi": {"id": NOTION_CRED_ID, "name": NOTION_CRED_NAME}},
+         "notes": "Return All／Also Fetch Nested Blocks 開啟、Simplify Output 關閉。"},
+
+        {"parameters": {"assignments": {"assignments": [
+            {"id": nid(), "name": "title", "value": "={{ " + clean_title + " }}",
+             "type": "string"},
+            {"id": nid(), "name": "faq_group",
+             "value": "={{ (" + clean_title + ").toLowerCase()"
+                      ".replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '') }}",
+             "type": "string"},
+            {"id": nid(), "name": "wp_base", "value": WP_BASE, "type": "string"},
+        ]}, "includeOtherFields": True, "options": {}},
+         "id": nid(), "name": PARAMS, "type": "n8n-nodes-base.set",
+         "typeVersion": 3.4, "position": [840, 300],
+         "notes": "標題取自 Notion Doc name 並去掉「- vN」「(Current)」後綴；"
+                  "faq_group 由標題轉 slug。Include Other Fields 必須開啟。"},
+
+        {"parameters": {"language": "pythonNative", "pythonCode": code},
+         "id": nid(), "name": CONV, "type": "n8n-nodes-base.code",
+         "typeVersion": 2, "position": [1060, 300],
+         "notes": "自動產生，請勿直接編輯。改 converter/*.py 後重新產生。"},
+
+        {"parameters": http("POST", f"{WP_BASE}/wp-json/wp/v2/docs",
+                            '={{ { "title": $json.title, "status": "draft" } }}'),
+         "id": nid(), "name": "WP：建立草稿", "type": "n8n-nodes-base.httpRequest",
+         "typeVersion": 4.2, "position": [1280, 300],
+         "notes": "⚠️ 每次觸發都會建立一篇新草稿——目前尚未依 WP Post ID 去重。"},
+
+        {"parameters": http(
+            "POST", f"={WP_BASE}/wp-json/synctify/v1/elementor/{{{{ $json.id }}}}",
+            '={{ { "elementor_data": $(\'' + CONV + '\').item.json.elementor_data } }}'),
+         "id": nid(), "name": "WP：寫入 Elementor 版面",
+         "type": "n8n-nodes-base.httpRequest", "typeVersion": 4.2, "position": [1500, 300]},
+
+        {"parameters": {"respondWith": "json", "responseBody":
+            '={{ { "ok": true, '
+            '"post_id": $(\'WP：建立草稿\').item.json.id, '
+            '"title": $(\'' + PARAMS + '\').item.json.title, '
+            '"edit_url": "' + WP_BASE + '/wp-admin/post.php?post=" + '
+            '$(\'WP：建立草稿\').item.json.id + "&action=elementor", '
+            '"images_todo": $(\'' + CONV + '\').item.json.report.images_todo, '
+            '"faq_items": $(\'' + CONV + '\').item.json.faq_items } }}',
+            "options": {}},
+         "id": nid(), "name": "回應成功", "type": "n8n-nodes-base.respondToWebhook",
+         "typeVersion": 1, "position": [1720, 300],
+         "notes": "回傳草稿連結、待補圖與 FAQ 問答，Notion 端可直接看到結果。"},
+    ]
+
+    conns = {WH: {"main": [[{"node": "驗證 token", "type": "main", "index": 0}]]},
+             "驗證 token": {"main": [
+                 [{"node": "解析 page_id", "type": "main", "index": 0}],
+                 [{"node": "回應 401", "type": "main", "index": 0}]]}}
+    chain = ["解析 page_id", PAGE, "Notion：取得頁面 blocks", PARAMS, CONV,
+             "WP：建立草稿", "WP：寫入 Elementor 版面", "回應成功"]
+    for a, b in zip(chain, chain[1:]):
+        conns[a] = {"main": [[{"node": b, "type": "main", "index": 0}]]}
+
+    return {
+        "name": "Synctify — Notion 按鈕 → WP 草稿",
+        "nodes": nodes, "connections": conns, "active": False,
+        "settings": {"executionOrder": "v1"},
+        "meta": {"synctify_note": "Notion 按鈕觸發建草稿；不去重、不更新既有文章。"},
+        "tags": [],
+    }
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--check", action="store_true",
@@ -425,7 +582,11 @@ def main():
 
     DRAFT_WF_OUT.write_text(json.dumps(build_draft_workflow(body), ensure_ascii=False, indent=2),
                             encoding="utf-8")
-    print(f"✓ 已產生 {DRAFT_WF_OUT}（第一階段：建 WP 草稿）")
+    print(f"✓ 已產生 {DRAFT_WF_OUT}（第一階段：手動觸發建 WP 草稿）")
+
+    BUTTON_WF_OUT.write_text(json.dumps(build_button_workflow(body), ensure_ascii=False, indent=2),
+                             encoding="utf-8")
+    print(f"✓ 已產生 {BUTTON_WF_OUT}（Notion 按鈕觸發）")
 
 
 if __name__ == "__main__":
