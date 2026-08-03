@@ -485,7 +485,11 @@ def build_polling_workflow(code):
     doc_name = f"$('{PICK}').first().json.doc_name"
     clean_title = (f"({doc_name})"
                    ".replace(/\\s+[-–]\\s*v\\d.*$/i, '')"
-                   ".replace(/\\s*\\(Current\\)\\s*$/i, '').trim()")
+                   ".replace(/\\s*\\(Current\\)\\s*$/i, '')"
+                   # Notion 的管理編號前綴（4-10、5-2、10-1…）只用於 Notion 內部排序，
+                   # 不可進站上標題——它同時會被 WP 拿去生 slug（/4-10-bigcommerce-…）。
+                   ".replace(/^\\s*\\d+[-–]\\d+[.\\s]\\s*/, '')"
+                   ".trim()")
     page_id = f"$('{PICK}').first().json.page_id"
 
     nodes = [
@@ -826,7 +830,11 @@ def build_button_workflow(code):
     raw_title = (f"$('{PAGE}').item.json.properties['Doc name'].title[0].plain_text")
     clean_title = (f"({raw_title})"
                    ".replace(/\\s+[-–]\\s*v\\d.*$/i, '')"
-                   ".replace(/\\s*\\(Current\\)\\s*$/i, '').trim()")
+                   ".replace(/\\s*\\(Current\\)\\s*$/i, '')"
+                   # Notion 的管理編號前綴（4-10、5-2、10-1…）只用於 Notion 內部排序，
+                   # 不可進站上標題——它同時會被 WP 拿去生 slug（/4-10-bigcommerce-…）。
+                   ".replace(/^\\s*\\d+[-–]\\d+[.\\s]\\s*/, '')"
+                   ".trim()")
 
     nodes = [
         {"parameters": {"httpMethod": "POST", "path": WEBHOOK_PATH,

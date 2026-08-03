@@ -163,6 +163,29 @@ Notion `Category` → WP 分類頁（測試站 ID 僅供對照，程式不使用
 偵測條件是 `#` 後接至少 3 個小寫字母／底線，因此 `#1 Guide` 這類正常標題不會誤判；
 真的誤判時方向也是「保留現值」，不會造成覆蓋。
 
+> ⚠️ **每篇的空值不等於「沒有標題」，而是「沿用 AIOSEO 全站範本」**，而那個範本
+> 本身就是智慧標籤。第一版只保護「已存值含智慧標籤」的欄位，結果空值欄位被寫成
+> 純文字，繼承關係被換成寫死的字串（2026-08-03 Fay 在 demo 上發現，6074／7553 中招）。
+> 現在空值與含標籤的值一樣受保護，回應的 `preserved` 會標明原因：
+> `inherits_global_template`（空值）或 `has_smart_tags`（已是模板）。
+
+## 六之三、文章標題的推導
+
+站上標題取自 Notion 的 `Doc name`，但要剝掉兩段 Notion 內部管理用的資訊：
+
+| Notion `Doc name` | WP 標題 |
+| --- | --- |
+| `4-10 BigCommerce Integration Guide - v1 (Current)` | `BigCommerce Integration Guide` |
+| `2-2 Manage User Access - v2 (Current)` | `Manage User Access` |
+| `Shopify Integration Guide` | `Shopify Integration Guide`（無前綴則不動） |
+
+1. **版本後綴** `- vN`、`(Current)` —— 版本追蹤用，站上只有「目前版本」
+2. **編號前綴** `^\d+-\d+` —— Notion 內部排序用。**這段特別容易漏**：它不只出現在
+   標題，WP 還會拿標題生 slug，導致網址變成 `/4-10-bigcommerce-integration-guide/`
+   （2026-08-03 Fay 在 demo 上發現）
+
+前綴不符合格式的標題完全不動，中文標題與 `How to ...` 這類敘述句都不受影響。
+
 ## 七、寫作端注意事項（給 Support Center Writer Skill）
 
 - 可點擊 UI 路徑一律用 inline code；不可點擊 UI 文字用粗體（Style Guide §5）

@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Synctify Sync Helper
  * Description: Notion → n8n → WordPress 自動上稿流程的輔助端點：開啟 Arconix FAQ REST、寫入 Elementor data、讀寫 TranslatePress 字典表、寫入 AIOSEO meta。
- * Version: 0.1.8
+ * Version: 0.1.9
  * Author: Synctify Marketing (Fay)
  *
  * 安裝：外掛 → 上傳外掛（打包成 zip），或直接放入 wp-content/mu-plugins/
@@ -625,19 +625,30 @@ add_action( 'rest_api_init', function () {
 			// 站上有幾篇的 SEO 是人工用 AIOSEO 智慧標籤寫的模板，例如
 			//   #post_title: Requests &amp; Labels #separator_sa #site_title
 			// Notion 的 SEO Meta 是純文字，直接覆蓋會讓客製部分永久消失，且站名
-			// 之後改動也不會再跟著變。故現值含智慧標籤的欄位跳過不寫。
+			// 之後改動也不會再跟著變。
+			//
+			// ⚠️ 每篇的值「空白」不等於「沒有標題」，而是**沿用 AIOSEO 全站範本**，
+			// 而那個範本本身就是智慧標籤。寫入純文字會把繼承關係換成寫死的字串，
+			// 後台看到的智慧標籤就消失了（2026-08-03 Fay 在 demo 上發現）。
+			// 因此空值與含智慧標籤的值一樣受保護。
 			//
 			// 預設只保護 title：描述一律以 Notion 為準（Fay 2026-08-02 決定）。
 			// 呼叫端可用 preserve_smart_tags 覆寫，傳空陣列即全部照寫。
-			$protect = array_key_exists( 'preserve_smart_tags', $p )
-			           ? (array) $p['preserve_smart_tags']
-			           : array( 'title' );
-			$skipped = array();
+			$protect   = array_key_exists( 'preserve_smart_tags', $p )
+			             ? (array) $p['preserve_smart_tags']
+			             : array( 'title' );
+			$preserved = array();
 			foreach ( $protect as $field ) {
-				if ( isset( $previous[ $field ] ) && synctify_has_smart_tag( $previous[ $field ] ) ) {
-					$next[ $field ] = $previous[ $field ];
-					$skipped[]      = $field;
+				$cur = isset( $previous[ $field ] ) ? (string) $previous[ $field ] : '';
+				if ( '' === trim( $cur ) ) {
+					$reason = 'inherits_global_template';
+				} elseif ( synctify_has_smart_tag( $cur ) ) {
+					$reason = 'has_smart_tags';
+				} else {
+					continue;   // 現值是純文字 → 沒有可保護的模板，照寫
 				}
+				$next[ $field ]      = $cur;
+				$preserved[ $field ] = $reason;
 			}
 
 			$changed = array_keys( array_diff_assoc( $next, $previous ) );
@@ -651,7 +662,7 @@ add_action( 'rest_api_init', function () {
 					'previous'            => $previous,
 					'proposed'            => $next,
 					'changed'             => $changed,
-					'skipped_smart_tags'  => $skipped,
+					'preserved'           => $preserved,
 					'note'                => 'AIOSEO meta 無草稿機制，已發佈文章預設不寫入。'
 					                         . '確定要改請帶 allow_published=true。',
 				);
@@ -669,8 +680,9 @@ add_action( 'rest_api_init', function () {
 				'previous'           => $previous,
 				'current'            => $next,
 				'changed'            => $changed,
-				// 現值是智慧標籤模板而被保留的欄位（非錯誤，是刻意保護）
-				'skipped_smart_tags' => $skipped,
+				// 刻意保留未寫入的欄位（非錯誤）：field => 原因
+				// has_smart_tags＝現值是智慧標籤模板；inherits_global_template＝空值，沿用全站範本
+				'preserved'          => $preserved,
 			);
 		},
 	) );
