@@ -440,6 +440,13 @@ NOTION_DB_ID = "3272f2ed-e27d-807e-9fac-f2313dd2d0de"
 TRIGGER_PROP = "待同步"
 POLL_MINUTES = 1
 
+# Notion 按鈕 webhook 的路徑。**這裡刻意只放佔位字串**——實際路徑就是這條 webhook
+# 的唯一憑證，屬於 CLAUDE.md 明列不可入庫的東西。匯入 n8n 後手動改成隨機字串，
+# 不要寫回這個檔案。
+# 2026-08-11 實測：automation.internal.synctify.net 雖名為 internal，公開 DNS 解析得到，
+# /webhook/* 亦正常回應（未註冊路徑回 404，0.58s），故 Notion 打得到。
+WEBHOOK_PATH = "synctify-sync-CHANGE-ME-TO-A-RANDOM-STRING"
+
 
 def build_polling_workflow(code):
     """輪詢版：不需 Notion Plus 方案。
@@ -492,7 +499,64 @@ def build_polling_workflow(code):
                    ".trim()")
     page_id = f"$('{PICK}').first().json.page_id"
 
-    nodes = [
+    # Notion 按鈕（Plus 方案）與定時輪詢共用同一條處理鏈。
+    # ⚠️ 刻意不另開一份 workflow：先前分家的版本落後了 14 個節點，
+    #    兩份各自演化只會讓修正漏掉其中一邊。
+    button_nodes = [
+        {"parameters": {
+            "httpMethod": "POST",
+            "path": WEBHOOK_PATH,
+            "responseMode": "onReceived",
+            "options": {}},
+         "id": nid(), "name": "Notion 按鈕（Webhook）", "type": "n8n-nodes-base.webhook",
+         "typeVersion": 2, "position": [-460, 20], "webhookId": nid(),
+         "notes": "Notion Content Hub 的「同步到 WP」按鈕 → Send webhook。\n"
+                  "\n"
+                  "⚠️ 上線前務必把 Path 換成一組隨機字串——這個網址就是唯一的憑證，\n"
+                  "  而且不可以提交進 git（CLAUDE.md：webhook token 不入庫）。\n"
+                  "\n"
+                  "responseMode=onReceived：立刻回 200，不讓 Notion 等整條流程跑完。\n"
+                  "按鈕請放在「版本子列」上：母列沒有內容區塊，按了會轉出空文章。"},
+
+        {"parameters": {"assignments": {"assignments": [
+            # Notion 按鈕 webhook 的實際 payload 結構請以第一次執行的 log 為準；
+            # 這裡把幾種可能的位置都試一遍，順便支援 ?page_id= 手動測試。
+            {"id": nid(), "name": "page_id",
+             "value": "={{ ($json.body?.data?.id ?? $json.body?.page?.id ?? "
+                      "$json.body?.id ?? $json.query?.page_id ?? '')"
+                      ".toString().replace(/-/g, '') }}",
+             "type": "string"},
+        ]}, "options": {}},
+         "id": nid(), "name": "解析 page_id", "type": "n8n-nodes-base.set",
+         "typeVersion": 3.4, "position": [-240, 20],
+         "notes": "從 webhook payload 取出頁面 id。Notion 的 payload 結構若與預期\n"
+                  "不同，這裡會取到空字串，由下一個節點擋下並留下痕跡。"},
+
+        {"parameters": {"conditions": {
+            "options": {"caseSensitive": True, "typeValidation": "loose", "version": 2},
+            "conditions": [{"id": nid(),
+                            "leftValue": "={{ $json.page_id }}",
+                            "operator": {"type": "string", "operation": "notEmpty"}}],
+            "combinator": "and"}},
+         "id": nid(), "name": "取得到 page_id？", "type": "n8n-nodes-base.if",
+         "typeVersion": 2.2, "position": [-20, 20]},
+
+        {"parameters": {}, "id": nid(), "name": "payload 無 page_id（結束）",
+         "type": "n8n-nodes-base.noOp", "typeVersion": 1, "position": [200, -100],
+         "notes": "走到這裡代表 webhook payload 的結構跟預期不符。\n"
+                  "打開這次執行的「Notion 按鈕（Webhook）」節點輸出，\n"
+                  "照實際結構修正「解析 page_id」的取值路徑即可。"},
+
+        {"parameters": notion_http(
+            "GET", "=https://api.notion.com/v1/pages/{{ $json.page_id }}"),
+         "id": nid(), "name": "Notion：取得該列", "type": "n8n-nodes-base.httpRequest",
+         "typeVersion": 4.2, "position": [200, 20],
+         "credentials": {"notionApi": {"id": NOTION_CRED_ID, "name": NOTION_CRED_NAME}},
+         "notes": "取回完整的頁面物件，讓後續節點看到的形狀與輪詢分支完全一致\n"
+                  "（同樣有 id／properties），因此兩條觸發路徑共用同一條鏈。"},
+    ]
+
+    nodes = button_nodes + [
         {"parameters": {"rule": {"interval": [{"field": "minutes",
                                                "minutesInterval": POLL_MINUTES}]}},
          "id": nid(), "name": "定時檢查", "type": "n8n-nodes-base.scheduleTrigger",
@@ -751,6 +815,14 @@ def build_polling_workflow(code):
     ]
 
     conns = {
+        # 按鈕分支：webhook → 解析 → 取回頁面 → 併入共用迴圈
+        "Notion 按鈕（Webhook）": {"main": [[{"node": "解析 page_id", "type": "main", "index": 0}]]},
+        "解析 page_id": {"main": [[{"node": "取得到 page_id？", "type": "main", "index": 0}]]},
+        "取得到 page_id？": {"main": [
+            [{"node": "Notion：取得該列", "type": "main", "index": 0}],
+            [{"node": "payload 無 page_id（結束）", "type": "main", "index": 0}]]},
+        "Notion：取得該列": {"main": [[{"node": LOOP, "type": "main", "index": 0}]]},
+
         "定時檢查": {"main": [[{"node": "查詢待同步列", "type": "main", "index": 0}]]},
         "查詢待同步列": {"main": [[{"node": "有待同步的列？", "type": "main", "index": 0}]]},
         "有待同步的列？": {"main": [
@@ -784,7 +856,7 @@ def build_polling_workflow(code):
     conns["Notion：回寫母列"] = {"main": [[{"node": LOOP, "type": "main", "index": 0}]]}
 
     return {
-        "name": "Synctify — Notion 勾選 → WP 草稿（輪詢）",
+        "name": "Synctify — Notion → WP 草稿（按鈕 ＋ 勾選輪詢）",
         "nodes": nodes, "connections": conns, "active": False,
         "settings": {"executionOrder": "v1"},
         "meta": {"synctify_note":
@@ -990,13 +1062,15 @@ def main():
                             encoding="utf-8")
     print(f"✓ 已產生 {DRAFT_WF_OUT}（第一階段：手動觸發建 WP 草稿）")
 
-    BUTTON_WF_OUT.write_text(json.dumps(build_button_workflow(body), ensure_ascii=False, indent=2),
-                             encoding="utf-8")
-    print(f"✓ 已產生 {BUTTON_WF_OUT}（Notion 按鈕觸發，需 Plus 方案）")
+    # 舊的獨立按鈕 workflow 已併入 POLL_WF_OUT（同一條鏈、兩個觸發器）。
+    # 殘留的檔案會被誤匯入——它落後 14 個節點——所以主動刪掉。
+    if BUTTON_WF_OUT.exists():
+        BUTTON_WF_OUT.unlink()
+        print(f"✓ 已移除 {BUTTON_WF_OUT}（按鈕觸發已併入輪詢 workflow）")
 
     POLL_WF_OUT.write_text(json.dumps(build_polling_workflow(body), ensure_ascii=False, indent=2),
                            encoding="utf-8")
-    print(f"✓ 已產生 {POLL_WF_OUT}（Notion 勾選觸發，輪詢）")
+    print(f"✓ 已產生 {POLL_WF_OUT}（Notion 按鈕 ＋ 勾選輪詢，共用同一條鏈）")
 
 
 if __name__ == "__main__":

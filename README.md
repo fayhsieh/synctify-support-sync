@@ -76,7 +76,20 @@ n8n 的憑證應存在 n8n credential 管理中，不要寫進 workflow JSON。�
 
 ## 流程總覽
 
-**英文上稿**：Notion 按鈕 → n8n webhook → 讀取 Notion 內容 → 轉換 Elementor JSON → 依 WP Post ID 判斷新建草稿／更新草稿／建立影子草稿 → 人工確認 → 發佈
+**英文上稿**：Notion 按鈕（或勾選「待同步」等輪詢）→ n8n → 讀取 Notion 內容 → 轉換 Elementor JSON → 圖片上傳媒體庫 → 依母列的 WP Post ID 判斷新建草稿／寫入既有文章的 Elementor 草稿 → 套用站方預設欄位 → 寫入 SEO meta → 回寫 Notion 狀態 → 人工確認 → 發佈
+
+兩個觸發器共用**同一條處理鏈**（`n8n/notion-poll-to-wp-draft.workflow.json`，30 節點）：
+
+| 觸發方式 | 用途 |
+| --- | --- |
+| Notion 按鈕 → webhook | 單篇即時同步 |
+| 勾選「待同步」→ 定時輪詢 | 批次；也是按鈕失效時的後備 |
+
+> 刻意不分成兩份 workflow——先前分家的按鈕版落後了 14 個節點，兩份各自演化只會讓修正漏掉其中一邊。
+
+**Notion 按鈕設定**：Content Hub 的「同步到 WP」按鈕 → Send webhook → 網址填 n8n 的 Production URL。
+按鈕請用在**版本子列**（母列沒有內容區塊）。webhook 的 path 就是這條端點的唯一憑證，
+匯入後手動改成隨機字串，**不要寫回 repo**。
 
 **簡中翻譯**：發佈後觸發 TP 字串登錄 → 撈未翻譯字串（＝差異清單）→ 抽新術語 → 有新詞則暫停等 Notion 確認 → 套術語表 LLM 翻譯 → 寫回 TP 字典表 → Notion 標記待校閱
 
@@ -106,5 +119,6 @@ n8n 的憑證應存在 n8n credential 管理中，不要寫進 workflow JSON。�
 - [ ] 圖片上傳邏輯（Notion S3 → WP 媒體庫，含 alt/caption）
 - [ ] TranslatePress 字串切分顆粒度驗證
 - [ ] Support Center Writer prompt 移植＋翻譯品質對照測試
-- [ ] Notion Content Hub 兩顆按鈕（欄位已加：WP Post ID、上稿狀態、翻譯狀態、最後同步時間；兩顆按鈕待 n8n webhook 網址）
+- [x] Notion Content Hub 上稿按鈕（2026-08-11 公司升級 Plus 方案後解鎖；webhook 觸發已併入 `notion-poll-to-wp-draft.workflow.json`）
+- [ ] 翻譯按鈕（等 Workflow 3）
 - [ ] 上線前內容對帳（正式站較新的改動補回 Notion）
