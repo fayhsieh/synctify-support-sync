@@ -13,6 +13,11 @@ webhook 的 path 同樣不可寫回這裡——它就是那條端點的識別碼
 | `n8n-workflow-blueprint.md` | Workflow 2／3 的節點藍圖（尚未實作） |
 | `translation-node-migration.md` | Workflow 3 翻譯 prompt 的移植方案 |
 
+三組憑證的 **ID 寫在 `scripts/build_n8n_code_node.py`**（`WP_CRED_ID`、
+`NOTION_CRED_ID`、`WEBHOOK_AUTH_CRED_ID`），所以匯入後不必再逐一雙擊節點補憑證。
+**那些只是 n8n 內部識別碼，不是帳密**——帳密與密鑰留在 n8n 的憑證管理裡。
+換 n8n 環境或重建憑證時要一併更新這三個常數，否則匯入後會出現紅色三角形。
+
 **三個 JSON 都由 `scripts/build_n8n_code_node.py` 產生，不要手改**——手改會在下次
 建置時被覆蓋，且映射邏輯的單一真實來源在 `converter/`。
 

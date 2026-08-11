@@ -20,11 +20,11 @@
       "webhookId": "pub002",
       "credentials": {
         "httpHeaderAuth": {
-          "id": "",
-          "name": "Synctify Notion Button"
+          "id": "8rnHKnTbrXTDCzwc",
+          "name": "Header Auth"
         }
       },
-      "notes": "由輔助外掛（0.2.0+）觸發，不是 Notion 按鈕。\n\nWP 端要在 wp-config.php 定義三個常數：\n  SYNCTIFY_PUBLISH_WEBHOOK_URL    ← 本節點的 Production URL\n  SYNCTIFY_PUBLISH_WEBHOOK_HEADER ← 與憑證同名的 header\n  SYNCTIFY_PUBLISH_WEBHOOK_SECRET ← 與憑證同值\n未定義時外掛靜默停用回呼，其他功能不受影響。\n\n憑證沿用「Synctify Notion Button」——同一批人、同一個信任邊界，\n分開兩組密鑰只是多一份要輪替的東西，換不到實質隔離。"
+      "notes": "由輔助外掛（0.2.0+）觸發，不是 Notion 按鈕。\n\nWP 端要在 wp-config.php 定義三個常數：\n  SYNCTIFY_PUBLISH_WEBHOOK_URL    ← 本節點的 Production URL\n  SYNCTIFY_PUBLISH_WEBHOOK_HEADER ← 與憑證同名的 header\n  SYNCTIFY_PUBLISH_WEBHOOK_SECRET ← 與憑證同值\n未定義時外掛靜默停用回呼，其他功能不受影響。\n\n憑證沿用「Header Auth」——同一批人、同一個信任邊界，\n分開兩組密鑰只是多一份要輪替的東西，換不到實質隔離。"
     },
     {
       "parameters": {

@@ -55,7 +55,7 @@ TEST_FAQ_GROUP = "manage-exception-orders"
 # 憑證管理裡，這裡只放引用（CLAUDE.md：憑證欄位須為引用而非明文）。
 # 留空時產生的節點不帶 credentials，匯入後每個 WP 節點都會有紅色三角形，
 # 要逐一雙擊才會自動補上（Fay 2026-08-11 回報）。
-WP_CRED_ID = ""          # ← 填入後每次匯入就不必再手動選
+WP_CRED_ID = "oIyDk22ZdtDbphHm"
 WP_CRED_NAME = "WordPress Credential"
 
 NOTION_CRED_ID = "xfGHH7Wx4EucMC0X"
@@ -316,7 +316,9 @@ WEBHOOK_PATH = "synctify-sync-CHANGE-ME-TO-A-RANDOM-STRING"
 # webhook 的授權：Notion 按鈕的 Send webhook 支援 Add custom header，所以能做真正的
 # header 驗證，而不是只靠「網址猜不到」（網址會滲進 proxy log、瀏覽器紀錄）。
 # 密鑰存在 n8n 的 Header Auth 憑證裡，workflow JSON 只留引用，不入庫。
-WEBHOOK_AUTH_CRED_NAME = "Synctify Notion Button"
+# webhook 的 Header Auth 憑證（同樣只是識別碼，密鑰留在 n8n）
+WEBHOOK_AUTH_CRED_ID = "8rnHKnTbrXTDCzwc"
+WEBHOOK_AUTH_CRED_NAME = "Header Auth"
 # WP 發佈回呼的 webhook（觸發者是 WordPress 外掛，不是 Notion）
 PUBLISH_WEBHOOK_PATH = "synctify-published-CHANGE-ME-TO-A-RANDOM-STRING"
 
@@ -404,7 +406,8 @@ def build_polling_workflow(code):
             "options": {}},
          "id": nid(), "name": "Notion 按鈕（Webhook）", "type": "n8n-nodes-base.webhook",
          "typeVersion": 2, "position": [-460, 20], "webhookId": nid(),
-         "credentials": {"httpHeaderAuth": {"id": "", "name": WEBHOOK_AUTH_CRED_NAME}},
+         "credentials": {"httpHeaderAuth": {"id": WEBHOOK_AUTH_CRED_ID,
+                                           "name": WEBHOOK_AUTH_CRED_NAME}},
          "notes": "Notion Content Hub 的「同步到 WP」按鈕 → Send webhook。\n"
                   "\n"
                   "【匯入後要做兩件事】\n"
@@ -1111,7 +1114,8 @@ def build_publish_callback_workflow(code):
             "options": {}},
          "id": nid(), "name": "WP 發佈回呼（Webhook）", "type": "n8n-nodes-base.webhook",
          "typeVersion": 2, "position": [-300, 300], "webhookId": nid(),
-         "credentials": {"httpHeaderAuth": {"id": "", "name": WEBHOOK_AUTH_CRED_NAME}},
+         "credentials": {"httpHeaderAuth": {"id": WEBHOOK_AUTH_CRED_ID,
+                                           "name": WEBHOOK_AUTH_CRED_NAME}},
          "notes": "由輔助外掛（0.2.0+）觸發，不是 Notion 按鈕。\n"
                   "\n"
                   "WP 端要在 wp-config.php 定義三個常數：\n"
