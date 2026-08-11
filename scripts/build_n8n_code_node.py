@@ -35,7 +35,11 @@ WF_OUT = ROOT / "n8n" / "notion-to-elementor-test.workflow.json"
 DRAFT_WF_OUT = ROOT / "n8n" / "notion-to-wp-draft.workflow.json"
 BUTTON_WF_OUT = ROOT / "n8n" / "notion-button-to-wp-draft.workflow.json"
 PUBCB_WF_OUT = ROOT / "n8n" / "wp-publish-callback.workflow.json"
-POLL_WF_OUT = ROOT / "n8n" / "notion-poll-to-wp-draft.workflow.json"
+SYNC_WF_OUT = ROOT / "n8n" / "notion-sync-to-wp.workflow.json"
+# 舊檔名（曾經含輪詢）。輪詢移除後名稱誤導，改名並主動刪除舊檔——
+# 殘留的過期 workflow 被誤匯入過一次，代價很高。
+STALE_WF_OUTS = [ROOT / "n8n" / "notion-poll-to-wp-draft.workflow.json",
+                 ROOT / "n8n" / "notion-button-to-wp-draft.workflow.json"]
 
 # 測試用 Notion 頁面：Manage Exception Orders v2（已有手工轉換版本可比對）
 TEST_PAGE_ID = "3822f2ede27d80f1bd47d73c6314bec4"
@@ -473,7 +477,7 @@ PUBLISH_WEBHOOK_PATH = "synctify-published-CHANGE-ME-TO-A-RANDOM-STRING"
 #   "standby"  節點保留但觸發器停用 —— 不會空掃，按鈕出事時 UI 上一鍵可救回
 #   "removed"  輪詢節點整組移除
 # 按鈕實測通過後改成 "removed" 重新產生即可，不必動其他任何地方。
-POLLING = "standby"
+POLLING = "removed"
 POLL_NODE_NAMES = ("定時檢查", "查詢待同步列", "有待同步的列？",
                    "無事可做（結束）", "拆成每列一筆")
 
@@ -1146,8 +1150,11 @@ def build_publish_callback_workflow(code):
             "authentication": "predefinedCredentialType",
             "nodeCredentialType": "notionApi",
             "sendBody": True, "specifyBody": "json",
+            # Status 一併轉成 Existing：內容已經上線，不再是 Content Approved
+            # 的待上稿狀態（Fay 2026-08-11）。Status 是 status 型，不是 select。
             "jsonBody": '={{ { "properties": { '
-                        '"上稿狀態": { "select": { "name": "已發佈" } } } } }}',
+                        '"上稿狀態": { "select": { "name": "已發佈" } }, '
+                        '"Status": { "status": { "name": "Existing" } } } } }}',
             "options": {}},
          "id": nid(), "name": "Notion：子列也標記已發佈",
          "type": "n8n-nodes-base.httpRequest", "typeVersion": 4.2, "position": [360, 220],
@@ -1242,14 +1249,27 @@ def build_publish_callback_workflow(code):
 
         {"parameters": notion_http(
             "PATCH", "=https://api.notion.com/v1/pages/{{ " + mother_id + " }}",
-            '={{ { "properties": { "Version": { "select": { "name": '
+            '={{ { "properties": Object.assign('
+            '{ "Version": { "select": { "name": '
             "$('Notion：讀取本次發佈的版本').item.json.properties['Version'].select.name"
-            ' } } } } }}'),
-         "id": nid(), "name": "Notion：母列 Version 對齊",
+            ' } } }, '
+            # 沒有日期時傳空物件而非 null——傳 null 會把母列既有的日期清掉
+            "$('Notion：讀取本次發佈的版本').item.json.properties['Last edited date']"
+            "?.date?.start"
+            ' ? { "Last edited date": { "date": { "start": '
+            "$('Notion：讀取本次發佈的版本').item.json.properties['Last edited date']"
+            ".date.start"
+            ' } } } : {}) } }}'),
+         "id": nid(), "name": "Notion：母列 Version 與日期對齊",
          "type": "n8n-nodes-base.httpRequest", "typeVersion": 4.2, "position": [1680, 480],
          "credentials": {"notionApi": {"id": NOTION_CRED_ID, "name": NOTION_CRED_NAME}},
-         "notes": "母列的 Version 屬性＝目前的現行版本，沿用子列的原始標籤\n"
-                  "（v1 的標籤是「v1 (Initial Version)」，不可自行縮寫）。"},
+         "notes": "母列的 Version＝目前的現行版本，沿用子列的原始標籤\n"
+                  "（v1 的標籤是「v1 (Initial Version)」，不可自行縮寫）。\n"
+                  "\n"
+                  "Last edited date 一併對齊為現行版本的日期——母列的\n"
+                  "Content Freshness 公式吃這個欄位，不對齊的話新鮮度會是錯的\n"
+                  "（Fay 2026-08-11）。子列沒有日期時整個欄位不送，\n"
+                  "避免把母列既有的值清成空白。"},
     ]
 
     conns = {
@@ -1273,7 +1293,7 @@ def build_publish_callback_workflow(code):
         "算出要改哪些字": {"main": [[
             {"node": "拆出要改名的子列", "type": "main", "index": 0},
             {"node": "拆出要改寫的區塊", "type": "main", "index": 0},
-            {"node": "Notion：母列 Version 對齊", "type": "main", "index": 0}]]},
+            {"node": "Notion：母列 Version 與日期對齊", "type": "main", "index": 0}]]},
         "拆出要改名的子列": {"main": [
             [{"node": "Notion：改子列篇名", "type": "main", "index": 0}]]},
         "拆出要改寫的區塊": {"main": [
@@ -1481,15 +1501,14 @@ def main():
                             encoding="utf-8")
     print(f"✓ 已產生 {DRAFT_WF_OUT}（第一階段：手動觸發建 WP 草稿）")
 
-    # 舊的獨立按鈕 workflow 已併入 POLL_WF_OUT（同一條鏈、兩個觸發器）。
-    # 殘留的檔案會被誤匯入——它落後 14 個節點——所以主動刪掉。
-    if BUTTON_WF_OUT.exists():
-        BUTTON_WF_OUT.unlink()
-        print(f"✓ 已移除 {BUTTON_WF_OUT}（按鈕觸發已併入輪詢 workflow）")
+    for stale in STALE_WF_OUTS:
+        if stale.exists():
+            stale.unlink()
+            print(f"✓ 已移除過期檔 {stale.name}")
 
-    POLL_WF_OUT.write_text(json.dumps(build_polling_workflow(body), ensure_ascii=False, indent=2),
+    SYNC_WF_OUT.write_text(json.dumps(build_polling_workflow(body), ensure_ascii=False, indent=2),
                            encoding="utf-8")
-    print(f"✓ 已產生 {POLL_WF_OUT}（Notion 按鈕 ＋ 勾選輪詢，共用同一條鏈）")
+    print(f"✓ 已產生 {SYNC_WF_OUT}（Notion 按鈕觸發）")
 
     PUBCB_WF_OUT.write_text(
         json.dumps(build_publish_callback_workflow(body), ensure_ascii=False, indent=2),

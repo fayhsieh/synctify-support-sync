@@ -105,7 +105,7 @@
         "nodeCredentialType": "notionApi",
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ { \"properties\": { \"上稿狀態\": { \"select\": { \"name\": \"已發佈\" } } } } }}",
+        "jsonBody": "={{ { \"properties\": { \"上稿狀態\": { \"select\": { \"name\": \"已發佈\" } }, \"Status\": { \"status\": { \"name\": \"Existing\" } } } } }}",
         "options": {}
       },
       "id": "pub007",
@@ -401,10 +401,10 @@
         "options": {},
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ { \"properties\": { \"Version\": { \"select\": { \"name\": $('Notion：讀取本次發佈的版本').item.json.properties['Version'].select.name } } } } }}"
+        "jsonBody": "={{ { \"properties\": Object.assign({ \"Version\": { \"select\": { \"name\": $('Notion：讀取本次發佈的版本').item.json.properties['Version'].select.name } } }, $('Notion：讀取本次發佈的版本').item.json.properties['Last edited date']?.date?.start ? { \"Last edited date\": { \"date\": { \"start\": $('Notion：讀取本次發佈的版本').item.json.properties['Last edited date'].date.start } } } : {}) } }}"
       },
       "id": "pub021",
-      "name": "Notion：母列 Version 對齊",
+      "name": "Notion：母列 Version 與日期對齊",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
@@ -417,7 +417,7 @@
           "name": "Support Center Sync"
         }
       },
-      "notes": "母列的 Version 屬性＝目前的現行版本，沿用子列的原始標籤\n（v1 的標籤是「v1 (Initial Version)」，不可自行縮寫）。"
+      "notes": "母列的 Version＝目前的現行版本，沿用子列的原始標籤\n（v1 的標籤是「v1 (Initial Version)」，不可自行縮寫）。\n\nLast edited date 一併對齊為現行版本的日期——母列的\nContent Freshness 公式吃這個欄位，不對齊的話新鮮度會是錯的\n（Fay 2026-08-11）。子列沒有日期時整個欄位不送，\n避免把母列既有的值清成空白。"
     }
   ],
   "connections": {
@@ -530,7 +530,7 @@
             "index": 0
           },
           {
-            "node": "Notion：母列 Version 對齊",
+            "node": "Notion：母列 Version 與日期對齊",
             "type": "main",
             "index": 0
           }

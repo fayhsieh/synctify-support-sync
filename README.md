@@ -85,14 +85,15 @@ n8n 的憑證應存在 n8n credential 管理中，不要寫進 workflow JSON。�
 
 **英文上稿**：Notion 按鈕（或勾選「待同步」等輪詢）→ n8n → 讀取 Notion 內容 → 轉換 Elementor JSON → 圖片上傳媒體庫 → 依母列的 WP Post ID 判斷新建草稿／寫入既有文章的 Elementor 草稿 → 套用站方預設欄位 → 寫入 SEO meta → 回寫 Notion 狀態 → 人工確認 → 發佈
 
-兩個觸發器共用**同一條處理鏈**（`n8n/notion-poll-to-wp-draft.workflow.json`，30 節點）：
+**觸發方式：Notion 按鈕 → webhook**（`n8n/notion-sync-to-wp.workflow.json`，33 節點）。
 
-| 觸發方式 | 用途 |
-| --- | --- |
-| Notion 按鈕 → webhook | 單篇即時同步 |
-| 勾選「待同步」→ 定時輪詢 | 批次；也是按鈕失效時的後備 |
+勾選「待同步」的定時輪詢已於 2026-08-11 移除——按鈕實測通過後，輪詢只是讓 n8n
+大部分時間在空掃沒有更新的 Notion。要救回的話把 `scripts/build_n8n_code_node.py`
+的 `POLLING` 改成 `"active"` 重新產生即可，處理鏈完全共用。
 
-> 刻意不分成兩份 workflow——先前分家的按鈕版落後了 14 個節點，兩份各自演化只會讓修正漏掉其中一邊。
+**發佈回呼**：`n8n/wp-publish-callback.workflow.json`（15 節點）。WP 按下發佈 →
+外掛打 webhook → 標記已發佈、Status 轉 Existing、維護版本標記、對齊母列的
+Version 與 Last edited date。
 
 **Notion 按鈕設定**：Content Hub 的「同步到 WP」按鈕 → Send webhook → 網址填 n8n 的 Production URL。
 按鈕請用在**版本子列**（母列沒有內容區塊）。webhook 的 path 就是這條端點的唯一憑證，
@@ -126,6 +127,7 @@ n8n 的憑證應存在 n8n credential 管理中，不要寫進 workflow JSON。�
 - [ ] 圖片上傳邏輯（Notion S3 → WP 媒體庫，含 alt/caption）
 - [ ] TranslatePress 字串切分顆粒度驗證
 - [ ] Support Center Writer prompt 移植＋翻譯品質對照測試
-- [x] Notion Content Hub 上稿按鈕（2026-08-11 公司升級 Plus 方案後解鎖；webhook 觸發已併入 `notion-poll-to-wp-draft.workflow.json`）
+- [x] Notion Content Hub 上稿按鈕（2026-08-11 公司升級 Plus 方案後解鎖，端到端實測通過）
+- [x] 發佈回呼：WP 按發佈 → Notion 標記已發佈＋版本標記自動維護（2026-08-11 實測通過）
 - [ ] 翻譯按鈕（等 Workflow 3）
 - [ ] 上線前內容對帳（正式站較新的改動補回 Notion）

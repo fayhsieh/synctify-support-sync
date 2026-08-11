@@ -258,6 +258,8 @@ Notion 的結構是**三層**，不是兩層：
 | 2 | 母列 Overview 的 `- Current Version: vN (Month Year)` | 換成新的版本 |
 | 3 | 母列 Version History 的 `### **vN – Month Year**` | 目標版本結尾加 ` (Current)`，其餘拿掉 |
 | 4 | 母列的 `Version` 屬性 | 對齊為現行版本 |
+| 5 | 子列的 `Status` | 轉為 `Existing`（內容已上線，不再是待上稿） |
+| 6 | 母列的 `Last edited date` | 對齊為現行版本的日期——母列的 Content Freshness 公式吃這個欄位，不對齊新鮮度會是錯的 |
 
 格式取自實際母列（5-5 Shipment Routing）。兩個容易弄壞的細節：
 **破折號是 en dash `–`**，且 **Version History 的標題整段帶粗體**——改寫時
@@ -265,6 +267,8 @@ rich_text 要沿用原本的標註，否則排版跑掉。
 
 **Overview 的日期不自行編造**：從 Version History 中該版本的標題讀出來沿用。
 找不到時只寫版本號，不猜月份。
+
+子列沒有 `Last edited date` 時整個欄位不送，避免把母列既有的值清成空白。
 
 **沒有變化就不送 API**：`plan_version_marks()` 只回傳真的需要改動的項目，
 避免在 Notion 的編輯紀錄裡刷出一堆無意義的版本。
