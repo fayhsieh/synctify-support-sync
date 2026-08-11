@@ -103,9 +103,13 @@ n8n 的憑證應存在 n8n credential 管理中，不要寫進 workflow JSON。�
 外掛打 webhook → 標記已發佈、Status 轉 Existing、維護版本標記、對齊母列的
 Version 與 Last edited date。
 
-**Notion 按鈕設定**：Content Hub 的「同步到 WP」按鈕 → Send webhook → 網址填 n8n 的 Production URL。
-按鈕請用在**版本子列**（母列沒有內容區塊）。webhook 的 path 就是這條端點的唯一憑證，
-匯入後手動改成隨機字串，**不要寫回 repo**。
+**Notion 按鈕設定**：Content Hub 的「同步到 WP」按鈕 → Send webhook → 網址填 n8n 的 Production URL，
+並用 Add custom header 帶上與 n8n Header Auth 憑證相同的 header。
+按鈕請用在**版本子列**（母列沒有內容區塊）。
+
+webhook 的 path 不入庫，進版控的 JSON 是佔位字串。跑
+`python scripts/build_n8n_code_node.py --local` 會從 `.env` 取真實 path，
+產一份可直接匯入的到 `n8n/local/`（已 gitignore），憑證與 path 都不必手填。
 
 **簡中翻譯**：發佈後觸發 TP 字串登錄 → 撈未翻譯字串（＝差異清單）→ 抽新術語 → 有新詞則暫停等 Notion 確認 → 套術語表 LLM 翻譯 → 寫回 TP 字典表 → Notion 標記待校閱
 

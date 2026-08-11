@@ -23,6 +23,7 @@ n8n Code node 設定：
 """
 import argparse
 import json
+import os
 import pathlib
 import re
 import sys
@@ -1325,8 +1326,60 @@ def build_publish_callback_workflow(code):
     }
 
 
+def read_env():
+    """讀 .env（不依賴外部套件）；真實環境變數優先，方便 CI 與臨時覆寫。"""
+    out = {}
+    f = ROOT / ".env"
+    if f.exists():
+        for line in f.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                k, v = line.split("=", 1)
+                out[k.strip()] = v.strip()
+    for k in ("N8N_WEBHOOK_PATH", "N8N_PUBLISH_WEBHOOK_PATH"):
+        if os.environ.get(k):
+            out[k] = os.environ[k]
+    return out
+
+
+def build_local(body):
+    """把真實 webhook path 注入後產出到 n8n/local/。
+
+    為什麼不直接寫進產生器：path 進 git 就等於把端點識別碼入庫（CLAUDE.md）。
+    真正的門是 Header Auth——光有網址打不進來——但既然規則在，就用 .env 這條
+    既有的通道，讓進版控的產出永遠是佔位字串。
+    """
+    env = read_env()
+    need = {"N8N_WEBHOOK_PATH": "主流程", "N8N_PUBLISH_WEBHOOK_PATH": "發佈回呼"}
+    missing = [f"{k}（{label}）" for k, label in need.items() if not env.get(k)]
+    if missing:
+        print("✗ .env 缺少：\n  - " + "\n  - ".join(missing))
+        print("\n  產生方式：")
+        print('    echo "N8N_WEBHOOK_PATH=synctify-sync-$(openssl rand -hex 16)" >> .env')
+        print('    echo "N8N_PUBLISH_WEBHOOK_PATH=synctify-published-$(openssl rand -hex 16)" >> .env')
+        return False
+
+    global WEBHOOK_PATH, PUBLISH_WEBHOOK_PATH
+    WEBHOOK_PATH = env["N8N_WEBHOOK_PATH"]
+    PUBLISH_WEBHOOK_PATH = env["N8N_PUBLISH_WEBHOOK_PATH"]
+
+    out_dir = ROOT / "n8n" / "local"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    (out_dir / "notion-sync-to-wp.workflow.json").write_text(
+        json.dumps(build_polling_workflow(body), ensure_ascii=False, indent=2),
+        encoding="utf-8")
+    (out_dir / "wp-publish-callback.workflow.json").write_text(
+        json.dumps(build_publish_callback_workflow(body), ensure_ascii=False, indent=2),
+        encoding="utf-8")
+    print(f"✓ 已產生 {out_dir}/（含真實 path，可直接匯入；此目錄已 gitignore）")
+    return True
+
+
 def main():
     ap = argparse.ArgumentParser()
+    ap.add_argument("--local", action="store_true",
+                    help="從 .env 讀真實 webhook path，另外產一份可直接匯入的檔案到 "
+                         "n8n/local/（已 gitignore）。進版控的產出永遠維持佔位字串。")
     ap.add_argument("--check", action="store_true",
                     help="只檢查產物是否與來源同步，不寫檔（CI／提交前用）")
     args = ap.parse_args()
@@ -1368,6 +1421,9 @@ def main():
         json.dumps(build_publish_callback_workflow(body), ensure_ascii=False, indent=2),
         encoding="utf-8")
     print(f"✓ 已產生 {PUBCB_WF_OUT}（WP 發佈回呼 → Notion 標記已發佈）")
+
+    if args.local and not build_local(body):
+        sys.exit(1)
 
 
 if __name__ == "__main__":

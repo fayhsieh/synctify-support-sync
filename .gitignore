@@ -10,6 +10,8 @@
 
 # n8n workflow 匯出檔可能夾帶憑證，確認後再手動解除忽略
 n8n/*-with-credentials.json
+# 帶真實 webhook path 的本機產出（build_n8n_code_node.py --local）
+n8n/local/
 
 # ── 轉換器輸出（可重新產生，不進版控）──────────────
 converter/output/
