@@ -675,25 +675,23 @@ def build_polling_workflow(code):
 
         # ── 兩條拒絕路徑共用的回報
         {"parameters": {"assignments": {"assignments": [
-            # 節點名有三個可能來源，逐一退讓：$prevNode 在錯誤分支上不保證有值，
-            # 實測拿到 undefined（2026-08-11）。
-            {"id": nid(), "name": "failed_node", "type": "string",
-             "value": "={{ $json.error?.node?.name ?? $prevNode?.name ?? '未知節點' }}"},
-            # error 可能是字串也可能是物件；兩者都對不上時直接倒出整個 item，
-            # 至少看得到有什麼——比 undefined 有用得多。
-            {"id": nid(), "name": "fail_detail", "type": "string",
-             "value": "={{ typeof $json.error === 'string' ? $json.error"
-                      " : ($json.error?.message ?? $json.error?.description"
-                      " ?? JSON.stringify($json).slice(0, 400)) }}"},
-            # ⚠️ 同一個 Set 節點的各欄位都是對「輸入項目」求值、看不到彼此，
-            # 所以這裡不能引用上面兩個欄位，必須自足（2026-08-11 踩到）。
+            # ⚠️ 絕對不要用 $prevNode：n8n 在錯誤分支不保證注入這個變數，
+            # 而「變數本身不存在」會丟 ReferenceError，`?.` 擋不住——整個運算式
+            # 求值失敗、欄位變成 undefined，看起來像取不到值，實際是拋例外。
+            # 2026-08-11 連續兩次都栽在這裡。這裡只用一定存在的 $json。
+            #
+            # 這一欄保證不會拋例外，是猜錯欄位時的最後防線。
+            {"id": nid(), "name": "fail_raw", "type": "string",
+             "value": "={{ JSON.stringify($json).slice(0, 600) }}"},
             {"id": nid(), "name": "fail_reason", "type": "string",
              "value": "={{ '同步在「'"
-                      " + ($json.error?.node?.name ?? $prevNode?.name ?? '未知節點')"
-                      " + '」節點失敗：'"
+                      " + ($json.error && $json.error.node && $json.error.node.name"
+                      " ? $json.error.node.name : '未知') + '」節點失敗：'"
                       " + (typeof $json.error === 'string' ? $json.error"
-                      " : ($json.error?.message ?? $json.error?.description"
-                      " ?? JSON.stringify($json).slice(0, 400))) }}"},
+                      " : ($json.error && $json.error.message ? $json.error.message"
+                      " : ($json.error && $json.error.description"
+                      " ? $json.error.description"
+                      " : JSON.stringify($json).slice(0, 400)))) }}"},
         ]}, "options": {}},
          "id": nid(), "name": "原因：節點失敗", "type": "n8n-nodes-base.set",
          "typeVersion": 3.4, "position": [2840, 780],
@@ -722,7 +720,9 @@ def build_polling_workflow(code):
         {"parameters": notion_http(
             "POST", "https://api.notion.com/v1/comments",
             '={{ { "parent": { "page_id": ' + f"$('{PICK}').first().json.page_id" + ' }, '
-            '"rich_text": [ { "text": { "content": "⚠️ 同步已中止：" + $json.fail_reason } } ] } }}'),
+            '"rich_text": [ { "text": { "content": "⚠️ 同步已中止：" + '
+            '($json.fail_reason ?? ("（原因運算式求值失敗）" + ($json.fail_raw ?? ""))) '
+            '} } ] } }}'),
          "id": nid(), "name": "Notion：留言說明原因", "type": "n8n-nodes-base.httpRequest",
          "typeVersion": 4.2, "position": [3280, 620],
          "credentials": {"notionApi": {"id": NOTION_CRED_ID, "name": NOTION_CRED_NAME}},
