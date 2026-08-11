@@ -1284,6 +1284,23 @@ def _collect(payloads):
     return [], first
 
 
+def _hrefs_in(template):
+    """從產出的 Elementor JSON 撈出所有 href——這是真正寫進 WP 的東西。"""
+    found = []
+    for _c in template["content"]:
+        for _w in _c["elements"]:
+            _st = _w["settings"] if "settings" in _w else {}
+            for _k in _st:
+                _v = _st[_k]
+                if isinstance(_v, str):
+                    found.extend(re.findall(r'href="([^"]+)"', _v))
+                elif isinstance(_v, list):
+                    for _item in _v:
+                        if isinstance(_item, dict) and "text" in _item:
+                            found.extend(re.findall(r'href="([^"]+)"', str(_item["text"])))
+    return found
+
+
 def _run(blocks, meta):
     title = meta["title"] if "title" in meta else "Untitled"
     faq_group = meta["faq_group"] if "faq_group" in meta else "untitled"
@@ -1325,9 +1342,19 @@ def _run(blocks, meta):
         "link_map_size": len(_link_map),
         "link_inputs": {"hub_rows": len(meta["hub_rows"]) if "hub_rows" in meta else 0,
                         "wp_docs": len(meta["wp_docs"]) if "wp_docs" in meta else 0},
-        # 中介 markdown 裡出現的所有連結，含解析前的原始形式。
-        # 連結沒被換掉時，這一欄直接顯示 mention 實際長成什麼樣子。
-        "links_seen": re.findall(r"\]\(([^)]+)\)", markdown),
+        # links_seen  = 中介 markdown 裡的連結（**解析前**）
+        # links_written = 最終 Elementor JSON 裡的連結（**解析後**）
+        # 兩者一比就知道解析有沒有發生，不必再猜。
+        # 每個連結逐一說明：原始網址、解出的 page_id、對照表裡有沒有這一筆。
+        # 這樣一欄就能分辨「認不出是 Notion 連結」與「認得出但查不到」。
+        "links_seen": [{"url": _u,
+                        "page_id": notion_page_id_from_url(_u),
+                        "in_map": notion_page_id_from_url(_u) in _link_map}
+                       for _u in re.findall(r"\]\(([^)]+)\)", markdown)],
+        # 最終寫進 WP 的連結（解析後）——與上面一比就知道解析有沒有發生
+        "links_written": _hrefs_in(template),
+        # 對照表的前幾個 key，用來確認鍵值格式是否如預期
+        "link_map_keys_sample": list(_link_map)[:3],
     }
 
 
