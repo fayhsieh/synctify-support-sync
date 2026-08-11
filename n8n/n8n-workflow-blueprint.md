@@ -3,7 +3,10 @@
 Synctify Support Center 自動上稿的三條 workflow 節點結構。給 Claude Code 搭骨架時當依據；閘門未放行前，凡是呼叫 WP 的 HTTP 節點先用 mock 回應頂著。
 
 共用前提：
-- 轉換器已包成 HTTP service（`POST /convert`，收 Notion markdown＋標題＋faq group slug，回 Elementor JSON＋faq items＋圖片清單）
+- ⚠️ **此前提已過時**：轉換器最終沒有做成外部 HTTP service，而是內嵌成 n8n 的
+  Python Code node（`n8n/code-node.py`，由 `scripts/build_n8n_code_node.py` 從
+  `converter/` 產生）。Workflow 1 的實際結構以 `notion-sync-to-wp.workflow.json`
+  為準；本文件保留作為 **Workflow 2／3 尚未實作部分**的節點藍圖。
 - WP 認證用 Application Password（存 n8n credential）
 - Webhook 都要驗 header token（防止知道網址的人亂觸發）
 

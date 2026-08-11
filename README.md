@@ -121,8 +121,7 @@ Version 與 Last edited date。
 
 待辦：
 - [ ] 建置 n8n workflow（webhook → 轉換 → WP 寫入 → 狀態回寫）
-  - [x] Workflow 1 sync-to-wp 骨架（`n8n/sync-to-wp.workflow.json`；Notion＋轉換器接真，WP 寫入 mock）
-  - [ ] Workflow 1：閘門放行後把 WP mock 換真＋圖片上傳迴圈＋Notion→markdown callout 對映
+  - [x] Workflow 1（`n8n/notion-sync-to-wp.workflow.json`）：按鈕觸發、圖片上傳、站方欄位、SEO meta、狀態回寫，端到端實測通過
   - [ ] Workflow 2 confirm-publish、Workflow 3 translate、Error Workflow
 - [ ] 圖片上傳邏輯（Notion S3 → WP 媒體庫，含 alt/caption）
 - [ ] TranslatePress 字串切分顆粒度驗證
