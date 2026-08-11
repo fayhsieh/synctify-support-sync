@@ -806,9 +806,18 @@ def build_polling_workflow(code):
                   "則跳過不覆蓋，並在回應的 skipped_smart_tags 列出；description\n"
                   "一律以 Notion 為準。要全部照寫可傳 preserve_smart_tags: []。"},
 
+        {"parameters": {"assignments": {"assignments": [
+            {"id": nid(), "name": "faq_sections", "type": "array",
+             "value": "={{ " + f"$('{CONV}').first().json.faq_sections" + " }}"},
+        ]}, "options": {}},
+         "id": nid(), "name": "組出 FAQ 清單", "type": "n8n-nodes-base.set",
+         "typeVersion": 3.4, "position": [3720, 460],
+         "notes": "splitOut 只能拆「輸入項目自己的欄位」，而它的上游是 SEO 端點的回應，\n"
+                  "裡面沒有 faq_sections——那份資料在轉換節點上。先用顯式引用取過來。"},
+
         {"parameters": {"fieldToSplitOut": "faq_sections", "options": {}},
          "id": nid(), "name": "拆出 FAQ 段落", "type": "n8n-nodes-base.splitOut",
-         "typeVersion": 1, "position": [3720, 300],
+         "typeVersion": 1, "position": [3940, 460],
          "notes": "一篇文章可能同時有 FAQ 與 Troubleshooting，各自一組 accordion。\n"
                   "沒有任何 accordion 段時這裡輸出 0 筆，下游自然不會被呼叫。"},
 
@@ -928,12 +937,17 @@ def build_polling_workflow(code):
     # 寫完版面 → 套站方預設欄位 → 寫 SEO meta → 回寫母列
     for a, b in (("WP：寫入 Elementor 版面", "WP：套用站方預設欄位"),
                  ("WP：套用站方預設欄位", "WP：寫入 SEO meta"),
-                 ("WP：寫入 SEO meta", "拆出 FAQ 段落"),
+                 ("組出 FAQ 清單", "拆出 FAQ 段落"),
                  ("拆出 FAQ 段落", "WP：同步 FAQ"),
-                 ("WP：同步 FAQ", "Notion：回寫母列"),
                  ("Notion：回寫母列", "Notion：回寫子列")):
         conns[a] = {"main": [[{"node": b, "type": "main", "index": 0}]]}
     # 本篇跑完 → 回到迴圈取下一篇
+    # FAQ 走並行支線。沒有 FAQ 段落時 splitOut 輸出 0 筆、支線自然結束，
+    # 但主線（回寫 Notion）不受影響——先前串成一直線，沒有 FAQ 的文章
+    # 會整條停在 splitOut，連狀態都回寫不了（2026-08-11 實測踩到）。
+    conns["WP：寫入 SEO meta"] = {"main": [[
+        {"node": "Notion：回寫母列", "type": "main", "index": 0},
+        {"node": "組出 FAQ 清單", "type": "main", "index": 0}]]}
     conns["Notion：回寫子列"] = {"main": [[{"node": LOOP, "type": "main", "index": 0}]]}
 
     # ── 輪詢的去留：standby＝保留節點但停用觸發器（不空掃、可一鍵救回）
