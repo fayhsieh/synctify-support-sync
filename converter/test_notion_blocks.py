@@ -627,3 +627,63 @@ def test_vertical_ellipsis_icon_becomes_dots_vertical():
     assert '[custom_icon class="dots-vertical"] (More Actions)' in body
     # 一般 inline code 仍走 [direction]，兩種語意不可混淆
     assert "[direction]Action[/direction]" in body
+
+
+# ---------- 圖片佔位鷹架 ----------
+# 結構取自 5-1 Manage Sales Orders v2「Find and review sales orders」（2026-08-11 讀出）：
+# 步驟底下巢狀一個 callout，首行 **Image Placeholder**，內含檔名與 caption/alt。
+
+def _placeholder_callout(label_on_self=True):
+    head_rt = [rt("Image Placeholder", bold=True)] if label_on_self else []
+    kids = [] if label_on_self else [blk("paragraph", {"rich_text": [rt("Image Placeholder", bold=True)]})]
+    kids += [
+        blk("paragraph", {"rich_text": [rt("Filename", bold=True)]}),
+        blk("paragraph", {"rich_text": [rt("manage-sales-orders-views.png", code=True)]}),
+        blk("paragraph", {"rich_text": [rt("caption: Choose the view. [alt: Sales Orders tabs.]")]}),
+    ]
+    return blk("callout", {"icon": {"emoji": "📷"}, "color": "gray_background",
+                           "rich_text": head_rt}, children=kids)
+
+
+def _sales_orders_blocks(label_on_self=True):
+    return [
+        head(2, "Find and review sales orders"),
+        num("Go to Sales Orders."),
+        num("Open the appropriate order view.", children=[
+            blk("bulleted_list_item", {"rich_text": [rt("All - every sales order.")]}),
+            _placeholder_callout(label_on_self),
+        ]),
+        num("Click Filter to open the filter panel."),
+        num("Act on the orders you need."),
+    ]
+
+
+def test_image_placeholder_never_reaches_output():
+    md, report = nb.blocks_to_markdown(_sales_orders_blocks())
+    assert report["excluded_placeholders"] == 1
+    for leak in ("Image Placeholder", "manage-sales-orders-views.png", "[alt:"):
+        assert leak not in md, f"鷹架洩漏：{leak}"
+
+
+def test_image_placeholder_label_on_first_child_also_excluded():
+    _md, report = nb.blocks_to_markdown(_sales_orders_blocks(label_on_self=False))
+    assert report["excluded_placeholders"] == 1
+
+
+def test_numbering_stays_continuous_after_placeholder_removed():
+    """佔位 callout 是編號斷掉的元兇；剔除後 4 個步驟要回到同一個 widget。"""
+    _md, ws, _ = to_elementor(_sales_orders_blocks())
+    lists = [w for w in ws if w["widgetType"] == "docly_list_item"]
+    assert len(lists) == 1, f"編號被切成 {len(lists)} 段"
+    assert len(lists[0]["settings"]["ul_icon_list"]) == 4
+
+
+def test_normal_callout_still_renders():
+    """只剔除佔位鷹架，一般 callout 不受影響。"""
+    blocks = [head(2, "Overview"),
+              blk("callout", {"icon": {"emoji": "⚠️"}, "color": "yellow_background",
+                              "rich_text": [rt("Important", bold=True)]},
+                  children=[blk("paragraph", {"rich_text": [rt("Keep your token safe.")]})])]
+    _md, ws, report = to_elementor(blocks)
+    assert report["excluded_placeholders"] == 0
+    assert any(w["widgetType"] == "docly_alerts_box" for w in ws)

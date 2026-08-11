@@ -13,7 +13,7 @@ Notion 教學文件 → WordPress Elementor（Docly + EazyDocs）自動上稿轉
 | 4 | 粗體獨立行 `**Step X-X. ...**` | heading widget（h4） | 舊文件相容規則（Notion 尚無 H4 時期的寫法） |
 | 5 | 一般段落 | text-editor widget（`<p>`） | 輸出乾淨 HTML，不帶任何貼上殘留 |
 | 6 | 項目符號清單（含巢狀） | text-editor widget（`<ul><li>`） | |
-| 7 | 數字清單 `1. 2. 3.` | docly_list_item widget（order_list 圓形數字樣式） | 全站統一此樣式。整段連續編號＝**同一個** docly_list_item（編號連續靠同一 widget，`steps` 留空）。編號項下 tab 縮排的巢狀子內容（bullet／接續說明）內嵌成 `<p style="padding-left: 40px;">`，**不可**用 `<ul><li>`（主題 CSS counter 會把 `<li>` 算進圓圈編號）。結構逆向自實站範本 7899 |
+| 7 | 數字清單 `1. 2. 3.` | docly_list_item widget（order_list 圓形數字樣式） | 全站統一此樣式。整段連續編號＝**同一個** docly_list_item（編號連續靠同一 widget，`steps` 留空）。編號項下 tab 縮排的巢狀子內容（bullet／接續說明）內嵌成 `<p style="padding-left: 40px;">`，**不可**用 `<ul><li>`（主題 CSS counter 會把 `<li>` 算進圓圈編號）。結構逆向自實站範本 7899。⚠️ **巢狀在步驟底下的 callout／程式碼區塊／表格／引用／分隔線目前仍會切斷編號**——它們在中介 markdown 會插入空行且不帶縮排，跳出清單層級。段落與圖片已正確處理。要讓編號不斷，這些區塊必須折進步驟內文，那是尚未決定的映射（2026-08-11 暫緩）；實務上最常見的觸發原因是圖片佔位鷹架，那個已改為整段剔除 |
 | 8 | 行內程式碼 `` `UI 路徑` `` | `[direction]...[/direction]` shortcode | 可點擊 UI 路徑；路徑用 `>` 分隔放同一組。分隔符 `>` 輸出為 `&gt;`（否則 Docly shortcode 會渲染成箭頭圖示，站上要字面 `>`）|
 | 9 | 粗體 `**文字**` | `<strong>` | 不可點擊的 UI 文字、狀態名稱 |
 | 10 | 連結 `[文字](url)` | `<a href="..." target="_blank" rel="noopener">` | 連結文字一律去除粗體 |
@@ -114,6 +114,7 @@ Callout 首行若為粗體獨立行 → alert_title，其餘內容 → alert_des
 | `**SEO Meta**` 段（Title／Meta description） | 不進頁面；**擷取**進 `report["seo"]`，由 `POST /synctify/v1/seo/{id}` 寫入 All in One SEO。段內是 quote block，寫法為「粗體標籤＋軟換行＋內容」（同一個 rich_text 陣列，純文字為 `Title\n實際標題`）；標籤認 Title／SEO Title／Meta description／Description，大小寫與結尾冒號皆容忍 |
 | Version History 段（`### vN - 日期`） | 不同步，僅留 Notion 內部追蹤 |
 | 內部審核筆記（帶 toggle 的 callout、標題含「Content Review Notes」） | 不同步，自動剔除 |
+| **圖片佔位鷹架**：首行為 `Image Placeholder` 的 callout（內含檔名與 caption/alt） | 不同步，整個剔除。標記寫在 callout 自身或第一個子區塊都認。計入 `report["excluded_placeholders"]` |
 | Notion 留言標記（discussion span）、notionvc 註解 | 剔除 |
 
 ## 六之二、Notion 沒有、但 WP 每篇必填的欄位

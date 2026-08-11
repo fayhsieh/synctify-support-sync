@@ -40,6 +40,12 @@ _SKIP_SECTION_PATTERNS = [
 # rich_text 陣列裡，所以純文字會長成：
 #     "Title\nNew Order Frozen Period - Synctify Support Center"
 # 標籤大小寫、結尾冒號都容忍。
+# 寫作端的圖片佔位鷹架：callout 首行為「Image Placeholder」，內含該圖應有的
+# 檔名與 caption/alt。那是給寫作者自己看的，絕不可同步到公開站
+# （2026-08-11 Fay 決定，比照 Content Review Notes）。
+# 它同時也是編號斷掉的元兇——巢狀在步驟底下時會把連續編號切斷。
+_IMAGE_PLACEHOLDER = re.compile(r"^\s*\**\s*Image\s*Placeholder\s*\**\s*$", re.I)
+
 _SEO_LABELS = {
     "title": "title",
     "seo title": "title",
@@ -202,7 +208,8 @@ def _parent_id(b):
 
 def blocks_to_markdown(blocks, root_id=None):
     """回傳 (markdown, report)。report 記錄被剔除與不支援的區塊。"""
-    report = {"skipped_sections": [], "unsupported": [], "excluded_toggles": 0, "seo": {}}
+    report = {"skipped_sections": [], "unsupported": [], "excluded_toggles": 0,
+              "excluded_placeholders": 0, "seo": {}}
     tree = build_tree(list(blocks), root_id)
     lines = []
     _render(tree, lines, report, indent=0)
@@ -301,6 +308,17 @@ def _render(blocks, lines, report, indent):
                 lines.append(f"![{caption}]({url}{suffix})")
 
         elif btype == "callout":
+            # 圖片佔位鷹架整個剔除。標記可能寫在 callout 自身，也可能是第一個子區塊，
+            # 兩處都認——寫作端兩種寫法都出現過。
+            _own = _plain(_rt_items(data))
+            _first_child = ""
+            for _c in children:
+                _ct = _c.get("type")
+                _first_child = _plain(_rt_items(_c.get(_ct) or {}))
+                break
+            if _IMAGE_PLACEHOLDER.match(_own) or _IMAGE_PLACEHOLDER.match(_first_child):
+                report["excluded_placeholders"] += 1
+                continue
             icon = data.get("icon") or {}
             icon_s = (icon.get("emoji")
                       or (icon.get("external") or {}).get("url")
