@@ -235,8 +235,12 @@ Notion 的結構是**三層**，不是兩層：
   另有 `$GLOBALS['synctify_internal_write']` 旗標防止同步流程觸發自己。
 
 外掛不直接打 Notion API——那要把 Notion token 存進 WordPress。改打 n8n webhook，
-由已持有 Notion 憑證的 n8n 完成寫入。網址與密鑰讀自 `wp-config.php` 常數，
-未定義時整組回呼靜默停用。
+由已持有 Notion 憑證的 n8n 完成寫入。
+
+網址與密鑰有兩種設定來源，**常數優先**：`wp-config.php` 的
+`SYNCTIFY_PUBLISH_WEBHOOK_URL` / `_HEADER` / `_SECRET`，或 `POST /synctify/v1/settings`
+寫進資料庫。後者是為了不必有主機檔案存取權——`wp-config.php` 少一個分號就會讓整站
+白畫面，對非工程角色風險太高。兩者都沒設時整組回呼靜默停用。
 
 ## 七、寫作端注意事項（給 Support Center Writer Skill）
 

@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Synctify Sync Helper
  * Description: Notion → n8n → WordPress 自動上稿流程的輔助端點：開啟 Arconix FAQ REST、寫入 Elementor data、讀寫 TranslatePress 字典表、寫入 AIOSEO meta。
- * Version: 0.2.1
+ * Version: 0.3.0
  * Author: Synctify Marketing (Fay)
  *
  * 安裝：外掛 → 上傳外掛（打包成 zip），或直接放入 wp-content/mu-plugins/
@@ -528,6 +528,76 @@ add_action( 'rest_api_init', function () {
 		},
 	) );
 
+	/* 2b-4. 設定（發佈回呼的網址與密鑰）
+	 * GET  /wp-json/synctify/v1/settings   → 目前狀態（密鑰只回報有無與長度，不回傳值）
+	 * POST /wp-json/synctify/v1/settings   → 寫入
+	 *   body: { "publish_webhook_url": "...", "publish_webhook_header": "X-Synctify-Token",
+	 *           "publish_webhook_secret": "..." }
+	 *
+	 * 存在資料庫而非 wp-config.php，這樣不必有主機檔案存取權，也沒有「改壞一個
+	 * 分號整站白畫面」的風險。wp-config.php 的常數若有定義仍然優先。
+	 *
+	 * 權限比其他端點嚴格（manage_options 而非 edit_posts）：這裡寫的是憑證。
+	 */
+	$admin = function () {
+		return current_user_can( 'manage_options' );
+	};
+	$setting_keys = array( 'publish_webhook_url', 'publish_webhook_header',
+	                       'publish_webhook_secret' );
+
+	register_rest_route( 'synctify/v1', '/settings', array(
+		array(
+			'methods'             => 'GET',
+			'permission_callback' => $admin,
+			'callback'            => function () use ( $setting_keys ) {
+				$out = array();
+				foreach ( $setting_keys as $k ) {
+					$v = synctify_setting( $k );
+					// 密鑰只回報有無與長度——回傳值等於把憑證再曝露一次
+					$out[ $k ] = ( 'publish_webhook_secret' === $k )
+						? array( 'configured' => (bool) $v, 'length' => strlen( $v ) )
+						: $v;
+					$out[ $k . '_source' ] = synctify_setting_source( $k );
+				}
+				$out['callback_enabled'] = (bool) synctify_setting( 'publish_webhook_url' );
+				return $out;
+			},
+		),
+		array(
+			'methods'             => 'POST',
+			'permission_callback' => $admin,
+			'callback'            => function ( WP_REST_Request $req ) use ( $setting_keys ) {
+				$p    = (array) $req->get_json_params();
+				$opts = get_option( 'synctify_settings', array() );
+				$set  = array();
+				foreach ( $setting_keys as $k ) {
+					if ( ! array_key_exists( $k, $p ) ) {
+						continue;
+					}
+					$v = trim( (string) $p[ $k ] );   // 貼上時常帶到換行與前後空白
+					if ( 'publish_webhook_url' === $k && '' !== $v ) {
+						if ( ! preg_match( '#^https://#i', $v ) ) {
+							return new WP_Error( 'bad_request',
+								'publish_webhook_url must start with https://',
+								array( 'status' => 400 ) );
+						}
+						$v = esc_url_raw( $v );
+					}
+					$opts[ $k ] = $v;
+					$set[]      = $k;
+				}
+				// autoload=no：憑證不進 alloptions 快取，也不會出現在每次請求的查詢裡
+				update_option( 'synctify_settings', $opts, false );
+				return array(
+					'ok'      => true,
+					'updated' => $set,
+					'note'    => 'wp-config.php 若定義了同名常數，常數優先。'
+					             . '用 GET 這支端點確認實際生效的來源。',
+				);
+			},
+		),
+	) );
+
 	/* 2c. TranslatePress 字典表查詢
 	 * POST /wp-json/synctify/v1/tp/lookup
 	 * body: { "language": "zh_CN", "strings": [ "原文1", "原文2", ... ] }
@@ -725,14 +795,39 @@ add_action( 'rest_api_init', function () {
  *   define( 'SYNCTIFY_PUBLISH_WEBHOOK_URL',    'https://.../webhook/xxxx' );
  *   define( 'SYNCTIFY_PUBLISH_WEBHOOK_HEADER', 'X-Synctify-Token' );
  *   define( 'SYNCTIFY_PUBLISH_WEBHOOK_SECRET', '...' );
- * 未定義時整組回呼靜默停用，不影響其他功能。
+ * 或（不必碰檔案）用 POST /synctify/v1/settings 寫進資料庫。常數優先。
+ * 兩者都沒設時整組回呼靜默停用，不影響其他功能。
  * ------------------------------------------------------------- */
 
 /** 我們自己的端點寫入時設為 true，避免同步流程觸發「人工發佈」的回呼 */
 $GLOBALS['synctify_internal_write'] = false;
 
+/**
+ * 讀取設定值。wp-config.php 的常數優先，其次是資料庫設定。
+ *
+ * 兩種來源並存的理由：常數不進資料庫（比較嚴謹），但要有主機檔案存取權才改得動，
+ * 而且改壞會讓整站白畫面。資料庫設定則可透過 REST 端點寫入，不必碰檔案。
+ * 已經用常數設定好的站台行為完全不變。
+ */
+function synctify_setting( $key ) {
+	$const = 'SYNCTIFY_' . strtoupper( $key );
+	if ( defined( $const ) && constant( $const ) ) {
+		return (string) constant( $const );
+	}
+	$opts = get_option( 'synctify_settings', array() );
+	return isset( $opts[ $key ] ) ? (string) $opts[ $key ] : '';
+}
+
+function synctify_setting_source( $key ) {
+	$const = 'SYNCTIFY_' . strtoupper( $key );
+	if ( defined( $const ) && constant( $const ) ) return 'constant';
+	$opts = get_option( 'synctify_settings', array() );
+	return ! empty( $opts[ $key ] ) ? 'option' : 'unset';
+}
+
 function synctify_notify_publish( $post_id, $event ) {
-	if ( ! defined( 'SYNCTIFY_PUBLISH_WEBHOOK_URL' ) || ! SYNCTIFY_PUBLISH_WEBHOOK_URL ) {
+	$hook_url = synctify_setting( 'publish_webhook_url' );
+	if ( ! $hook_url ) {
 		return;   // 未設定 → 功能停用
 	}
 	$notion_page = get_post_meta( $post_id, '_synctify_notion_mother_id', true );
@@ -746,11 +841,13 @@ function synctify_notify_publish( $post_id, $event ) {
 	}
 	set_transient( $lock, 1, 60 );
 
-	$headers = array( 'Content-Type' => 'application/json' );
-	if ( defined( 'SYNCTIFY_PUBLISH_WEBHOOK_HEADER' ) && defined( 'SYNCTIFY_PUBLISH_WEBHOOK_SECRET' ) ) {
-		$headers[ SYNCTIFY_PUBLISH_WEBHOOK_HEADER ] = SYNCTIFY_PUBLISH_WEBHOOK_SECRET;
+	$headers   = array( 'Content-Type' => 'application/json' );
+	$hdr_name  = synctify_setting( 'publish_webhook_header' );
+	$hdr_value = synctify_setting( 'publish_webhook_secret' );
+	if ( $hdr_name && $hdr_value ) {
+		$headers[ $hdr_name ] = $hdr_value;
 	}
-	wp_remote_post( SYNCTIFY_PUBLISH_WEBHOOK_URL, array(
+	wp_remote_post( $hook_url, array(
 		'headers'  => $headers,
 		'body'     => wp_json_encode( array(
 			'event'          => $event,
