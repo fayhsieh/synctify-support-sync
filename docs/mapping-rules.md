@@ -16,7 +16,7 @@ Notion 教學文件 → WordPress Elementor（Docly + EazyDocs）自動上稿轉
 | 7 | 數字清單 `1. 2. 3.` | docly_list_item widget（order_list 圓形數字樣式） | 全站統一此樣式。整段連續編號＝**同一個** docly_list_item（編號連續靠同一 widget，`steps` 留空）。編號項下 tab 縮排的巢狀子內容（bullet／接續說明）內嵌成 `<p style="padding-left: 40px;">`，**不可**用 `<ul><li>`（主題 CSS counter 會把 `<li>` 算進圓圈編號）。結構逆向自實站範本 7899。⚠️ **巢狀在步驟底下的 callout／程式碼區塊／表格／引用／分隔線目前仍會切斷編號**——它們在中介 markdown 會插入空行且不帶縮排，跳出清單層級。段落與圖片已正確處理。要讓編號不斷，這些區塊必須折進步驟內文，那是尚未決定的映射（2026-08-11 暫緩）；實務上最常見的觸發原因是圖片佔位鷹架，那個已改為整段剔除 |
 | 8 | 行內程式碼 `` `UI 路徑` `` | `[direction]...[/direction]` shortcode | 可點擊 UI 路徑；路徑用 `>` 分隔放同一組。分隔符 `>` 輸出為 `&gt;`（否則 Docly shortcode 會渲染成箭頭圖示，站上要字面 `>`）|
 | 9 | 粗體 `**文字**` | `<strong>` | 不可點擊的 UI 文字、狀態名稱 |
-| 10 | 連結 `[文字](url)` | `<a href="..." target="_blank" rel="noopener">` | 連結文字一律去除粗體 |
+| 10 | 連結 `[文字](url)` | `<a href="..." target="_blank" rel="noopener">` | 連結文字一律去除粗體。**指向 Content Hub 的 Notion 連結會換成 WP 永久連結**，見 §六之六 |
 | 11 | 程式碼區塊（fenced，含語言標記） | docly_code_syntax_highlighter widget | 語言標記 → `lng_type`，內容 → `source_code`。語言名可能含空格（Notion 的 `plain text`、`shell script`），一律正規化：`plain text` → `markdown`（站上慣例，範本 7978 確認），其餘去空格。⚠️ fence 解析須容許帶空格的語言標記，否則開頭 fence 認不出來、結尾 fence 被當開頭，會把文件剩餘內容整段吞掉 |
 | 12 | 表格 | text-editor widget 內 HTML `<table>` | |
 | 13 | 圖片＋圖說 | image widget | 圖說 → alt text＋caption；詳見「三、圖片規則」。**例外**：tab 縮排在數字清單步驟下的巢狀圖片 → 內嵌成該步驟 item 內的 `[caption]` shortcode（`<a href>` 保 lightbox、`[caption]` 保圖說、不佔圓圈編號），非獨立 widget。統一規範：**Link To = Media File**（`<a href>` 指原圖）、**Size = Large 1024×576**（`img` 帶 `size-large` class＋`width/height`）。結構逆向自實站範本 7915 |
@@ -281,6 +281,36 @@ rich_text 要沿用原本的標註，否則排版跑掉。
 子列改名不影響站上文章標題——同步時的 `clean_title` 本來就會把版本後綴與
 `(Current)` 剝掉（見 §六之三）。
 
+## 六之六、Notion 內部連結 → WP 永久連結
+
+寫作端（GPT Skill）引用其他文章時會優先貼 Notion 連結。那個網址對讀者是**私有、
+打不開的**，直接同步等於在公開站上放死連結（2026-08-11 Fay 回報，6086 文末的
+「see Reports Center」）。
+
+解析方式：Content Hub 的母列存著 `WP Post ID`，站上查得到每篇的永久連結，兩邊一併
+就能反查。**WP 網址含分類路徑**（`/docs/synctify-documentation/reports/reports-center/`），
+拼不出來，只能從站上取。
+
+| 情況 | 處理 |
+| --- | --- |
+| 連到母列 | 換成該篇的 WP 永久連結 |
+| 連到版本子列 | 沿用其母列的網址（`WP Post ID` 只記在母列） |
+| 連到尚未同步的頁面 | **保留原連結**，記進 `report["unresolved_notion_links"]` |
+| 非 Notion 網址 | 完全不動 |
+
+換不掉時刻意不刪連結——靜默移除會讓寫作者不知道哪裡要修。那是內容問題，
+該讓它可見。
+
+網址形式容忍帶標題 slug（`.../Reports-Center-3272f2ed…`）與查詢字串（`?pvs=4`），
+取**最後一個** 32 位十六進位當頁面 id，連字號有無皆可。
+
+⚠️ **實作位置**：網址解析放在 `notion2elementor.py` 而非 `notion_blocks.py`——
+轉換器必須能單獨執行且只依賴 `re`（n8n 沙箱限制），不可跨模組取用。
+對照表的組裝（`build_link_map`）才在 `notion_blocks.py`，因為它吃的是 Notion API 格式。
+
+⚠️ **Content Hub 目前約 90 列，查詢用 `page_size: 100`**。超過 100 列時要改成分頁
+抓取，否則排在後面的文章會靜默解析不到。
+
 ## 七、寫作端注意事項（給 Support Center Writer Skill）
 
 - 可點擊 UI 路徑一律用 inline code；不可點擊 UI 文字用粗體（Style Guide §5）
@@ -289,6 +319,8 @@ rich_text 要沿用原本的標註，否則排版跑掉。
 - 程式碼區塊務必標語言（http／markdown／json 等），會直接變成 WP 端語法高亮的語言設定
 - 內部筆記請放在帶 toggle 的 callout 內，或標題含「Content Review Notes」，確保不會被同步
 - FAQ 問題用 `###` 或 `####` 皆可，一題一個標題，答案直接接在下方
+- 引用其他文章時**可以直接貼 Notion 連結**，同步時會自動換成 WP 永久連結；
+  但被引用的那篇必須已經同步過（母列有 WP Post ID），否則連結會原樣留著
 - **圖片的 alt text 要寫在圖說裡**，用 `可見圖說 [alt: 無障礙描述]` 格式。
   Notion API 讀不到 image block 的 alt text 欄位，在 Notion UI 填的 alt 不會同步到 WP；
   只有寫進圖說的才抓得到。不加標記時 alt 會沿用圖說文字

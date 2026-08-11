@@ -112,7 +112,12 @@ def _run(blocks, meta):
     image_mode = meta["image_mode"] if "image_mode" in meta else "placeholder"
 
     markdown, blocks_report = blocks_to_markdown(blocks)
-    template, faq_items, report = convert(markdown, title, faq_group, sync_date=sync_date)
+    # Notion 內部連結 → WP 永久連結。對照表由上游兩個節點提供；沒給就跳過解析，
+    # 行為與加這個功能之前一致。
+    _link_map = build_link_map(meta["hub_rows"] if "hub_rows" in meta else [],
+                               meta["wp_docs"] if "wp_docs" in meta else [])
+    template, faq_items, report = convert(markdown, title, faq_group,
+                                          sync_date=sync_date, link_map=_link_map)
     report["blocks"] = blocks_report
 
     images_todo = []
@@ -133,6 +138,8 @@ def _run(blocks, meta):
         "title": title,
         # SEO Meta 段不進正文，改寫進 AIOSEO（POST /synctify/v1/seo/{id}）
         "seo": blocks_report["seo"],
+        # 換不掉的 Notion 連結——寫作端要修的內容問題，往上帶方便回報
+        "unresolved_notion_links": report["unresolved_notion_links"],
     }
 
 
@@ -489,9 +496,36 @@ def build_polling_workflow(code):
          "credentials": {"notionApi": {"id": NOTION_CRED_ID, "name": NOTION_CRED_NAME}},
          "notes": "Return All／Also Fetch Nested Blocks 開啟、Simplify Output 關閉。"},
 
+        {"parameters": notion_http(
+            "POST", f"https://api.notion.com/v1/databases/{NOTION_DB_ID}/query",
+            '={{ { "page_size": 100 } }}'),
+         "id": nid(), "name": "Notion：取得連結對照",
+         "type": "n8n-nodes-base.httpRequest", "typeVersion": 4.2, "position": [1200, 300],
+         "credentials": {"notionApi": {"id": NOTION_CRED_ID, "name": NOTION_CRED_NAME}},
+         "notes": "撈整個 Content Hub，用來把文章裡的 Notion 內部連結換成 WP 永久連結。\n"
+                  "寫作端引用其他文章時會貼 Notion 連結，那對讀者是打不開的私有網址。\n"
+                  "\n"
+                  "⚠️ page_size 上限 100。Hub 超過 100 列時要改成分頁抓取，\n"
+                  "否則排在後面的文章會解析不到（目前約 90 列）。"},
+
+        {"parameters": wp_http("GET",
+            "=" + WP_BASE + "/wp-json/wp/v2/docs?per_page=100&_fields=id,link"
+            "&status=publish,draft&include="
+            "{{ $json.results.map(r => r.properties['WP Post ID']?.rich_text?.[0]"
+            "?.plain_text).filter(Boolean).join(',') || '0' }}"),
+         "id": nid(), "name": "WP：取得文章網址", "type": "n8n-nodes-base.httpRequest",
+         "typeVersion": 4.2, "position": [1320, 300],
+         "notes": "只取上一步撈到的 WP Post ID 對應的文章，不是整個 docs（站上有 179 篇，\n"
+                  "含其他佈景主題的示範內容）。永久連結含分類路徑，拼不出來只能查。\n"
+                  "沒有任何 id 時用 include=0 讓它回空陣列——留空會變成回傳全部。"},
+
         {"parameters": {"assignments": {"assignments": [
             {"id": nid(), "name": "title", "value": "={{ " + clean_title + " }}",
              "type": "string"},
+            {"id": nid(), "name": "hub_rows", "type": "array",
+             "value": "={{ $('Notion：取得連結對照').item.json.results }}"},
+            {"id": nid(), "name": "wp_docs", "type": "array",
+             "value": "={{ $('WP：取得文章網址').item.json }}"},
             {"id": nid(), "name": "faq_group",
              "value": "={{ (" + clean_title + ").toLowerCase()"
                       ".replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '') }}",
@@ -784,7 +818,8 @@ def build_polling_workflow(code):
     # 輪詢每一輪都重抓同一列。輪詢移除時整個認領節點也不存在，直接接防呆。
     claim = [] if POLLING == "removed" else ["先取消勾選（認領）"]
     chain = [PICK] + claim + ["是母列？（誤按防呆）"]
-    chain2 = ["Notion：取得頁面 blocks", PARAMS, CONV,
+    chain2 = ["Notion：取得頁面 blocks", "Notion：取得連結對照", "WP：取得文章網址",
+              PARAMS, CONV,
               "WP：上傳圖片", "組合回填輸入", "回填媒體網址", MOTHER,
               "母列自己還有上層？（草稿層防呆）"]
     for a, b in zip(chain, chain[1:]):

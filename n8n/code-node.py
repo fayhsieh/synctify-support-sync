@@ -504,6 +504,54 @@ def plan_version_marks(rows, blocks, version):
 
     return {"row_renames": renames, "block_updates": updates}
 
+
+# ---------- Notion 內部連結 → WP 永久連結 ----------
+#
+# 寫作端（GPT Skill）引用其他文章時會優先貼 Notion 連結，那個網址對外是私有的，
+# 直接同步等於在公開站上放一個讀者打不開的連結（2026-08-11 Fay 回報，6086 文末的
+# 「see Reports Center」）。
+#
+# Content Hub 的母列存著 WP Post ID，站上又查得到每篇的永久連結，兩邊一併就能反查。
+# WP 的網址含分類路徑（/docs/synctify-documentation/reports/reports-center/），
+# 拼不出來，只能從站上取。
+
+def normalize_notion_id(value):
+    return (value or "").replace("-", "").strip().lower()
+
+
+def build_link_map(hub_rows, wp_docs):
+    """{Notion 頁面 id: WP 永久連結}。
+
+    hub_rows —— Content Hub 的查詢結果（Notion API 原生格式）
+    wp_docs  —— WP 的 docs 清單，每筆需有 id 與 link
+
+    WP Post ID 只記在母列，但寫作者可能連到版本子列，所以子列沿用母列的網址。
+    """
+    wp = {}
+    for d in wp_docs or []:
+        if d.get("id") and d.get("link"):
+            wp[str(d["id"])] = d["link"]
+
+    direct, parent_of = {}, {}
+    for r in hub_rows or []:
+        rid = normalize_notion_id(r.get("id"))
+        if not rid:
+            continue
+        props = r.get("properties") or {}
+        rt = (props.get("WP Post ID") or {}).get("rich_text") or []
+        post_id = (rt[0].get("plain_text") or "").strip() if rt else ""
+        if post_id and post_id in wp:
+            direct[rid] = wp[post_id]
+        rel = (props.get("Parent item") or {}).get("relation") or []
+        if rel:
+            parent_of[rid] = normalize_notion_id(rel[0].get("id"))
+
+    out = dict(direct)
+    for rid, parent in parent_of.items():
+        if rid not in out and parent in direct:
+            out[rid] = direct[parent]
+    return out
+
 # ─── converter/notion2elementor.py ───
 #!/usr/bin/env python3
 """
@@ -573,6 +621,46 @@ ICON_MAP = {
     "⋮": "dots-vertical",     # More Actions（列表列尾的直式三點選單）
 }
 
+# ---------- Notion 內部連結解析 ----------
+# 寫作端引用其他文章時會貼 Notion 連結，那對讀者是打不開的私有網址。
+# convert() 收到 link_map 時就地換成 WP 永久連結；換不掉的記進報告，
+# 不靜默放行也不擅自刪掉連結——那會讓寫作者不知道哪裡要修。
+# 網址解析刻意放在這一側：轉換器必須能單獨執行、只依賴 re（n8n 沙箱的限制），
+# 不可跨模組取用 notion_blocks 的函式。
+_NOTION_HOST = re.compile(r"^https?://(?:[\w-]+\.)*notion\.(?:so|com)/", re.I)
+# 32 位十六進位，中間的連字號可有可無（兩種寫法 Notion 都會產出）
+_NOTION_ID = re.compile(
+    r"[0-9a-fA-F]{8}-?[0-9a-fA-F]{4}-?[0-9a-fA-F]{4}-?[0-9a-fA-F]{4}-?[0-9a-fA-F]{12}")
+
+
+def notion_page_id_from_url(url):
+    """Notion 網址 → 32 位頁面 id；非 Notion 網址回空字串。
+
+    網址可能帶標題 slug（`.../Reports-Center-3272f2ed…`）或查詢字串（`?pvs=4`），
+    故取**最後一個**符合的 id——slug 裡的英文字不會誤判成十六進位。
+    """
+    if not _NOTION_HOST.match(url or ""):
+        return ""
+    found = _NOTION_ID.findall(url)
+    return found[-1].replace("-", "").lower() if found else ""
+
+
+_LINK_MAP = {}
+_UNRESOLVED_LINKS = []
+
+
+def _resolve_link(url):
+    page_id = notion_page_id_from_url(url)
+    if not page_id:
+        return url                      # 不是 Notion 連結，原樣保留
+    target = _LINK_MAP.get(page_id)
+    if target:
+        return target
+    if url not in _UNRESOLVED_LINKS:
+        _UNRESOLVED_LINKS.append(url)
+    return url
+
+
 # ---------- 行內格式轉換 ----------
 
 def strip_notion_artifacts(text):
@@ -602,6 +690,7 @@ def inline_md_to_html(text):
     # 連結：對齊站上慣例——連結文字不保留粗體，一律新分頁開啟
     def _link(m):
         label, url = m.group(1), m.group(2)
+        url = _resolve_link(url)
         label = re.sub(r"\*\*(.+?)\*\*", r"\1", label)  # 去除粗體
         return f'<a href="{url}" target="_blank" rel="noopener">{label}</a>'
     text = re.sub(r"\[([^\]]+)\]\(([^)]+)\)", _link, text)
@@ -811,9 +900,11 @@ def list_to_html_v2(items):
 
 # ---------- 主轉換 ----------
 
-def convert(md, article_title, faq_group_slug, sync_date=None):
-    global _eid_counter
+def convert(md, article_title, faq_group_slug, sync_date=None, link_map=None):
+    global _eid_counter, _LINK_MAP, _UNRESOLVED_LINKS
     _eid_counter = 0          # 每次轉換重置，確保同輸入產生同 ID
+    _LINK_MAP = link_map or {}
+    _UNRESOLVED_LINKS = []
     blocks = parse_blocks(md)
 
     # 抽出 FAQ 段（## FAQs / ## Troubleshooting 之後的 ###+段落）
@@ -965,7 +1056,9 @@ def convert(md, article_title, faq_group_slug, sync_date=None):
               "faq_items": len(faq_items), "faq_group": faq_group_slug,
               "faq_section": faq_section_title,
               "images": report_images,
-              "images_pending_upload": sum(1 for x in report_images if x["pending_upload"])}
+              "images_pending_upload": sum(1 for x in report_images if x["pending_upload"]),
+              # 換不掉的 Notion 連結：那是寫作端要修的內容問題，不靜默放行
+              "unresolved_notion_links": list(_UNRESOLVED_LINKS)}
     return template, faq_items, report
 
 def in_faq_title(text):
@@ -1133,7 +1226,12 @@ def _run(blocks, meta):
     image_mode = meta["image_mode"] if "image_mode" in meta else "placeholder"
 
     markdown, blocks_report = blocks_to_markdown(blocks)
-    template, faq_items, report = convert(markdown, title, faq_group, sync_date=sync_date)
+    # Notion 內部連結 → WP 永久連結。對照表由上游兩個節點提供；沒給就跳過解析，
+    # 行為與加這個功能之前一致。
+    _link_map = build_link_map(meta["hub_rows"] if "hub_rows" in meta else [],
+                               meta["wp_docs"] if "wp_docs" in meta else [])
+    template, faq_items, report = convert(markdown, title, faq_group,
+                                          sync_date=sync_date, link_map=_link_map)
     report["blocks"] = blocks_report
 
     images_todo = []
@@ -1154,6 +1252,8 @@ def _run(blocks, meta):
         "title": title,
         # SEO Meta 段不進正文，改寫進 AIOSEO（POST /synctify/v1/seo/{id}）
         "seo": blocks_report["seo"],
+        # 換不掉的 Notion 連結——寫作端要修的內容問題，往上帶方便回報
+        "unresolved_notion_links": report["unresolved_notion_links"],
     }
 
 

@@ -66,6 +66,46 @@ ICON_MAP = {
     "⋮": "dots-vertical",     # More Actions（列表列尾的直式三點選單）
 }
 
+# ---------- Notion 內部連結解析 ----------
+# 寫作端引用其他文章時會貼 Notion 連結，那對讀者是打不開的私有網址。
+# convert() 收到 link_map 時就地換成 WP 永久連結；換不掉的記進報告，
+# 不靜默放行也不擅自刪掉連結——那會讓寫作者不知道哪裡要修。
+# 網址解析刻意放在這一側：轉換器必須能單獨執行、只依賴 re（n8n 沙箱的限制），
+# 不可跨模組取用 notion_blocks 的函式。
+_NOTION_HOST = re.compile(r"^https?://(?:[\w-]+\.)*notion\.(?:so|com)/", re.I)
+# 32 位十六進位，中間的連字號可有可無（兩種寫法 Notion 都會產出）
+_NOTION_ID = re.compile(
+    r"[0-9a-fA-F]{8}-?[0-9a-fA-F]{4}-?[0-9a-fA-F]{4}-?[0-9a-fA-F]{4}-?[0-9a-fA-F]{12}")
+
+
+def notion_page_id_from_url(url):
+    """Notion 網址 → 32 位頁面 id；非 Notion 網址回空字串。
+
+    網址可能帶標題 slug（`.../Reports-Center-3272f2ed…`）或查詢字串（`?pvs=4`），
+    故取**最後一個**符合的 id——slug 裡的英文字不會誤判成十六進位。
+    """
+    if not _NOTION_HOST.match(url or ""):
+        return ""
+    found = _NOTION_ID.findall(url)
+    return found[-1].replace("-", "").lower() if found else ""
+
+
+_LINK_MAP = {}
+_UNRESOLVED_LINKS = []
+
+
+def _resolve_link(url):
+    page_id = notion_page_id_from_url(url)
+    if not page_id:
+        return url                      # 不是 Notion 連結，原樣保留
+    target = _LINK_MAP.get(page_id)
+    if target:
+        return target
+    if url not in _UNRESOLVED_LINKS:
+        _UNRESOLVED_LINKS.append(url)
+    return url
+
+
 # ---------- 行內格式轉換 ----------
 
 def strip_notion_artifacts(text):
@@ -95,6 +135,7 @@ def inline_md_to_html(text):
     # 連結：對齊站上慣例——連結文字不保留粗體，一律新分頁開啟
     def _link(m):
         label, url = m.group(1), m.group(2)
+        url = _resolve_link(url)
         label = re.sub(r"\*\*(.+?)\*\*", r"\1", label)  # 去除粗體
         return f'<a href="{url}" target="_blank" rel="noopener">{label}</a>'
     text = re.sub(r"\[([^\]]+)\]\(([^)]+)\)", _link, text)
@@ -304,9 +345,11 @@ def list_to_html_v2(items):
 
 # ---------- 主轉換 ----------
 
-def convert(md, article_title, faq_group_slug, sync_date=None):
-    global _eid_counter
+def convert(md, article_title, faq_group_slug, sync_date=None, link_map=None):
+    global _eid_counter, _LINK_MAP, _UNRESOLVED_LINKS
     _eid_counter = 0          # 每次轉換重置，確保同輸入產生同 ID
+    _LINK_MAP = link_map or {}
+    _UNRESOLVED_LINKS = []
     blocks = parse_blocks(md)
 
     # 抽出 FAQ 段（## FAQs / ## Troubleshooting 之後的 ###+段落）
@@ -458,7 +501,9 @@ def convert(md, article_title, faq_group_slug, sync_date=None):
               "faq_items": len(faq_items), "faq_group": faq_group_slug,
               "faq_section": faq_section_title,
               "images": report_images,
-              "images_pending_upload": sum(1 for x in report_images if x["pending_upload"])}
+              "images_pending_upload": sum(1 for x in report_images if x["pending_upload"]),
+              # 換不掉的 Notion 連結：那是寫作端要修的內容問題，不靜默放行
+              "unresolved_notion_links": list(_UNRESOLVED_LINKS)}
     return template, faq_items, report
 
 def in_faq_title(text):

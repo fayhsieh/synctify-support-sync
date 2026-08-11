@@ -495,3 +495,51 @@ def plan_version_marks(rows, blocks, version):
                                 "rich_text": _restyle(items, new)})
 
     return {"row_renames": renames, "block_updates": updates}
+
+
+# ---------- Notion 內部連結 → WP 永久連結 ----------
+#
+# 寫作端（GPT Skill）引用其他文章時會優先貼 Notion 連結，那個網址對外是私有的，
+# 直接同步等於在公開站上放一個讀者打不開的連結（2026-08-11 Fay 回報，6086 文末的
+# 「see Reports Center」）。
+#
+# Content Hub 的母列存著 WP Post ID，站上又查得到每篇的永久連結，兩邊一併就能反查。
+# WP 的網址含分類路徑（/docs/synctify-documentation/reports/reports-center/），
+# 拼不出來，只能從站上取。
+
+def normalize_notion_id(value):
+    return (value or "").replace("-", "").strip().lower()
+
+
+def build_link_map(hub_rows, wp_docs):
+    """{Notion 頁面 id: WP 永久連結}。
+
+    hub_rows —— Content Hub 的查詢結果（Notion API 原生格式）
+    wp_docs  —— WP 的 docs 清單，每筆需有 id 與 link
+
+    WP Post ID 只記在母列，但寫作者可能連到版本子列，所以子列沿用母列的網址。
+    """
+    wp = {}
+    for d in wp_docs or []:
+        if d.get("id") and d.get("link"):
+            wp[str(d["id"])] = d["link"]
+
+    direct, parent_of = {}, {}
+    for r in hub_rows or []:
+        rid = normalize_notion_id(r.get("id"))
+        if not rid:
+            continue
+        props = r.get("properties") or {}
+        rt = (props.get("WP Post ID") or {}).get("rich_text") or []
+        post_id = (rt[0].get("plain_text") or "").strip() if rt else ""
+        if post_id and post_id in wp:
+            direct[rid] = wp[post_id]
+        rel = (props.get("Parent item") or {}).get("relation") or []
+        if rel:
+            parent_of[rid] = normalize_notion_id(rel[0].get("id"))
+
+    out = dict(direct)
+    for rid, parent in parent_of.items():
+        if rid not in out and parent in direct:
+            out[rid] = direct[parent]
+    return out

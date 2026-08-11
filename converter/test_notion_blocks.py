@@ -687,3 +687,75 @@ def test_normal_callout_still_renders():
     _md, ws, report = to_elementor(blocks)
     assert report["excluded_placeholders"] == 0
     assert any(w["widgetType"] == "docly_alerts_box" for w in ws)
+
+
+# ---------- Notion 內部連結 → WP 永久連結 ----------
+
+HUB_ROWS = [
+    {"id": "3272f2ed-e27d-808d-b5d4-d7f4a6796142",      # 母列：7-1 Reports Center
+     "properties": {"WP Post ID": {"rich_text": [{"plain_text": "6118"}]},
+                    "Parent item": {"relation": []}}},
+    {"id": "3282f2ed-e27d-804a-966b-ed0721b0cc08",      # 其版本子列（自己沒有 Post ID）
+     "properties": {"WP Post ID": {"rich_text": []},
+                    "Parent item": {"relation": [
+                        {"id": "3272f2ed-e27d-808d-b5d4-d7f4a6796142"}]}}},
+    {"id": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",      # 尚未同步：查不到網址
+     "properties": {"WP Post ID": {"rich_text": []},
+                    "Parent item": {"relation": []}}},
+]
+WP_DOCS = [{"id": 6118, "link": "https://support.synctify.io/docs/synctify-documentation/reports/reports-center/"}]
+
+
+def test_link_map_covers_mother_and_version_rows():
+    m = nb.build_link_map(HUB_ROWS, WP_DOCS)
+    url = "https://support.synctify.io/docs/synctify-documentation/reports/reports-center/"
+    assert m["3272f2ede27d808db5d4d7f4a6796142"] == url
+    # 連到版本子列也要解析得出來——WP Post ID 只記在母列
+    assert m["3282f2ede27d804a966bed0721b0cc08"] == url
+    assert "aaaaaaaabbbbccccddddeeeeeeeeeeee" not in m
+
+
+def test_notion_link_in_article_becomes_wp_permalink():
+    m = nb.build_link_map(HUB_ROWS, WP_DOCS)
+    blocks = [head(2, "Overview"),
+              blk("paragraph", {"rich_text": [
+                  {"plain_text": "For details see ",
+                   "annotations": {}},
+                  {"plain_text": "Reports Center", "annotations": {},
+                   "href": "https://www.notion.so/Reports-Center-3272f2ede27d808db5d4d7f4a6796142"}]})]
+    md, _ = nb.blocks_to_markdown(blocks)
+    tpl, _f, rep = n2e.convert(md, "T", "t", sync_date="August 11, 2026", link_map=m)
+    body = "".join(w["settings"].get("editor", "")
+                   for c in tpl["content"] for w in c["elements"])
+    assert "support.synctify.io/docs/synctify-documentation/reports/reports-center/" in body
+    assert "notion.so" not in body
+    assert rep["unresolved_notion_links"] == []
+
+
+def test_unresolvable_notion_link_is_reported_not_dropped():
+    """換不掉時保留原連結並回報——靜默刪掉會讓寫作者不知道哪裡要修。"""
+    blocks = [head(2, "Overview"),
+              blk("paragraph", {"rich_text": [
+                  {"plain_text": "See ", "annotations": {}},
+                  {"plain_text": "Draft Doc", "annotations": {},
+                   "href": "https://www.notion.so/Draft-aaaaaaaabbbbccccddddeeeeeeeeeeee"}]})]
+    md, _ = nb.blocks_to_markdown(blocks)
+    tpl, _f, rep = n2e.convert(md, "T", "t", sync_date="August 11, 2026",
+                               link_map=nb.build_link_map(HUB_ROWS, WP_DOCS))
+    body = "".join(w["settings"].get("editor", "")
+                   for c in tpl["content"] for w in c["elements"])
+    assert "aaaaaaaabbbbccccddddeeeeeeeeeeee" in body          # 連結還在
+    assert len(rep["unresolved_notion_links"]) == 1
+
+
+def test_external_links_untouched():
+    blocks = [head(2, "Overview"),
+              blk("paragraph", {"rich_text": [
+                  {"plain_text": "Synctify", "annotations": {},
+                   "href": "https://synctify.net/"}]})]
+    md, _ = nb.blocks_to_markdown(blocks)
+    tpl, _f, rep = n2e.convert(md, "T", "t", sync_date="August 11, 2026", link_map={})
+    body = "".join(w["settings"].get("editor", "")
+                   for c in tpl["content"] for w in c["elements"])
+    assert 'href="https://synctify.net/"' in body
+    assert rep["unresolved_notion_links"] == []
