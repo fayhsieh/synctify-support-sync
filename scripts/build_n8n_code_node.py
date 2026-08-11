@@ -875,6 +875,7 @@ def build_polling_workflow(code):
             '={{ { "category": ' + f"$('{PICK}').first().json.category" + ', '
             # 把 Notion 母列 id 存進文章 meta：WP 端按下發佈時，外掛靠它知道要回寫哪一列
             '"notion_page_id": ' + f"$('{PICK}').first().json.mother_id" + ', '
+            '"notion_row_id": ' + f"$('{PICK}').first().json.page_id" + ', '
             '"allow_published": true } }}'),
          "id": nid(), "name": "WP：套用站方預設欄位",
          "type": "n8n-nodes-base.httpRequest", "typeVersion": 4.2, "position": [3500, 300],
@@ -918,10 +919,27 @@ def build_polling_workflow(code):
             '"上稿狀態": { "select": { "name": "草稿已建立" } }, '
             '"最後同步時間": { "date": { "start": $now.toISO() } } } } }}'),
          "id": nid(), "name": "Notion：回寫母列",
-         "type": "n8n-nodes-base.httpRequest", "typeVersion": 4.2, "position": [3940, 300],
+         "type": "n8n-nodes-base.httpRequest", "typeVersion": 4.2, "position": [3940, 220],
          "credentials": {"notionApi": {"id": NOTION_CRED_ID, "name": NOTION_CRED_NAME}},
          "notes": "把 WP Post ID／上稿狀態／同步時間寫回母列——下次同步靠它判斷\n"
-                  "要新建還是更新。寫完回到「逐篇處理」取下一篇。"},
+                  "要新建還是更新。WP Post ID 只記在母列（它是整篇文章的穩定身分，\n"
+                  "跨版本不變），版本子列不記。"},
+
+        {"parameters": notion_http(
+            "PATCH",
+            "=https://api.notion.com/v1/pages/{{ " + f"$('{PICK}').first().json.page_id" + " }}",
+            '={{ { "properties": { '
+            '"上稿狀態": { "select": { "name": "草稿已建立" } }, '
+            '"最後同步時間": { "date": { "start": $now.toISO() } } } } }}'),
+         "id": nid(), "name": "Notion：回寫子列",
+         "type": "n8n-nodes-base.httpRequest", "typeVersion": 4.2, "position": [4160, 300],
+         "credentials": {"notionApi": {"id": NOTION_CRED_ID, "name": NOTION_CRED_NAME}},
+         "notes": "同樣的狀態也寫回「被按下的那一列」。\n"
+                  "理由是一致性：失敗時本來就寫在按下的那列，成功卻只寫母列的話，\n"
+                  "使用者在自己按的地方看不到任何回應（2026-08-11 Fay 回報）。\n"
+                  "\n"
+                  "兩邊各有用途：母列是整篇文章的彙總與下次同步的依據；\n"
+                  "子列是「這個版本何時被同步過」的紀錄，舊版本保留舊時間是正確的。"},
     ]
 
     conns = {
@@ -986,10 +1004,11 @@ def build_polling_workflow(code):
     # 寫完版面 → 套站方預設欄位 → 寫 SEO meta → 回寫母列
     for a, b in (("WP：寫入 Elementor 版面", "WP：套用站方預設欄位"),
                  ("WP：套用站方預設欄位", "WP：寫入 SEO meta"),
-                 ("WP：寫入 SEO meta", "Notion：回寫母列")):
+                 ("WP：寫入 SEO meta", "Notion：回寫母列"),
+                 ("Notion：回寫母列", "Notion：回寫子列")):
         conns[a] = {"main": [[{"node": b, "type": "main", "index": 0}]]}
     # 本篇跑完 → 回到迴圈取下一篇
-    conns["Notion：回寫母列"] = {"main": [[{"node": LOOP, "type": "main", "index": 0}]]}
+    conns["Notion：回寫子列"] = {"main": [[{"node": LOOP, "type": "main", "index": 0}]]}
 
     # ── 輪詢的去留：standby＝保留節點但停用觸發器（不空掃、可一鍵救回）
     #                removed ＝整組拿掉
@@ -1094,12 +1113,35 @@ def build_publish_callback_workflow():
                   "對小編而言兩者是同一件事：站上內容已經是最新的。"},
     ]
 
+    nodes.append(
+        {"parameters": {
+            "method": "PATCH",
+            "url": "=https://api.notion.com/v1/pages/"
+                   "{{ $('WP 發佈回呼（Webhook）').item.json.body.notion_row_id }}",
+            "authentication": "predefinedCredentialType",
+            "nodeCredentialType": "notionApi",
+            "sendBody": True, "specifyBody": "json",
+            "jsonBody": '={{ { "properties": { '
+                        '"上稿狀態": { "select": { "name": "已發佈" } } } } }}',
+            "options": {}},
+         "id": nid(), "name": "Notion：子列也標記已發佈",
+         "type": "n8n-nodes-base.httpRequest", "typeVersion": 4.2, "position": [360, 220],
+         "credentials": {"notionApi": {"id": NOTION_CRED_ID, "name": NOTION_CRED_NAME}},
+         "onError": "continueRegularOutput",
+         "notes": "母列與子列的狀態要一起走，否則母列變「已發佈」時子列還停在\n"
+                  "「草稿已建立」，看起來像沒同步成功。\n"
+                  "\n"
+                  "設 onError=continue：舊文章的 meta 裡沒有 notion_row_id（那是\n"
+                  "外掛 0.2.1 之後才存的），這一步失敗不該讓整條回呼算失敗。"})
+
     conns = {
         "WP 發佈回呼（Webhook）": {"main": [
             [{"node": "有帶 Notion 母列 id？", "type": "main", "index": 0}]]},
         "有帶 Notion 母列 id？": {"main": [
             [{"node": "Notion：標記已發佈", "type": "main", "index": 0}],
             [{"node": "略過（非同步文章）", "type": "main", "index": 0}]]},
+        "Notion：標記已發佈": {"main": [
+            [{"node": "Notion：子列也標記已發佈", "type": "main", "index": 0}]]},
     }
     return {
         "name": "Synctify — WP 發佈回呼 → Notion 標記已發佈",

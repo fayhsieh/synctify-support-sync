@@ -96,6 +96,34 @@
         }
       },
       "notes": "兩種 event 都寫「已發佈」：\n  published                → 新文章從草稿發佈\n  elementor_draft_applied  → 既有已發佈文章套用了 Elementor 草稿\n對小編而言兩者是同一件事：站上內容已經是最新的。"
+    },
+    {
+      "parameters": {
+        "method": "PATCH",
+        "url": "=https://api.notion.com/v1/pages/{{ $('WP 發佈回呼（Webhook）').item.json.body.notion_row_id }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "notionApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { \"properties\": { \"上稿狀態\": { \"select\": { \"name\": \"已發佈\" } } } } }}",
+        "options": {}
+      },
+      "id": "pub007",
+      "name": "Notion：子列也標記已發佈",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        360,
+        220
+      ],
+      "credentials": {
+        "notionApi": {
+          "id": "xfGHH7Wx4EucMC0X",
+          "name": "Support Center Sync"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "notes": "母列與子列的狀態要一起走，否則母列變「已發佈」時子列還停在\n「草稿已建立」，看起來像沒同步成功。\n\n設 onError=continue：舊文章的 meta 裡沒有 notion_row_id（那是\n外掛 0.2.1 之後才存的），這一步失敗不該讓整條回呼算失敗。"
     }
   ],
   "connections": {
@@ -122,6 +150,17 @@
         [
           {
             "node": "略過（非同步文章）",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Notion：標記已發佈": {
+      "main": [
+        [
+          {
+            "node": "Notion：子列也標記已發佈",
             "type": "main",
             "index": 0
           }

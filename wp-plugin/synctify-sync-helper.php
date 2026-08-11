@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Synctify Sync Helper
  * Description: Notion → n8n → WordPress 自動上稿流程的輔助端點：開啟 Arconix FAQ REST、寫入 Elementor data、讀寫 TranslatePress 字典表、寫入 AIOSEO meta。
- * Version: 0.2.0
+ * Version: 0.2.1
  * Author: Synctify Marketing (Fay)
  *
  * 安裝：外掛 → 上傳外掛（打包成 zip），或直接放入 wp-content/mu-plugins/
@@ -388,6 +388,12 @@ add_action( 'rest_api_init', function () {
 				update_post_meta( $post_id, '_synctify_notion_mother_id',
 				                  sanitize_text_field( $p['notion_page_id'] ) );
 			}
+			// 被按下的那一列（版本子列）。母列與子列的狀態要一起走，否則母列變
+			// 「已發佈」時子列還停在「草稿已建立」，看起來像沒同步成功。
+			if ( ! empty( $p['notion_row_id'] ) ) {
+				update_post_meta( $post_id, '_synctify_notion_row_id',
+				                  sanitize_text_field( $p['notion_row_id'] ) );
+			}
 
 			$resolved = array();
 			$desired  = array(
@@ -750,6 +756,8 @@ function synctify_notify_publish( $post_id, $event ) {
 			'event'          => $event,
 			'post_id'        => (int) $post_id,
 			'notion_page_id' => $notion_page,
+			// 舊文章可能沒有這個 meta（0.2.1 之後才存），回呼端要容忍空值
+			'notion_row_id'  => get_post_meta( $post_id, '_synctify_notion_row_id', true ),
 			'permalink'      => get_permalink( $post_id ),
 		) ),
 		'timeout'  => 5,
