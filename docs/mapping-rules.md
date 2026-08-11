@@ -106,6 +106,29 @@ Callout 首行若為粗體獨立行 → alert_title，其餘內容 → alert_des
 | --- | --- |
 | `## FAQs` 或 `## Troubleshooting` ＋ `### 問題` ＋ 答案段落 | 問答寫入 Arconix FAQ（group＝文章 slug）；頁面上只插入 `[faq group="文章slug" groupby="date" style="accordion"]` shortcode |
 
+問題標題 **`###` 與 `####` 都接受**——Style Guide 寫 `###`，實際文章多用 `####`。
+只認一種的話另一種會既不進 `faq_items` 也不進頁面，**整段靜默消失**。
+
+由 `POST /synctify/v1/faq/sync` 寫入。從站上實況反推的三件事（2026-08-11 確認）：
+
+| | |
+| --- | --- |
+| 分類法的 REST 欄位名 | **`faq-group`**（rest_base），不是 `group` |
+| 排序依據 | **`post_date`**（`menu_order` 全為 0，shortcode 用 `groupby="date"`）。每題相隔 60 秒，基準沿用群組內最早的既有日期，避免每次同步整組日期漂移 |
+| 既有 FAQ | 人工建立、**沒有任何標記**，內容還帶著 Notion 貼上殘留 |
+
+因此比對用**同群組內的標題**而非自訂 meta——否則人工那批會被當成不存在，同步後
+整組重複。比對到就認領（補上 `_synctify_faq_managed` 並更新內容），回應以
+`adopted` 區分。標題比對會忽略大小寫、多餘空白與結尾問號。
+
+**三道保護**：刪除只動管過的且僅移到垃圾桶；對不上的人工題目不動、以 `orphans`
+回報；**`items` 為空時一律跳過清除**——「FAQ 段落沒被解析出來」與「真的要刪光」
+在端點看來一模一樣，往安全方向倒。
+
+⚠️ **FAQ 是獨立文章，無法放進 Elementor 草稿暫存**，所以對已發佈文章會立刻反映到
+前台（Fay 2026-08-11 決定，與 SEO meta 一致）。內文仍走 autosave 受保護，因此
+更新既有文章時 FAQ 會比內文早一步上線。
+
 ## 六、不同步（自動剔除）的內容
 
 | 內容 | 處理 |

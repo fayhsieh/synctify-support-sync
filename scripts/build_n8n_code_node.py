@@ -802,6 +802,24 @@ def build_polling_workflow(code):
                   "則跳過不覆蓋，並在回應的 skipped_smart_tags 列出；description\n"
                   "一律以 Notion 為準。要全部照寫可傳 preserve_smart_tags: []。"},
 
+        {"parameters": wp_http(
+            "POST", f"{WP_BASE}/wp-json/synctify/v1/faq/sync",
+            '={{ { "group": ' + f"$('{PARAMS}').first().json.faq_group" + ', '
+            '"items": ' + f"$('{CONV}').first().json.faq_items" + ' } }}'),
+         "id": nid(), "name": "WP：同步 FAQ",
+         "type": "n8n-nodes-base.httpRequest", "typeVersion": 4.2, "position": [3830, 300],
+         "notes": "FAQ 段落（## FAQs／## Troubleshooting 底下的問答）寫進 Arconix FAQ，\n"
+                  "group 分類詞＝文章 slug，與頁面上的 [faq group=\"…\"] shortcode 對應。\n"
+                  "\n"
+                  "FAQ 是獨立文章，沒辦法像內文那樣放進 Elementor 草稿暫存，所以對已發佈\n"
+                  "文章會立刻反映到前台（Fay 2026-08-11 決定，與 SEO meta 一致：\n"
+                  "Notion 是單一真實來源，直接校正）。\n"
+                  "\n"
+                  "端點以標題比對，人工建立的既有題目會被認領而非重複建立；\n"
+                  "移除只動管過的且僅移到垃圾桶；items 為空時刻意不清除\n"
+                  "（那比較像 FAQ 段落沒被解析出來，而非真的要刪光）。\n"
+                  "回應的 created／updated／adopted／trashed／orphans 可核對結果。"},
+
         {"parameters": notion_http(
             "PATCH",
             "=https://api.notion.com/v1/pages/{{ " + f"$('{PICK}').first().json.mother_id" + " }}",
@@ -901,7 +919,8 @@ def build_polling_workflow(code):
     # 寫完版面 → 套站方預設欄位 → 寫 SEO meta → 回寫母列
     for a, b in (("WP：寫入 Elementor 版面", "WP：套用站方預設欄位"),
                  ("WP：套用站方預設欄位", "WP：寫入 SEO meta"),
-                 ("WP：寫入 SEO meta", "Notion：回寫母列"),
+                 ("WP：寫入 SEO meta", "WP：同步 FAQ"),
+                 ("WP：同步 FAQ", "Notion：回寫母列"),
                  ("Notion：回寫母列", "Notion：回寫子列")):
         conns[a] = {"main": [[{"node": b, "type": "main", "index": 0}]]}
     # 本篇跑完 → 回到迴圈取下一篇
