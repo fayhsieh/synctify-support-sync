@@ -952,11 +952,14 @@ def build_polling_workflow(code):
         [{"node": "母列有 WP Post ID？", "type": "main", "index": 0}]]}
 
     # 兩條拒絕路徑匯流 → 回寫失敗 → 留言 → 回到迴圈取下一篇
+    # ⚠️ 留言節點必須**直接**接在原因節點後面。$json 指的是「上一個節點的輸出」，
+    # 中間若隔著回寫（HTTP 節點），留言看到的會是 Notion PATCH 的回應，
+    # 裡面沒有 fail_reason（2026-08-11 實測踩到，且三條原因路徑都會中）。
     for n in ("原因：按到母列", "原因：按到草稿層", "原因：節點失敗"):
-        conns[n] = {"main": [[{"node": "回寫：同步失敗", "type": "main", "index": 0}]]}
-    conns["回寫：同步失敗"] = {"main": [
-        [{"node": "Notion：留言說明原因", "type": "main", "index": 0}]]}
+        conns[n] = {"main": [[{"node": "Notion：留言說明原因", "type": "main", "index": 0}]]}
     conns["Notion：留言說明原因"] = {"main": [
+        [{"node": "回寫：同步失敗", "type": "main", "index": 0}]]}
+    conns["回寫：同步失敗"] = {"main": [
         [{"node": "標記本次執行失敗", "type": "main", "index": 0}]]}
 
     # 分路：有 Post ID → 查既有文章狀態；沒有 → 建新草稿。兩路都匯到寫入版面。
