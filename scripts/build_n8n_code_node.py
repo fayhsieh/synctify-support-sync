@@ -274,8 +274,13 @@ PUBLISH_WEBHOOK_PATH = "synctify-published-CHANGE-ME-TO-A-RANDOM-STRING"
 #   "removed"  輪詢節點整組移除
 # 按鈕實測通過後改成 "removed" 重新產生即可，不必動其他任何地方。
 POLLING = "removed"
+# 輪詢移除時要一併拿掉的節點。「先取消勾選（認領）」也在內——它的唯一作用是
+# 認領：處理時間若超過輪詢間隔，下一輪會再抓到同一列而重複建草稿。按鈕觸發
+# 一次只送一列，沒有這個問題；而且 Fay 移除輪詢後把「待同步」欄位也從 Notion
+# 刪了，留著這個節點會直接以「待同步 is not a property that exists」失敗
+# （2026-08-11 實測踩到）。
 POLL_NODE_NAMES = ("定時檢查", "查詢待同步列", "有待同步的列？",
-                   "無事可做（結束）", "拆成每列一筆")
+                   "無事可做（結束）", "拆成每列一筆", "先取消勾選（認領）")
 
 
 def build_polling_workflow(code):
@@ -776,8 +781,9 @@ def build_polling_workflow(code):
             [{"node": PICK, "type": "main", "index": 0}]]},
     }
     # 防呆①刻意排在「先取消勾選」之後：先認領再檢查，否則被拒絕的列會一直留著勾，
-    # 輪詢每一輪都重抓同一列。
-    chain = [PICK, "先取消勾選（認領）", "是母列？（誤按防呆）"]
+    # 輪詢每一輪都重抓同一列。輪詢移除時整個認領節點也不存在，直接接防呆。
+    claim = [] if POLLING == "removed" else ["先取消勾選（認領）"]
+    chain = [PICK] + claim + ["是母列？（誤按防呆）"]
     chain2 = ["Notion：取得頁面 blocks", PARAMS, CONV,
               "WP：上傳圖片", "組合回填輸入", "回填媒體網址", MOTHER,
               "母列自己還有上層？（草稿層防呆）"]
