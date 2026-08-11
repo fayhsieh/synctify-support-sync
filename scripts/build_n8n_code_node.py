@@ -730,7 +730,11 @@ def build_polling_workflow(code):
         # ── 防呆①：按到最上層母列
         {"parameters": {"conditions": {
             "options": {"caseSensitive": True, "typeValidation": "loose", "version": 2},
-            "conditions": [{"id": nid(), "leftValue": "={{ $json.is_mother }}",
+            # ⚠️ 必須顯式引用 PICK，不能用 $json——上游是「先取消勾選」那個 PATCH 節點，
+            # 此時 $json 是 Notion 的回應物件，沒有 is_mother，判斷會永遠落在 false，
+            # 防呆等於形同虛設（2026-08-11 實測第一次按鈕時發現）。
+            "conditions": [{"id": nid(),
+                            "leftValue": "={{ " + f"$('{PICK}').first().json.is_mother" + " }}",
                             "operator": {"type": "boolean", "operation": "true",
                                          "singleValue": True}, "rightValue": ""}],
             "combinator": "and"}},
@@ -811,8 +815,20 @@ def build_polling_workflow(code):
             "=" + WP_BASE + "/wp-json/wp/v2/docs/{{ $json.properties['WP Post ID']"
             ".rich_text[0].plain_text }}?context=edit"),
          "id": nid(), "name": "WP：查詢既有文章", "type": "n8n-nodes-base.httpRequest",
-         "typeVersion": 4.2, "position": [2840, 180],
+         "typeVersion": 4.2, "position": [2840, 100],
          "notes": "取得既有文章的 status，決定要直接更新草稿還是寫成 Elementor 草稿。"},
+
+        {"parameters": {"conditions": {
+            "options": {"caseSensitive": True, "typeValidation": "loose", "version": 2},
+            "conditions": [{"id": nid(), "leftValue": "={{ $json.status }}",
+                            "operator": {"type": "string", "operation": "equals"},
+                            "rightValue": "trash"}],
+            "combinator": "and"}},
+         "id": nid(), "name": "既有文章在垃圾桶？", "type": "n8n-nodes-base.if",
+         "typeVersion": 2.2, "position": [3060, 100],
+         "notes": "母列的 WP Post ID 可能指向已被刪除的文章（2026-08-11 實測踩到：\n"
+                  "7553 被丟進垃圾桶，流程照樣往它寫，寫進去也沒人看得到）。\n"
+                  "垃圾桶 → 改走新建分路；回寫母列時會把新的 Post ID 蓋上去，自動修好。"},
 
         {"parameters": {"assignments": {"assignments": [
             {"id": nid(), "name": "target_post_id", "value": "={{ $json.id }}",
@@ -958,7 +974,12 @@ def build_polling_workflow(code):
     conns["母列有 WP Post ID？"] = {"main": [
         [{"node": "WP：查詢既有文章", "type": "main", "index": 0}],
         [{"node": "WP：建立新草稿", "type": "main", "index": 0}]]}
-    conns["WP：查詢既有文章"] = {"main": [[{"node": "目標：更新既有", "type": "main", "index": 0}]]}
+    conns["WP：查詢既有文章"] = {"main": [
+        [{"node": "既有文章在垃圾桶？", "type": "main", "index": 0}]]}
+    # true＝在垃圾桶 → 當作全新文章重建；false＝正常 → 更新既有
+    conns["既有文章在垃圾桶？"] = {"main": [
+        [{"node": "WP：建立新草稿", "type": "main", "index": 0}],
+        [{"node": "目標：更新既有", "type": "main", "index": 0}]]}
     conns["WP：建立新草稿"] = {"main": [[{"node": "目標：新建", "type": "main", "index": 0}]]}
     for n in ("目標：更新既有", "目標：新建"):
         conns[n] = {"main": [[{"node": "WP：寫入 Elementor 版面", "type": "main", "index": 0}]]}
