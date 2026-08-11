@@ -614,3 +614,16 @@ def test_version_marks_ignore_unrelated_blocks():
     ]
     plan = nb.plan_version_marks(ROWS, blocks, "v3")
     assert plan["block_updates"] == []
+
+
+def test_vertical_ellipsis_icon_becomes_dots_vertical():
+    """⋮ (More Actions) 是 U+22EE，不是 emoji，但一樣要轉成 custom_icon。"""
+    blocks = [head(2, "Overview"),
+              blk("paragraph", {"rich_text": [
+                  rt("In the "), rt("Action", code=True), rt(" column, click "),
+                  rt("⋮ (More Actions)", code=True), rt(" to open the menu.")]})]
+    _md, ws, _ = to_elementor(blocks)
+    body = "".join(w["settings"].get("editor", "") for w in ws)
+    assert '[custom_icon class="dots-vertical"] (More Actions)' in body
+    # 一般 inline code 仍走 [direction]，兩種語意不可混淆
+    assert "[direction]Action[/direction]" in body

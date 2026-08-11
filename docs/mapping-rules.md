@@ -83,6 +83,9 @@ Callout 首行若為粗體獨立行 → alert_title，其餘內容 → alert_des
 
 **Notion 端寫作慣例（已定案）**：icon 用 inline code 包住，格式為 `` `emoji (Label)` ``，例如 `` `⏬ (Expand)` ``、`` `🎛️ (Adjust)` ``。
 
+⚠️ **不一定是 emoji**：`⋮` 是 U+22EE VERTICAL ELLIPSIS，屬一般標點字元。判斷只看
+是否以對照表中的字元開頭，沒有「必須是 emoji」的限制，所以這類字元照樣適用。
+
 **轉換規則**：inline code 內容以 icon emoji 開頭時，「不」套用 `[direction]`，改輸出 shortcode＋標籤純文字。
 例：`` `⏬ (Expand)` `` → `[custom_icon class="chevrons-down"] (Expand)`
 
@@ -93,6 +96,7 @@ Callout 首行若為粗體獨立行 → alert_title，其餘內容 → alert_des
 | ⬇️ | 向下箭頭 | `[custom_icon class="chevron-down"]` |
 | ⏬ | 向下雙箭頭 | `[custom_icon class="chevrons-down"]` |
 | 🎛️ | 調整庫存 | `[custom_icon class="adjustments-alt"]` |
+| ⋮ | More Actions（直式三點選單） | `[custom_icon class="dots-vertical"]` |
 
 統一輸出 `[custom_icon]` shortcode（由站上自訂 PHP 渲染為 `<kbd><i class="ti ti-{class}"></i></kbd>`，含按鍵樣式外框）。舊文章中直接寫原生 `<i class="ti ti-...">` 的寫法缺少 `<kbd>` 外框，屬歷史不一致，不再使用。裸 emoji（未包 inline code）為舊文件相容寫法，轉換器同樣支援。
 

@@ -550,6 +550,9 @@ ICON_MAP = {
     "⬇️": "chevron-down",
     "⏬": "chevrons-down",
     "🎛️": "adjustments-alt",  # 調整庫存（Notion 端 emoji 待 Fay 最終確認）
+    # ⋮ 是 U+22EE VERTICAL ELLIPSIS，不是 emoji 而是一般標點字元。
+    # 這裡的比對只看 startswith，沒有「必須是 emoji」的閘門，所以照樣生效。
+    "⋮": "dots-vertical",     # More Actions（列表列尾的直式三點選單）
 }
 
 # ---------- 行內格式轉換 ----------
