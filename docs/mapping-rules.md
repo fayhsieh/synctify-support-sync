@@ -286,6 +286,21 @@ Notion page id，無法回寫到正確的列。
 `fail_reason`（2026-08-11 實測踩到，三條原因路徑都會中）。回寫節點本身用的是
 顯式引用 `$('取出本列資訊')`，不受順序影響。
 
+**錯誤輸出的實際形狀**（2026-08-11 由真實失敗取得，非推測）：
+
+```json
+{ "ok": true, "post_id": 6104, ...上游節點的輸出...,
+  "error": { "message": "404 - \"{…}\"", "name": "AxiosError", "stack": "…" } }
+```
+
+`error` 是物件（不是字串），只有 `message` / `name` / `stack`——**沒有任何節點名欄位**，
+其餘鍵是**上游**節點的輸出。所以留言裡的節點名只能是「未知」；要顯示的話得給每個
+可能失敗的節點各配一個寫死名稱的 Set 節點（13 個），而 n8n 的 Executions 本來就會把
+失敗節點標紅，因此不做。
+
+`message` 內含 JSON 編碼過的回應主體，全是跳脫符號、小編讀不了，故整理成
+`404 No route was found matching the URL and request method.（rest_no_route）`。
+
 **運算式裡不可用 `$prevNode`**：n8n 在錯誤分支不保證注入它，而「變數本身不存在」
 會丟 ReferenceError，`?.` 擋不住——整個運算式求值失敗、欄位變成 undefined，
 看起來像取不到值，實際是拋例外。只用一定存在的 `$json`。

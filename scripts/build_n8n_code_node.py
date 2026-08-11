@@ -683,14 +683,22 @@ def build_polling_workflow(code):
             # 這一欄保證不會拋例外，是猜錯欄位時的最後防線。
             {"id": nid(), "name": "fail_raw", "type": "string",
              "value": "={{ JSON.stringify($json).slice(0, 600) }}"},
+            # 錯誤訊息整理成人看得懂的形式。實測的原始值長這樣：
+            #   404 - "{\\"code\\":\\"rest_no_route\\",\\"message\\":\\"No route was found…\\"}"
+            # 全是跳脫符號，小編根本讀不了。先去掉反斜線，再把 WP／Notion 回應裡的
+            # message 與 code 抽出來；抽不到就退回原文（截 300 字）。
             {"id": nid(), "name": "fail_reason", "type": "string",
-             "value": "={{ '同步在「'"
-                      " + ($json.error && $json.error.node && $json.error.node.name"
-                      " ? $json.error.node.name : '未知') + '」節點失敗：'"
-                      " + (typeof $json.error === 'string' ? $json.error"
+             "value": "={{ '同步失敗：' + ("
+                      "(function(m){"
+                      " var s = String(m).replace(/\\\\/g, '');"
+                      " var inner = s.match(/\"message\"\\s*:\\s*\"([^\"]+)\"/);"
+                      " var code = s.match(/\"code\"\\s*:\\s*\"([^\"]+)\"/);"
+                      " var st = s.match(/^(\\d{3})\\b/);"
+                      " return inner ? ((st ? st[1] + ' ' : '') + inner[1]"
+                      " + (code ? '（' + code[1] + '）' : '')) : s.slice(0, 300);"
+                      "})("
+                      "typeof $json.error === 'string' ? $json.error"
                       " : ($json.error && $json.error.message ? $json.error.message"
-                      " : ($json.error && $json.error.description"
-                      " ? $json.error.description"
                       " : JSON.stringify($json).slice(0, 400)))) }}"},
         ]}, "options": {}},
          "id": nid(), "name": "原因：節點失敗", "type": "n8n-nodes-base.set",
