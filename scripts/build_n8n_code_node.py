@@ -492,15 +492,20 @@ def build_polling_workflow(code):
             "blockId": {"__rl": True, "mode": "id", "value": "={{ " + page_id + " }}"},
             "returnAll": True, "fetchNestedBlocks": True, "simplifyOutput": False},
          "id": nid(), "name": "Notion：取得頁面 blocks",
-         "type": "n8n-nodes-base.notion", "typeVersion": 2.2, "position": [1080, 300],
+         "type": "n8n-nodes-base.notion", "typeVersion": 2.2, "position": [1440, 300],
+         "executeOnce": True,
          "credentials": {"notionApi": {"id": NOTION_CRED_ID, "name": NOTION_CRED_NAME}},
-         "notes": "Return All／Also Fetch Nested Blocks 開啟、Simplify Output 關閉。"},
+         "notes": "Return All／Also Fetch Nested Blocks 開啟、Simplify Output 關閉。\n"
+                  "\n"
+                  "⚠️ Execute Once 必須開啟：上游「WP：取得文章網址」回傳陣列，\n"
+                  "n8n 會拆成一個文章一個項目，不設就會被執行二十幾次。\n"
+                  "本節點的 blockId 用顯式節點引用，與輸入項目無關，跑一次即可。"},
 
         {"parameters": notion_http(
             "POST", f"https://api.notion.com/v1/databases/{NOTION_DB_ID}/query",
             '={{ { "page_size": 100 } }}'),
          "id": nid(), "name": "Notion：取得連結對照",
-         "type": "n8n-nodes-base.httpRequest", "typeVersion": 4.2, "position": [1200, 300],
+         "type": "n8n-nodes-base.httpRequest", "typeVersion": 4.2, "position": [1080, 300],
          "credentials": {"notionApi": {"id": NOTION_CRED_ID, "name": NOTION_CRED_NAME}},
          "notes": "撈整個 Content Hub，用來把文章裡的 Notion 內部連結換成 WP 永久連結。\n"
                   "寫作端引用其他文章時會貼 Notion 連結，那對讀者是打不開的私有網址。\n"
@@ -514,7 +519,7 @@ def build_polling_workflow(code):
             "{{ $json.results.map(r => r.properties['WP Post ID']?.rich_text?.[0]"
             "?.plain_text).filter(Boolean).join(',') || '0' }}"),
          "id": nid(), "name": "WP：取得文章網址", "type": "n8n-nodes-base.httpRequest",
-         "typeVersion": 4.2, "position": [1320, 300],
+         "typeVersion": 4.2, "position": [1260, 300],
          "notes": "只取上一步撈到的 WP Post ID 對應的文章，不是整個 docs（站上有 179 篇，\n"
                   "含其他佈景主題的示範內容）。永久連結含分類路徑，拼不出來只能查。\n"
                   "沒有任何 id 時用 include=0 讓它回空陣列——留空會變成回傳全部。"},
@@ -522,10 +527,14 @@ def build_polling_workflow(code):
         {"parameters": {"assignments": {"assignments": [
             {"id": nid(), "name": "title", "value": "={{ " + clean_title + " }}",
              "type": "string"},
+            # .item 會對應到「當前這一筆」，但這兩個節點的輸出與區塊項目沒有一對一
+            # 關係，必須用 .first() / .all() 取整批。WP 那支回傳陣列會被 n8n 拆成
+            # 多個項目，所以要 .all().map() 收回成陣列（2026-08-11 實測踩到：
+            # 直接用 .item.json 會拿到單一物件而型別驗證失敗）。
             {"id": nid(), "name": "hub_rows", "type": "array",
-             "value": "={{ $('Notion：取得連結對照').item.json.results }}"},
+             "value": "={{ $('Notion：取得連結對照').first().json.results }}"},
             {"id": nid(), "name": "wp_docs", "type": "array",
-             "value": "={{ $('WP：取得文章網址').item.json }}"},
+             "value": "={{ $('WP：取得文章網址').all().map(i => i.json) }}"},
             {"id": nid(), "name": "faq_group",
              "value": "={{ (" + clean_title + ").toLowerCase()"
                       ".replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '') }}",
@@ -818,7 +827,7 @@ def build_polling_workflow(code):
     # 輪詢每一輪都重抓同一列。輪詢移除時整個認領節點也不存在，直接接防呆。
     claim = [] if POLLING == "removed" else ["先取消勾選（認領）"]
     chain = [PICK] + claim + ["是母列？（誤按防呆）"]
-    chain2 = ["Notion：取得頁面 blocks", "Notion：取得連結對照", "WP：取得文章網址",
+    chain2 = ["Notion：取得連結對照", "WP：取得文章網址", "Notion：取得頁面 blocks",
               PARAMS, CONV,
               "WP：上傳圖片", "組合回填輸入", "回填媒體網址", MOTHER,
               "母列自己還有上層？（草稿層防呆）"]
@@ -830,7 +839,7 @@ def build_polling_workflow(code):
     # IF 的輸出 0＝true（命中＝要拒絕）、輸出 1＝false（放行）
     conns["是母列？（誤按防呆）"] = {"main": [
         [{"node": "原因：按到母列", "type": "main", "index": 0}],
-        [{"node": "Notion：取得頁面 blocks", "type": "main", "index": 0}]]}
+        [{"node": chain2[0], "type": "main", "index": 0}]]}
     conns["母列自己還有上層？（草稿層防呆）"] = {"main": [
         [{"node": "原因：按到草稿層", "type": "main", "index": 0}],
         [{"node": "母列有 WP Post ID？", "type": "main", "index": 0}]]}
