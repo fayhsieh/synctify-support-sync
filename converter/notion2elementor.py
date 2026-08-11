@@ -383,24 +383,33 @@ def convert(md, article_title, faq_group_slug, sync_date=None, link_map=None):
     _UNRESOLVED_LINKS = []
     blocks = parse_blocks(md)
 
-    # 抽出 FAQ 段（## FAQs / ## Troubleshooting 之後的 ###+段落）
-    faq_items, page_blocks, in_faq = [], [], False
-    faq_section_title = None
+    # 抽出 accordion 段落。**每個符合的 h2 各自成為一組**——先前所有段落共用同一個
+    # group，一篇文章若同時有 FAQ 與 Troubleshooting，兩段會插入完全相同的
+    # shortcode，前台各自展開全部題目（2026-08-11 以 4-10 BigCommerce 實測確認）。
+    faq_sections, page_blocks = [], []
+    bad_markers = []          # 疑似打錯的標記，回報而非靜默忽略
+    section = None            # 目前所在的 accordion 段（None ＝ 一般內文）
     current_q = None
     for b in blocks:
         if b["t"] == "heading" and b["level"] == 2:
-            if b["text"].lower() in ("faqs", "faq", "troubleshooting"):
-                in_faq = True
-                faq_section_title = b["text"]
-                page_blocks.append(b)  # 保留 h2，後面接 shortcode
+            _bad = near_miss_marker(b["text"])
+            if _bad:
+                bad_markers.append({"heading": b["text"], "marker": _bad})
+            display, wants = _accordion_mode(b["text"])
+            b = dict(b, text=display)     # 標記不進站上的標題
+            if wants:
+                section = {"title": display, "items": []}
+                faq_sections.append(section)
+                current_q = None
+                page_blocks.append(b)     # 保留 h2，後面接 shortcode
                 continue
-            in_faq = False
-        if in_faq:
+            section = None
+        if section is not None:
             # 問題標題接受 h3 與 h4：Style Guide 寫 h3，但實際文章多用 h4。
             # 若只認 h3，h4 的問答會既不進 faq_items 也不進頁面——整段靜默消失。
             if b["t"] == "heading" and b["level"] in (3, 4):
                 current_q = {"question": b["text"], "answer_html": ""}
-                faq_items.append(current_q)
+                section["items"].append(current_q)
             elif current_q is not None:
                 if b["t"] == "para":
                     current_q["answer_html"] += f"<p>{inline_md_to_html(b['text'])}</p>"
@@ -408,6 +417,14 @@ def convert(md, article_title, faq_group_slug, sync_date=None, link_map=None):
                     current_q["answer_html"] += list_to_html_v2(b["items"])
             continue
         page_blocks.append(b)
+
+    # 群組命名：只有一段時沿用文章 slug（與站上既有的兩組完全相同，不受影響）；
+    # 兩段以上才各自加後綴。命名只看內容不看順序，作者調換段落不會讓題目搬家。
+    for sec in faq_sections:
+        sec["group"] = (faq_group_slug if len(faq_sections) == 1
+                        else f"{faq_group_slug}-{_slugify(sec['title'])}")
+    faq_items = [q for sec in faq_sections for q in sec["items"]]
+    faq_section_title = faq_sections[0]["title"] if faq_sections else None
 
     # SEO Meta / Version History 段剔除（此篇無，規則保留）
     # （偵測 '**SEO Meta**' 與 '### vN - ' 標記段，路由至 conversion report）
@@ -445,9 +462,10 @@ def convert(md, article_title, faq_group_slug, sync_date=None, link_map=None):
             if b["level"] == 2:
                 flush()
                 cur.append(widget("heading", {"title": b["text"]}))
-                if in_faq_title(b["text"]):
+                _g = _group_for(faq_sections, b["text"])
+                if _g:
                     cur.append(widget("shortcode", {"shortcode":
-                        f'[faq group="{faq_group_slug}" groupby="date" style="accordion"]'}))
+                        f'[faq group="{_g}" groupby="date" style="accordion"]'}))
             else:
                 cur.append(widget("heading", {"title": b["text"],
                                               "header_size": f"h{b['level']}"}))
@@ -531,14 +549,87 @@ def convert(md, article_title, faq_group_slug, sync_date=None, link_map=None):
               "containers": len(containers),
               "faq_items": len(faq_items), "faq_group": faq_group_slug,
               "faq_section": faq_section_title,
+              # 每一段各自的判定結果——逐篇控制靠標記，這裡把結果攤開供核對，
+              # 不必等前台出錯才發現標記寫錯
+              # 疑似打錯的段落標記——不修正、只回報，讓寫作端知道哪裡要改
+              "unrecognized_section_markers": bad_markers,
+              "faq_sections": [{"title": s_["title"], "group": s_["group"],
+                                "count": len(s_["items"]), "items": s_["items"]}
+                               for s_ in faq_sections],
               "images": report_images,
               "images_pending_upload": sum(1 for x in report_images if x["pending_upload"]),
               # 換不掉的 Notion 連結：那是寫作端要修的內容問題，不靜默放行
               "unresolved_notion_links": list(_UNRESOLVED_LINKS)}
     return template, faq_items, report
 
+# 預設會變成 accordion 的段落標題。維持既有行為，所以現有文章一個標記都不用加。
+_ACCORDION_TITLES = ("faqs", "faq", "troubleshooting")
+# 逐篇控制用的標記（Fay 2026-08-11 決定）。寫在 h2 標題結尾，不會進站上的標題。
+_MARK_ACCORDION = re.compile(r"\s*[（(]\s*accordion\s*[)）]\s*$", re.I)
+_MARK_PLAIN = re.compile(r"\s*[（(]\s*plain\s*[)）]\s*$", re.I)
+
+
+# 標記打錯字時的偵測。`(Accordian)`／`(Plian)` 這類近似字若靜默忽略，該段就會
+# 落回預設行為而沒人發現——把它變成大聲的回報。
+#
+# 用編輯距離而非「開頭幾個字母」：實測 `Plian` 是字母換位（p-l-i-a-n），
+# 前綴比對抓不到。距離 ≤ 2 能涵蓋換位、漏字、多字，又不會把 `(Beta)`、
+# `(Optional)`、`(v2)`、`(Plus)` 這些正常括號誤判。
+_TRAILING_PAREN = re.compile(r"[（(]\s*([^（()）]{1,20}?)\s*[)）]\s*$")
+
+
+def _edit_distance(a, b):
+    """Levenshtein 距離。刻意手寫——n8n 沙箱只允許 import re。"""
+    prev = list(range(len(b) + 1))
+    for i, ca in enumerate(a, 1):
+        cur = [i]
+        for j, cb in enumerate(b, 1):
+            cur.append(min(prev[j] + 1, cur[j - 1] + 1,
+                           prev[j - 1] + (ca != cb)))
+        prev = cur
+    return prev[-1]
+
+
+def near_miss_marker(title):
+    """標題結尾像是打錯的標記時回傳那段文字，否則空字串。"""
+    if _MARK_ACCORDION.search(title) or _MARK_PLAIN.search(title):
+        return ""
+    m = _TRAILING_PAREN.search(title or "")
+    if not m:
+        return ""
+    word = m.group(1).strip().lower()
+    for target in ("accordion", "plain"):
+        if word != target and _edit_distance(word, target) <= 2:
+            return m.group(0).strip()
+    return ""
+
+
+def _accordion_mode(title):
+    """h2 標題 → (顯示用標題, 是否折成 accordion)。
+
+    判斷順序：明確標記優先，其次才看標題是不是 FAQ／Troubleshooting。
+    無標記時行為與加這個功能之前完全一致——既有文章不必改動。
+    """
+    if _MARK_ACCORDION.search(title):
+        return _MARK_ACCORDION.sub("", title).strip(), True
+    if _MARK_PLAIN.search(title):
+        return _MARK_PLAIN.sub("", title).strip(), False
+    return title, title.strip().lower() in _ACCORDION_TITLES
+
+
+def _slugify(text):
+    return re.sub(r"(^-|-$)", "", re.sub(r"[^a-z0-9]+", "-", (text or "").lower()))
+
+
+def _group_for(sections, title):
+    for s in sections:
+        if s["title"] == title:
+            return s["group"]
+    return ""
+
+
 def in_faq_title(text):
-    return text.lower() in ("faqs", "faq", "troubleshooting")
+    return _accordion_mode(text)[1]
 
 # ---------- 圖片：佔位圖模式 ----------
 

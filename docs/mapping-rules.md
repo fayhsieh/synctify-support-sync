@@ -106,6 +106,36 @@ Callout 首行若為粗體獨立行 → alert_title，其餘內容 → alert_des
 | --- | --- |
 | `## FAQs` 或 `## Troubleshooting` ＋ `### 問題` ＋ 答案段落 | 問答寫入 Arconix FAQ（group＝文章 slug）；頁面上只插入 `[faq group="文章slug" groupby="date" style="accordion"]` shortcode |
 
+**每個符合條件的 h2 各自成為一組 accordion。** 先前所有段落共用同一個 group，
+一篇文章同時有 FAQ 與 Troubleshooting 時（如 4-10 BigCommerce），兩段會插入
+**完全相同**的 shortcode，前台各自展開全部題目——Troubleshooting 底下會出現 FAQ 的
+題目（2026-08-11 實測確認）。
+
+| 情況 | 群組名 |
+| --- | --- |
+| 只有一段 | `{文章 slug}`（與站上既有兩組相同，不受影響） |
+| 兩段以上 | `{slug}-faq`、`{slug}-troubleshooting`（依標題，不依順序） |
+
+**逐篇控制**（Fay 2026-08-11 決定）：h2 標題結尾加標記覆寫預設行為，標記不會進站上的標題。
+
+| 標記 | 效果 |
+| --- | --- |
+| `## Troubleshooting (Plain)` | 這段當一般內文，不折疊 |
+| `## Common Issues (Accordion)` | 這段折成 accordion，即使標題不是 FAQ／Troubleshooting |
+| 無標記 | 維持既有行為：FAQ／FAQs／Troubleshooting → accordion，其餘 → 一般內文 |
+
+全形括號 `（）` 同樣接受。**既有文章一個標記都不用加**。
+
+**打錯字會被回報而非靜默忽略**：標記寫成 `(Accordian)`、`(Plian)` 這類近似字時，
+`report["unrecognized_section_markers"]` 會列出來。判斷用編輯距離 ≤ 2 而非前綴比對
+——`Plian` 是字母換位，前綴抓不到。`(Beta)`、`(Optional)`、`(v2)`、`(Plus)` 這些
+正常括號不會誤判。
+
+> **為什麼用標題標記而不是 Notion 的 toggle 區塊**：toggle 在這個專案已經是
+> 「內部審核筆記、絕不同步」的訊號（CLAUDE.md）。若改用 toggle 表示 accordion，
+> 同一種區塊就有兩個相反語意，靠上下文區分——寫作者把備註寫成 toggle 就會直接
+> publish 到公開站上。那個失敗比「該折疊的沒折疊」嚴重得多。
+
 問題標題 **`###` 與 `####` 都接受**——Style Guide 寫 `###`，實際文章多用 `####`。
 只認一種的話另一種會既不進 `faq_items` 也不進頁面，**整段靜默消失**。
 

@@ -148,6 +148,10 @@ def _run(blocks, meta):
     return {
         "template": template,
         "faq_items": faq_items,
+        # 每個 accordion 段各自一組。下游用 splitOut 逐組呼叫 /faq/sync。
+        "faq_sections": report["faq_sections"],
+        # 疑似打錯的段落標記——逐篇控制靠標記，這裡讓打錯變成看得見的回報
+        "unrecognized_section_markers": report["unrecognized_section_markers"],
         "report": report,
         "markdown": markdown,
         # 方便下游 HTTP 節點直接取用
@@ -802,10 +806,15 @@ def build_polling_workflow(code):
                   "則跳過不覆蓋，並在回應的 skipped_smart_tags 列出；description\n"
                   "一律以 Notion 為準。要全部照寫可傳 preserve_smart_tags: []。"},
 
+        {"parameters": {"fieldToSplitOut": "faq_sections", "options": {}},
+         "id": nid(), "name": "拆出 FAQ 段落", "type": "n8n-nodes-base.splitOut",
+         "typeVersion": 1, "position": [3720, 300],
+         "notes": "一篇文章可能同時有 FAQ 與 Troubleshooting，各自一組 accordion。\n"
+                  "沒有任何 accordion 段時這裡輸出 0 筆，下游自然不會被呼叫。"},
+
         {"parameters": wp_http(
             "POST", f"{WP_BASE}/wp-json/synctify/v1/faq/sync",
-            '={{ { "group": ' + f"$('{PARAMS}').first().json.faq_group" + ', '
-            '"items": ' + f"$('{CONV}').first().json.faq_items" + ' } }}'),
+            '={{ { "group": $json.group, "items": $json.items } }}'),
          "id": nid(), "name": "WP：同步 FAQ",
          "type": "n8n-nodes-base.httpRequest", "typeVersion": 4.2, "position": [3830, 300],
          "notes": "FAQ 段落（## FAQs／## Troubleshooting 底下的問答）寫進 Arconix FAQ，\n"
@@ -919,7 +928,8 @@ def build_polling_workflow(code):
     # 寫完版面 → 套站方預設欄位 → 寫 SEO meta → 回寫母列
     for a, b in (("WP：寫入 Elementor 版面", "WP：套用站方預設欄位"),
                  ("WP：套用站方預設欄位", "WP：寫入 SEO meta"),
-                 ("WP：寫入 SEO meta", "WP：同步 FAQ"),
+                 ("WP：寫入 SEO meta", "拆出 FAQ 段落"),
+                 ("拆出 FAQ 段落", "WP：同步 FAQ"),
                  ("WP：同步 FAQ", "Notion：回寫母列"),
                  ("Notion：回寫母列", "Notion：回寫子列")):
         conns[a] = {"main": [[{"node": b, "type": "main", "index": 0}]]}

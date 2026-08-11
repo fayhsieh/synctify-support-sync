@@ -865,3 +865,103 @@ def test_relative_non_notion_links_untouched():
                    for c in tpl["content"] for w in c["elements"])
     assert 'href="/docs/guide/"' in body
     assert rep["unresolved_notion_links"] == []
+
+
+# ---------- accordion 段落：逐篇控制 ----------
+
+def _sec_blocks(*headings):
+    out = [head(2, "Overview"), para("Intro.")]
+    for n, h2 in enumerate(headings, 1):
+        out.append(head(2, h2))
+        # 問題標題刻意不引用 h2 文字——否則標記會被帶進問題裡，
+        # 讓「標記是否剝乾淨」的斷言驗到錯的東西
+        out.append(head(3, f"Question {n}"))
+        out.append(para("Answer."))
+    return out
+
+
+def _shortcodes(ws):
+    return [w["settings"]["shortcode"] for w in ws if w["widgetType"] == "shortcode"]
+
+
+def test_single_section_keeps_bare_article_slug():
+    """只有一段時群組名不變——站上既有兩篇就是這樣，不可影響。"""
+    for h2 in ("FAQ", "FAQs", "Troubleshooting"):
+        md, _ = nb.blocks_to_markdown(_sec_blocks(h2))
+        tpl, faqs, rep = n2e.convert(md, "T", "etsy-integration-guide",
+                                     sync_date="August 11, 2026")
+        assert [s["group"] for s in rep["faq_sections"]] == ["etsy-integration-guide"], h2
+        assert len(faqs) == 1
+
+
+def test_two_sections_get_separate_groups():
+    """4-10 BigCommerce 的實況：兩段各自一組，shortcode 不再相同。"""
+    md, _ = nb.blocks_to_markdown(_sec_blocks("Troubleshooting", "FAQ"))
+    tpl, faqs, rep = n2e.convert(md, "T", "bigcommerce-integration-guide",
+                                 sync_date="August 11, 2026")
+    groups = [s["group"] for s in rep["faq_sections"]]
+    assert groups == ["bigcommerce-integration-guide-troubleshooting",
+                      "bigcommerce-integration-guide-faq"]
+    sc = _shortcodes(widgets(tpl["content"]))
+    assert len(sc) == 2 and sc[0] != sc[1]
+    # 題目分屬各自的組，不再混在一起
+    assert [s["count"] for s in rep["faq_sections"]] == [1, 1]
+
+
+def test_section_order_does_not_change_group_names():
+    """命名只看內容不看順序——調換段落不該讓題目在群組間搬家。"""
+    a = n2e.convert(nb.blocks_to_markdown(_sec_blocks("FAQ", "Troubleshooting"))[0],
+                    "T", "x", sync_date="August 11, 2026")[2]
+    b = n2e.convert(nb.blocks_to_markdown(_sec_blocks("Troubleshooting", "FAQ"))[0],
+                    "T", "x", sync_date="August 11, 2026")[2]
+    assert sorted(s["group"] for s in a["faq_sections"]) == \
+           sorted(s["group"] for s in b["faq_sections"])
+
+
+def test_plain_marker_keeps_section_as_normal_content():
+    md, _ = nb.blocks_to_markdown(_sec_blocks("FAQ", "Troubleshooting (Plain)"))
+    tpl, faqs, rep = n2e.convert(md, "T", "x", sync_date="August 11, 2026")
+    assert [s["title"] for s in rep["faq_sections"]] == ["FAQ"]
+    assert len(_shortcodes(widgets(tpl["content"]))) == 1
+    body = "".join(w["settings"].get("title", "") for w in widgets(tpl["content"]))
+    assert "Troubleshooting" in body        # 標題還在
+    assert "(Plain)" not in body            # 但標記不進站上
+
+
+def test_accordion_marker_promotes_any_section():
+    md, _ = nb.blocks_to_markdown(_sec_blocks("Common Issues (Accordion)"))
+    tpl, faqs, rep = n2e.convert(md, "T", "x", sync_date="August 11, 2026")
+    assert [s["title"] for s in rep["faq_sections"]] == ["Common Issues"]
+    assert len(faqs) == 1
+    titles = [w["settings"].get("title") for w in widgets(tpl["content"])]
+    assert "Common Issues" in titles and "Common Issues (Accordion)" not in titles
+
+
+def test_fullwidth_parentheses_marker_accepted():
+    """中文輸入法常打出全形括號，兩種都要認。"""
+    md, _ = nb.blocks_to_markdown(_sec_blocks("Troubleshooting（Plain）"))
+    _tpl, _f, rep = n2e.convert(md, "T", "x", sync_date="August 11, 2026")
+    assert rep["faq_sections"] == []
+
+
+def test_typo_in_section_marker_is_reported():
+    """標記打錯字時要大聲回報，不可靜默落回預設行為。"""
+    for typo in ("Troubleshooting (Accordian)", "FAQ (Plian)", "Notes（accordeon）"):
+        md, _ = nb.blocks_to_markdown(_sec_blocks(typo))
+        _tpl, _f, rep = n2e.convert(md, "T", "x", sync_date="August 11, 2026")
+        assert rep["unrecognized_section_markers"], f"沒抓到打錯的標記：{typo}"
+
+
+def test_normal_parenthetical_headings_not_flagged():
+    """`(Beta)`、`(Optional)` 這種正常括號不可被當成打錯的標記。"""
+    for ok in ("Advanced Settings (Beta)", "Appendix (Optional)", "Setup (v2)"):
+        md, _ = nb.blocks_to_markdown(_sec_blocks(ok))
+        _tpl, _f, rep = n2e.convert(md, "T", "x", sync_date="August 11, 2026")
+        assert rep["unrecognized_section_markers"] == [], f"誤判：{ok}"
+
+
+def test_correct_markers_are_not_flagged_as_typos():
+    md, _ = nb.blocks_to_markdown(_sec_blocks("Common Issues (Accordion)",
+                                              "Troubleshooting (Plain)"))
+    _tpl, _f, rep = n2e.convert(md, "T", "x", sync_date="August 11, 2026")
+    assert rep["unrecognized_section_markers"] == []
