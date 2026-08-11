@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Synctify Sync Helper
  * Description: Notion → n8n → WordPress 自動上稿流程的輔助端點：開啟 Arconix FAQ REST、寫入 Elementor data、讀寫 TranslatePress 字典表、寫入 AIOSEO meta。
- * Version: 0.3.0
+ * Version: 0.4.0
  * Author: Synctify Marketing (Fay)
  *
  * 安裝：外掛 → 上傳外掛（打包成 zip），或直接放入 wp-content/mu-plugins/
@@ -598,6 +598,164 @@ add_action( 'rest_api_init', function () {
 		),
 	) );
 
+	/* 2b-5. 同步 FAQ 到 Arconix FAQ
+	 * POST /wp-json/synctify/v1/faq/sync
+	 * body: {
+	 *   "group": "manage-stock-level",          // = 文章 slug，對應 group 分類詞
+	 *   "items": [ { "question": "...", "answer_html": "..." }, ... ],
+	 *   "prune": true                            // 預設 true：移除已不在 Notion 的題目
+	 * }
+	 *
+	 * 幾個從站上實況反推的規則（2026-08-11 確認）：
+	 *   - 分類法在 REST 上的欄位名是 `faq-group`（rest_base），不是 `group`
+	 *   - 排序靠 **post_date**（menu_order 全為 0，頁面 shortcode 用 groupby="date"）
+	 *   - 既有的 10 筆 FAQ 是人工建的、沒有任何標記
+	 *
+	 * 因此比對用「同群組內的標題」而非自訂 meta——否則人工建的那批會被當成不存在，
+	 * 同步後整組重複。比對到就認領（補上 managed 標記並更新內容）。
+	 *
+	 * 刪除只動「我們建立或認領過的」（`_synctify_faq_managed`），且一律移到垃圾桶
+	 * 不永久刪除。沒認領過又對不上的留著不動，改以 orphans 回報讓人工判斷。
+	 */
+	register_rest_route( 'synctify/v1', '/faq/sync', array(
+		'methods'             => 'POST',
+		'permission_callback' => $permission,
+		'callback'            => function ( WP_REST_Request $req ) {
+			$p     = (array) $req->get_json_params();
+			$group = isset( $p['group'] ) ? sanitize_title( $p['group'] ) : '';
+			$items = isset( $p['items'] ) && is_array( $p['items'] ) ? $p['items'] : array();
+			$prune = ! array_key_exists( 'prune', $p ) || ! empty( $p['prune'] );
+			if ( ! $group ) {
+				return new WP_Error( 'bad_request', 'group is required', array( 'status' => 400 ) );
+			}
+			if ( ! post_type_exists( 'faq' ) || ! taxonomy_exists( 'group' ) ) {
+				return new WP_Error( 'no_arconix', 'Arconix FAQ not active',
+				                     array( 'status' => 501 ) );
+			}
+
+			// 分類詞不存在就建立（新文章的第一次同步）
+			$term = get_term_by( 'slug', $group, 'group' );
+			if ( ! $term ) {
+				$made = wp_insert_term( $group, 'group', array( 'slug' => $group ) );
+				if ( is_wp_error( $made ) ) {
+					return $made;
+				}
+				$term = get_term( $made['term_id'], 'group' );
+			}
+
+			$existing = get_posts( array(
+				'post_type'      => 'faq',
+				'posts_per_page' => -1,
+				'post_status'    => array( 'publish', 'draft', 'pending' ),
+				'tax_query'      => array( array(
+					'taxonomy' => 'group', 'field' => 'term_id', 'terms' => $term->term_id,
+				) ),
+			) );
+			$by_title = array();
+			foreach ( $existing as $e ) {
+				$by_title[ synctify_faq_key( $e->post_title ) ] = $e;
+			}
+
+			// 排序基準：沿用群組裡最早的既有日期，沒有就用現在。固定基準才不會每次
+			// 同步都讓整組日期漂移（date 決定前台顯示順序）。
+			$base = time();
+			foreach ( $existing as $e ) {
+				$t = strtotime( $e->post_date_gmt . ' UTC' );
+				if ( $t && $t < $base ) {
+					$base = $t;
+				}
+			}
+
+			$created = array(); $updated = array(); $adopted = array(); $seen = array();
+			foreach ( array_values( $items ) as $i => $item ) {
+				$q = isset( $item['question'] ) ? trim( wp_strip_all_tags( $item['question'] ) ) : '';
+				if ( '' === $q ) {
+					continue;
+				}
+				$html = isset( $item['answer_html'] ) ? (string) $item['answer_html'] : '';
+				$key  = synctify_faq_key( $q );
+				$seen[ $key ] = true;
+				// 每題相隔 60 秒，順序即 Notion 的題目順序
+				$when     = gmdate( 'Y-m-d H:i:s', $base + $i * 60 );
+				$when_loc = get_date_from_gmt( $when );
+
+				if ( isset( $by_title[ $key ] ) ) {
+					$post = $by_title[ $key ];
+					$was_managed = get_post_meta( $post->ID, '_synctify_faq_managed', true );
+					wp_update_post( array(
+						'ID'            => $post->ID,
+						'post_content'  => wp_slash( $html ),
+						'post_date'     => $when_loc,
+						'post_date_gmt' => $when,
+					) );
+					update_post_meta( $post->ID, '_synctify_faq_managed', 1 );
+					if ( $was_managed ) {
+						$updated[] = (int) $post->ID;
+					} else {
+						$adopted[] = (int) $post->ID;   // 人工建的，這次起納入管理
+					}
+				} else {
+					$new_id = wp_insert_post( array(
+						'post_type'     => 'faq',
+						'post_status'   => 'publish',
+						'post_title'    => $q,
+						'post_content'  => wp_slash( $html ),
+						'post_date'     => $when_loc,
+						'post_date_gmt' => $when,
+					), true );
+					if ( is_wp_error( $new_id ) ) {
+						return $new_id;
+					}
+					update_post_meta( $new_id, '_synctify_faq_managed', 1 );
+					$created[] = (int) $new_id;
+				}
+				$post_id = isset( $post ) && isset( $by_title[ $key ] ) ? $post->ID : $new_id;
+				wp_set_object_terms( $post_id, array( (int) $term->term_id ), 'group', false );
+				unset( $post, $new_id );
+			}
+
+			// ⚠️ 空清單一律不清除。「這篇的 FAQ 全被刪掉」極少見，「FAQ 段落沒被解析
+			// 出來」則是真實會發生的失敗（標題層級寫錯、段落被誤判成剔除區段都會）。
+			// 兩者在這裡長得一模一樣，所以往安全的方向倒——寧可留著多餘的，
+			// 也不要一次把整組 FAQ 掃進垃圾桶。
+			$prune_skipped = false;
+			if ( $prune && empty( $items ) ) {
+				$prune = false;
+				$prune_skipped = true;
+			}
+
+			// 已不在 Notion 的題目：只動我們管過的，且只移到垃圾桶
+			$trashed = array(); $orphans = array();
+			foreach ( $existing as $e ) {
+				if ( isset( $seen[ synctify_faq_key( $e->post_title ) ] ) ) {
+					continue;
+				}
+				if ( get_post_meta( $e->ID, '_synctify_faq_managed', true ) ) {
+					if ( $prune ) {
+						wp_trash_post( $e->ID );
+						$trashed[] = (int) $e->ID;
+					}
+				} else {
+					// 人工建立且對不上任何題目——可能是改過標題，交由人工判斷
+					$orphans[] = array( 'id' => (int) $e->ID, 'title' => $e->post_title );
+				}
+			}
+
+			return array(
+				'ok'       => true,
+				'group'    => $group,
+				'term_id'  => (int) $term->term_id,
+				'created'  => $created,
+				'updated'  => $updated,
+				'adopted'  => $adopted,   // 原本人工建立，本次起納入自動管理
+				'trashed'  => $trashed,
+				'orphans'  => $orphans,   // 對不上且非自動管理，未觸碰
+				// items 為空時刻意跳過清除——那比較像轉換失敗而非真的要刪光
+				'prune_skipped_empty_items' => $prune_skipped,
+			);
+		},
+	) );
+
 	/* 2c. TranslatePress 字典表查詢
 	 * POST /wp-json/synctify/v1/tp/lookup
 	 * body: { "language": "zh_CN", "strings": [ "原文1", "原文2", ... ] }
@@ -884,6 +1042,21 @@ foreach ( array( 'updated_post_meta', 'added_post_meta' ) as $hook ) {
 		synctify_notify_publish( $post_id, 'elementor_draft_applied' );
 	}, 10, 3 );
 }
+
+/**
+ * FAQ 題目的比對鍵：去標籤、正規化空白與大小寫，並剝掉結尾標點。
+ *
+ * 站上既有的 FAQ 是人工建的、沒有任何標記，只能靠標題比對才不會整組重複。
+ * 寬鬆一點（忽略大小寫與尾端問號差異）才擋得住「Notion 改了個標點就變成新題目」。
+ */
+function synctify_faq_key( $title ) {
+	$t = wp_strip_all_tags( html_entity_decode( (string) $title, ENT_QUOTES, 'UTF-8' ) );
+	$t = preg_replace( '/\s+/u', ' ', $t );
+	$t = trim( $t );
+	$t = preg_replace( '/[?？.。!！\s]+$/u', '', $t );
+	return function_exists( 'mb_strtolower' ) ? mb_strtolower( $t, 'UTF-8' ) : strtolower( $t );
+}
+
 
 /**
  * 這個值是不是 AIOSEO 智慧標籤模板（而非純文字）？

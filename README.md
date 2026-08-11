@@ -50,6 +50,7 @@ WordPress 端的自訂 REST 端點，補足標準 REST API 做不到的部分。
 | `POST /synctify/v1/tp/lookup` | 查詢 TranslatePress 字典表（取得未翻譯字串） |
 | `POST /synctify/v1/tp/update` | 寫入譯文（status=2 人工翻譯永不覆蓋） |
 | `POST /synctify/v1/doc/defaults/{id}` | 套用站方統一欄位：封面照 `opengraph`、作者 The Synctify Team、討論 closed、Parent 依 Notion Category 對到分類頁。全部依名稱在站上解析，不寫死 ID。另存 `notion_page_id` 供發佈回呼對應 |
+| `POST /synctify/v1/faq/sync` | 把 FAQ 題目同步進 Arconix FAQ（依 group 分類詞）。以標題比對，人工建立的既有題目會被認領而非重複建立；移除只動管過的且僅移到垃圾桶；`items` 為空時刻意不清除 |
 | `GET` / `POST /synctify/v1/settings` | 讀寫發佈回呼的網址與密鑰（存資料庫，不必碰 `wp-config.php`）。權限要求 `manage_options`；GET 不回傳密鑰本身，只回報有無與長度 |
 | `POST /synctify/v1/seo/{id}` | 寫入 AIOSEO meta title / description。回傳 `previous` 供還原；現值是 AIOSEO 智慧標籤模板、**或為空（＝沿用全站範本）**的欄位預設跳過不寫，回應的 `preserved` 標明原因（預設只保護 `title`，見 `preserve_smart_tags`） |
 
