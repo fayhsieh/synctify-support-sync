@@ -675,11 +675,25 @@ def build_polling_workflow(code):
 
         # ── 兩條拒絕路徑共用的回報
         {"parameters": {"assignments": {"assignments": [
+            # 節點名有三個可能來源，逐一退讓：$prevNode 在錯誤分支上不保證有值，
+            # 實測拿到 undefined（2026-08-11）。
+            {"id": nid(), "name": "failed_node", "type": "string",
+             "value": "={{ $json.error?.node?.name ?? $prevNode?.name ?? '未知節點' }}"},
+            # error 可能是字串也可能是物件；兩者都對不上時直接倒出整個 item，
+            # 至少看得到有什麼——比 undefined 有用得多。
+            {"id": nid(), "name": "fail_detail", "type": "string",
+             "value": "={{ typeof $json.error === 'string' ? $json.error"
+                      " : ($json.error?.message ?? $json.error?.description"
+                      " ?? JSON.stringify($json).slice(0, 400)) }}"},
+            # ⚠️ 同一個 Set 節點的各欄位都是對「輸入項目」求值、看不到彼此，
+            # 所以這裡不能引用上面兩個欄位，必須自足（2026-08-11 踩到）。
             {"id": nid(), "name": "fail_reason", "type": "string",
-             # $prevNode.name ＝ 把資料送進來的那個節點，也就是失敗的那一個。
-             # 十幾個節點共用這一個原因節點，靠它區分，不必每個各配一份。
-             "value": "={{ '同步在「' + $prevNode.name + '」節點失敗：' + "
-                      "($json.error?.message ?? $json.error ?? '未提供錯誤訊息') }}"},
+             "value": "={{ '同步在「'"
+                      " + ($json.error?.node?.name ?? $prevNode?.name ?? '未知節點')"
+                      " + '」節點失敗：'"
+                      " + (typeof $json.error === 'string' ? $json.error"
+                      " : ($json.error?.message ?? $json.error?.description"
+                      " ?? JSON.stringify($json).slice(0, 400))) }}"},
         ]}, "options": {}},
          "id": nid(), "name": "原因：節點失敗", "type": "n8n-nodes-base.set",
          "typeVersion": 3.4, "position": [2840, 780],
