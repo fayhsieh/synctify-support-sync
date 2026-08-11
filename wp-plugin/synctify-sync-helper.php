@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Synctify Sync Helper
  * Description: Notion → n8n → WordPress 自動上稿流程的輔助端點：開啟 Arconix FAQ REST、寫入 Elementor data、讀寫 TranslatePress 字典表、寫入 AIOSEO meta。
- * Version: 0.1.9
+ * Version: 0.2.0
  * Author: Synctify Marketing (Fay)
  *
  * 安裝：外掛 → 上傳外掛（打包成 zip），或直接放入 wp-content/mu-plugins/
@@ -62,6 +62,8 @@ add_action( 'rest_api_init', function () {
 			if ( empty( $data['elementor_data'] ) || ! is_array( $data['elementor_data'] ) ) {
 				return new WP_Error( 'bad_request', 'elementor_data (array) is required', array( 'status' => 400 ) );
 			}
+			// 標記為同步流程自己的寫入，避免觸發「人工套用草稿」的發佈回呼
+			$GLOBALS['synctify_internal_write'] = true;
 
 			// 覆蓋前備份（保留最近 3 份）
 			$backups   = get_post_meta( $post_id, '_synctify_elementor_backups', true ) ?: array();
@@ -379,6 +381,13 @@ add_action( 'rest_api_init', function () {
 			}
 			$p        = (array) $req->get_json_params();
 			$category = isset( $p['category'] ) ? (string) $p['category'] : '';
+
+			// 記住這篇對應的 Notion 母列——發佈回呼要靠它才知道該回寫哪一列。
+			// 放在這支端點是因為它在新建與更新兩條分路上都會跑到。
+			if ( ! empty( $p['notion_page_id'] ) ) {
+				update_post_meta( $post_id, '_synctify_notion_mother_id',
+				                  sanitize_text_field( $p['notion_page_id'] ) );
+			}
 
 			$resolved = array();
 			$desired  = array(
@@ -700,6 +709,77 @@ add_action( 'rest_api_init', function () {
  *   Caption  → `post_excerpt`（不是 post_content，後者是 Description）
  *   Title    → `post_title`（由 media_handle_sideload 的 $desc 帶入）
  */
+/* ---------------------------------------------------------------
+ * 3. 發佈回呼：WP 上按下發佈 → 通知 n8n → n8n 把 Notion 標成「已發佈」
+ *
+ * 為什麼繞經 n8n 而不直接打 Notion API：那樣得把 Notion token 存進 WordPress，
+ * 等於多一份要保管與輪替的憑證。n8n 本來就持有 Notion 憑證，讓它做這件事。
+ *
+ * 網址與密鑰讀自 wp-config.php 的常數，不寫在程式裡也不進資料庫：
+ *   define( 'SYNCTIFY_PUBLISH_WEBHOOK_URL',    'https://.../webhook/xxxx' );
+ *   define( 'SYNCTIFY_PUBLISH_WEBHOOK_HEADER', 'X-Synctify-Token' );
+ *   define( 'SYNCTIFY_PUBLISH_WEBHOOK_SECRET', '...' );
+ * 未定義時整組回呼靜默停用，不影響其他功能。
+ * ------------------------------------------------------------- */
+
+/** 我們自己的端點寫入時設為 true，避免同步流程觸發「人工發佈」的回呼 */
+$GLOBALS['synctify_internal_write'] = false;
+
+function synctify_notify_publish( $post_id, $event ) {
+	if ( ! defined( 'SYNCTIFY_PUBLISH_WEBHOOK_URL' ) || ! SYNCTIFY_PUBLISH_WEBHOOK_URL ) {
+		return;   // 未設定 → 功能停用
+	}
+	$notion_page = get_post_meta( $post_id, '_synctify_notion_mother_id', true );
+	if ( ! $notion_page ) {
+		return;   // 不是同步流程建立的文章，與 Notion 無對應關係
+	}
+	// 同一篇短時間內只通知一次（Elementor 存檔會連續觸發多個 hook）
+	$lock = 'synctify_notified_' . $post_id;
+	if ( get_transient( $lock ) ) {
+		return;
+	}
+	set_transient( $lock, 1, 60 );
+
+	$headers = array( 'Content-Type' => 'application/json' );
+	if ( defined( 'SYNCTIFY_PUBLISH_WEBHOOK_HEADER' ) && defined( 'SYNCTIFY_PUBLISH_WEBHOOK_SECRET' ) ) {
+		$headers[ SYNCTIFY_PUBLISH_WEBHOOK_HEADER ] = SYNCTIFY_PUBLISH_WEBHOOK_SECRET;
+	}
+	wp_remote_post( SYNCTIFY_PUBLISH_WEBHOOK_URL, array(
+		'headers'  => $headers,
+		'body'     => wp_json_encode( array(
+			'event'          => $event,
+			'post_id'        => (int) $post_id,
+			'notion_page_id' => $notion_page,
+			'permalink'      => get_permalink( $post_id ),
+		) ),
+		'timeout'  => 5,
+		'blocking' => false,   // 不要拖慢編輯器的存檔
+	) );
+}
+
+/* 情境一：草稿 → 發佈（新文章）。狀態真的發生轉換，這個 hook 就夠了。 */
+add_action( 'transition_post_status', function ( $new, $old, $post ) {
+	if ( 'docs' !== $post->post_type ) return;
+	if ( 'publish' !== $new || 'publish' === $old ) return;
+	if ( $GLOBALS['synctify_internal_write'] ) return;
+	synctify_notify_publish( $post->ID, 'published' );
+}, 10, 3 );
+
+/* 情境二：既有已發佈文章套用 Elementor 草稿。
+ * 文章本來就是 publish，不會有狀態轉換，情境一的 hook 不會被觸發——
+ * 改以「主文章的 _elementor_data 被改動」當訊號。
+ * 我們自己的同步對已發佈文章只寫 autosave（revision 的 meta），不會動到主文章的
+ * 這個鍵，所以這裡被觸發就代表是人工在編輯器裡套用了草稿。 */
+foreach ( array( 'updated_post_meta', 'added_post_meta' ) as $hook ) {
+	add_action( $hook, function ( $meta_id, $post_id, $meta_key ) {
+		if ( '_elementor_data' !== $meta_key ) return;
+		if ( $GLOBALS['synctify_internal_write'] ) return;
+		$post = get_post( $post_id );
+		if ( ! $post || 'docs' !== $post->post_type || 'publish' !== $post->post_status ) return;
+		synctify_notify_publish( $post_id, 'elementor_draft_applied' );
+	}, 10, 3 );
+}
+
 /**
  * 這個值是不是 AIOSEO 智慧標籤模板（而非純文字）？
  *

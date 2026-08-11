@@ -34,6 +34,7 @@ OUT = ROOT / "n8n" / "code-node.py"
 WF_OUT = ROOT / "n8n" / "notion-to-elementor-test.workflow.json"
 DRAFT_WF_OUT = ROOT / "n8n" / "notion-to-wp-draft.workflow.json"
 BUTTON_WF_OUT = ROOT / "n8n" / "notion-button-to-wp-draft.workflow.json"
+PUBCB_WF_OUT = ROOT / "n8n" / "wp-publish-callback.workflow.json"
 POLL_WF_OUT = ROOT / "n8n" / "notion-poll-to-wp-draft.workflow.json"
 
 # 測試用 Notion 頁面：Manage Exception Orders v2（已有手工轉換版本可比對）
@@ -451,6 +452,8 @@ WEBHOOK_PATH = "synctify-sync-CHANGE-ME-TO-A-RANDOM-STRING"
 # header 驗證，而不是只靠「網址猜不到」（網址會滲進 proxy log、瀏覽器紀錄）。
 # 密鑰存在 n8n 的 Header Auth 憑證裡，workflow JSON 只留引用，不入庫。
 WEBHOOK_AUTH_CRED_NAME = "Synctify Notion Button"
+# WP 發佈回呼的 webhook（觸發者是 WordPress 外掛，不是 Notion）
+PUBLISH_WEBHOOK_PATH = "synctify-published-CHANGE-ME-TO-A-RANDOM-STRING"
 
 # 輪詢的去留（Fay 2026-08-11：更新頻率不高，按鈕通了就不需要一直空掃）
 #   "active"   定時觸發啟用
@@ -639,6 +642,11 @@ def build_polling_workflow(code):
             {"id": nid(), "name": "category",
              "value": "={{ $json.properties['Category']?.select?.name ?? '' }}",
              "type": "string"},
+            # 結構是三層：母列 → 版本子列 → (Draft) 草稿層。只有中間那層可以同步。
+            # 沒有 Parent item ＝ 最上層母列（沒有內容區塊，同步會轉出空文章）。
+            {"id": nid(), "name": "is_mother",
+             "value": "={{ !($json.properties['Parent item']?.relation?.length) }}",
+             "type": "boolean"},
         ]}, "options": {}},
          "id": nid(), "name": PICK, "type": "n8n-nodes-base.set",
          "typeVersion": 3.4, "position": [640, 300],
@@ -719,6 +727,68 @@ def build_polling_workflow(code):
          "notes": "與轉換節點同一份程式，靠 mode=apply_media 走回填分支。\n"
                   "上傳失敗的圖會退回佔位圖，避免把會過期的網址寫進 WP。"},
 
+        # ── 防呆①：按到最上層母列
+        {"parameters": {"conditions": {
+            "options": {"caseSensitive": True, "typeValidation": "loose", "version": 2},
+            "conditions": [{"id": nid(), "leftValue": "={{ $json.is_mother }}",
+                            "operator": {"type": "boolean", "operation": "true",
+                                         "singleValue": True}, "rightValue": ""}],
+            "combinator": "and"}},
+         "id": nid(), "name": "是母列？（誤按防呆）", "type": "n8n-nodes-base.if",
+         "typeVersion": 2.2, "position": [1080, 460],
+         "notes": "按鈕是資料庫欄位，每一列都有，母列上藏不掉——只能在這裡擋。\n"
+                  "母列沒有內容區塊，放行的話會轉出一篇空文章蓋掉正式內容。\n"
+                  "輸出 true＝是母列（拒絕）／false＝版本子列（繼續）。"},
+
+        {"parameters": {"assignments": {"assignments": [
+            {"id": nid(), "name": "fail_reason", "type": "string",
+             "value": "這是最上層母列，沒有內容區塊。請改按版本子列（帶 - vN 的那列）。"},
+        ]}, "options": {}},
+         "id": nid(), "name": "原因：按到母列", "type": "n8n-nodes-base.set",
+         "typeVersion": 3.4, "position": [1300, 560]},
+
+        # ── 防呆②：按到第三層（老闆的 (Draft) 草稿）
+        {"parameters": {"conditions": {
+            "options": {"caseSensitive": True, "typeValidation": "loose", "version": 2},
+            "conditions": [{"id": nid(),
+                            "leftValue": "={{ $json.properties['Parent item']"
+                                         "?.relation?.length ?? 0 }}",
+                            "operator": {"type": "number", "operation": "gt"},
+                            "rightValue": 0}],
+            "combinator": "and"}},
+         "id": nid(), "name": "母列自己還有上層？（草稿層防呆）",
+         "type": "n8n-nodes-base.if", "typeVersion": 2.2, "position": [2620, 560],
+         "notes": "5-1／5-3／5-4 底下藏著早期沒有 spec 時做的 (Draft) 草稿（深度 3）。\n"
+                  "若「母列」自己還有 Parent item，代表按到的是草稿層，一律不同步。\n"
+                  "用深度判斷而非命名或 Status——結構訊號不依賴命名紀律。"},
+
+        {"parameters": {"assignments": {"assignments": [
+            {"id": nid(), "name": "fail_reason", "type": "string",
+             "value": "這是 (Draft) 草稿層（深度 3），不會同步到站上。"
+                      "請改按正式的版本子列。"},
+        ]}, "options": {}},
+         "id": nid(), "name": "原因：按到草稿層", "type": "n8n-nodes-base.set",
+         "typeVersion": 3.4, "position": [2840, 660]},
+
+        # ── 兩條拒絕路徑共用的回報
+        {"parameters": notion_http(
+            "PATCH", "=https://api.notion.com/v1/pages/{{ " + f"$('{PICK}').first().json.page_id" + " }}",
+            '={{ { "properties": { "上稿狀態": { "select": { "name": "❌ 同步失敗" } } } } }}'),
+         "id": nid(), "name": "回寫：同步失敗", "type": "n8n-nodes-base.httpRequest",
+         "typeVersion": 4.2, "position": [3060, 620],
+         "credentials": {"notionApi": {"id": NOTION_CRED_ID, "name": NOTION_CRED_NAME}},
+         "notes": "寫在「被按下的那一列」而不是母列——使用者在哪裡按就在哪裡看到結果。"},
+
+        {"parameters": notion_http(
+            "POST", "https://api.notion.com/v1/comments",
+            '={{ { "parent": { "page_id": ' + f"$('{PICK}').first().json.page_id" + ' }, '
+            '"rich_text": [ { "text": { "content": "⚠️ 同步已中止：" + $json.fail_reason } } ] } }}'),
+         "id": nid(), "name": "Notion：留言說明原因", "type": "n8n-nodes-base.httpRequest",
+         "typeVersion": 4.2, "position": [3280, 620],
+         "credentials": {"notionApi": {"id": NOTION_CRED_ID, "name": NOTION_CRED_NAME}},
+         "notes": "按鈕觸發時沒人在看 n8n，所以把原因留言回 Notion 頁面上。\n"
+                  "留言比 select 值能承載更多資訊，使用者當場就知道該怎麼做。"},
+
         {"parameters": notion_http(
             "GET", "=https://api.notion.com/v1/pages/{{ " + f"$('{PICK}').first().json.mother_id" + " }}"),
          "id": nid(), "name": MOTHER, "type": "n8n-nodes-base.httpRequest",
@@ -787,6 +857,8 @@ def build_polling_workflow(code):
             "=" + WP_BASE + "/wp-json/synctify/v1/doc/defaults/"
             "{{ $('WP：寫入 Elementor 版面').item.json.post_id }}",
             '={{ { "category": ' + f"$('{PICK}').first().json.category" + ', '
+            # 把 Notion 母列 id 存進文章 meta：WP 端按下發佈時，外掛靠它知道要回寫哪一列
+            '"notion_page_id": ' + f"$('{PICK}').first().json.mother_id" + ', '
             '"allow_published": true } }}'),
          "id": nid(), "name": "WP：套用站方預設欄位",
          "type": "n8n-nodes-base.httpRequest", "typeVersion": 4.2, "position": [3500, 300],
@@ -824,11 +896,10 @@ def build_polling_workflow(code):
             '={{ { "properties": { '
             '"WP Post ID": { "rich_text": [ { "text": { "content": '
             'String($(\'WP：寫入 Elementor 版面\').item.json.post_id) } } ] }, '
-            # 上稿狀態由寫入回應判斷：/draft 端點會回 autosave_id，一般端點不會。
-            # 這樣不必跨分路取值（$json 此時是寫入回應，沒有上游的 sync_status）
-            '"上稿狀態": { "select": { "name": '
-            '$(\'WP：寫入 Elementor 版面\').item.json.autosave_id '
-            '? "待確認發佈" : "草稿已建立" } }, '
+            # 同步成功一律「草稿已建立」（Fay 2026-08-11 決定）。原本會依 autosave_id
+            # 分寫「待確認發佈」，但實務上兩者對小編是同一件事：看到這個狀態就代表
+            # 同步成功、可以去 WP 處理。「已發佈」改由外掛在 WP 端按下發佈時回呼寫入。
+            '"上稿狀態": { "select": { "name": "草稿已建立" } }, '
             '"最後同步時間": { "date": { "start": $now.toISO() } } } } }}'),
          "id": nid(), "name": "Notion：回寫母列",
          "type": "n8n-nodes-base.httpRequest", "typeVersion": 4.2, "position": [3940, 300],
@@ -857,10 +928,31 @@ def build_polling_workflow(code):
             [{"node": "全部完成", "type": "main", "index": 0}],
             [{"node": PICK, "type": "main", "index": 0}]]},
     }
-    chain = [PICK, "先取消勾選（認領）", "Notion：取得頁面 blocks", PARAMS, CONV,
-             "WP：上傳圖片", "組合回填輸入", "回填媒體網址", MOTHER, "母列有 WP Post ID？"]
+    # 防呆①刻意排在「先取消勾選」之後：先認領再檢查，否則被拒絕的列會一直留著勾，
+    # 輪詢每一輪都重抓同一列。
+    chain = [PICK, "先取消勾選（認領）", "是母列？（誤按防呆）"]
+    chain2 = ["Notion：取得頁面 blocks", PARAMS, CONV,
+              "WP：上傳圖片", "組合回填輸入", "回填媒體網址", MOTHER,
+              "母列自己還有上層？（草稿層防呆）"]
     for a, b in zip(chain, chain[1:]):
         conns[a] = {"main": [[{"node": b, "type": "main", "index": 0}]]}
+    for a, b in zip(chain2, chain2[1:]):
+        conns[a] = {"main": [[{"node": b, "type": "main", "index": 0}]]}
+
+    # IF 的輸出 0＝true（命中＝要拒絕）、輸出 1＝false（放行）
+    conns["是母列？（誤按防呆）"] = {"main": [
+        [{"node": "原因：按到母列", "type": "main", "index": 0}],
+        [{"node": "Notion：取得頁面 blocks", "type": "main", "index": 0}]]}
+    conns["母列自己還有上層？（草稿層防呆）"] = {"main": [
+        [{"node": "原因：按到草稿層", "type": "main", "index": 0}],
+        [{"node": "母列有 WP Post ID？", "type": "main", "index": 0}]]}
+
+    # 兩條拒絕路徑匯流 → 回寫失敗 → 留言 → 回到迴圈取下一篇
+    for n in ("原因：按到母列", "原因：按到草稿層"):
+        conns[n] = {"main": [[{"node": "回寫：同步失敗", "type": "main", "index": 0}]]}
+    conns["回寫：同步失敗"] = {"main": [
+        [{"node": "Notion：留言說明原因", "type": "main", "index": 0}]]}
+    conns["Notion：留言說明原因"] = {"main": [[{"node": LOOP, "type": "main", "index": 0}]]}
 
     # 分路：有 Post ID → 查既有文章狀態；沒有 → 建新草稿。兩路都匯到寫入版面。
     conns["母列有 WP Post ID？"] = {"main": [
@@ -908,6 +1000,90 @@ def build_polling_workflow(code):
                  "一次處理所有勾選的列（迴圈逐篇），每篇開頭先取消勾選以避免重複。"
                  "不去重、不更新既有文章。"},
         "tags": [],
+    }
+
+
+def build_publish_callback_workflow():
+    """WP 按下發佈 → 外掛打這個 webhook → 把 Notion 母列標成「已發佈」。
+
+    刻意獨立成一條極短的 workflow：它的觸發者是 WordPress 而非 Notion，
+    生命週期與上稿流程無關，混在同一條裡只會讓那張圖更難讀。
+
+    外掛送的 body：{ event, post_id, notion_page_id, permalink }
+      event = published                （草稿 → 發佈，新文章）
+            | elementor_draft_applied  （既有已發佈文章套用了 Elementor 草稿）
+    """
+    _n = [0]
+    def nid():
+        _n[0] += 1
+        return f"pub{_n[0]:03d}"
+
+    nodes = [
+        {"parameters": {
+            "httpMethod": "POST",
+            "path": PUBLISH_WEBHOOK_PATH,
+            "responseMode": "onReceived",
+            "authentication": "headerAuth",
+            "options": {}},
+         "id": nid(), "name": "WP 發佈回呼（Webhook）", "type": "n8n-nodes-base.webhook",
+         "typeVersion": 2, "position": [-300, 300], "webhookId": nid(),
+         "credentials": {"httpHeaderAuth": {"id": "", "name": WEBHOOK_AUTH_CRED_NAME}},
+         "notes": "由輔助外掛（0.2.0+）觸發，不是 Notion 按鈕。\n"
+                  "\n"
+                  "WP 端要在 wp-config.php 定義三個常數：\n"
+                  "  SYNCTIFY_PUBLISH_WEBHOOK_URL    ← 本節點的 Production URL\n"
+                  "  SYNCTIFY_PUBLISH_WEBHOOK_HEADER ← 與憑證同名的 header\n"
+                  "  SYNCTIFY_PUBLISH_WEBHOOK_SECRET ← 與憑證同值\n"
+                  "未定義時外掛靜默停用回呼，其他功能不受影響。\n"
+                  "\n"
+                  "憑證沿用「" + WEBHOOK_AUTH_CRED_NAME + "」——同一批人、同一個信任邊界，\n"
+                  "分開兩組密鑰只是多一份要輪替的東西，換不到實質隔離。"},
+
+        {"parameters": {"conditions": {
+            "options": {"caseSensitive": True, "typeValidation": "loose", "version": 2},
+            "conditions": [{"id": nid(),
+                            "leftValue": "={{ $json.body?.notion_page_id ?? '' }}",
+                            "operator": {"type": "string", "operation": "notEmpty",
+                                         "singleValue": True}, "rightValue": ""}],
+            "combinator": "and"}},
+         "id": nid(), "name": "有帶 Notion 母列 id？", "type": "n8n-nodes-base.if",
+         "typeVersion": 2.2, "position": [-80, 300],
+         "notes": "非同步流程建立的文章沒有這個 meta，外掛本來就不會送；\n"
+                  "這裡再擋一次，避免把空 id 打進 Notion API。"},
+
+        {"parameters": {}, "id": nid(), "name": "略過（非同步文章）",
+         "type": "n8n-nodes-base.noOp", "typeVersion": 1, "position": [140, 440]},
+
+        {"parameters": {
+            "method": "PATCH",
+            "url": "=https://api.notion.com/v1/pages/{{ $json.body.notion_page_id }}",
+            "authentication": "predefinedCredentialType",
+            "nodeCredentialType": "notionApi",
+            "sendBody": True, "specifyBody": "json",
+            "jsonBody": '={{ { "properties": { '
+                        '"上稿狀態": { "select": { "name": "已發佈" } }, '
+                        '"最後同步時間": { "date": { "start": $now.toISO() } } } } }}',
+            "options": {}},
+         "id": nid(), "name": "Notion：標記已發佈",
+         "type": "n8n-nodes-base.httpRequest", "typeVersion": 4.2, "position": [140, 220],
+         "credentials": {"notionApi": {"id": NOTION_CRED_ID, "name": NOTION_CRED_NAME}},
+         "notes": "兩種 event 都寫「已發佈」：\n"
+                  "  published                → 新文章從草稿發佈\n"
+                  "  elementor_draft_applied  → 既有已發佈文章套用了 Elementor 草稿\n"
+                  "對小編而言兩者是同一件事：站上內容已經是最新的。"},
+    ]
+
+    conns = {
+        "WP 發佈回呼（Webhook）": {"main": [
+            [{"node": "有帶 Notion 母列 id？", "type": "main", "index": 0}]]},
+        "有帶 Notion 母列 id？": {"main": [
+            [{"node": "Notion：標記已發佈", "type": "main", "index": 0}],
+            [{"node": "略過（非同步文章）", "type": "main", "index": 0}]]},
+    }
+    return {
+        "name": "Synctify — WP 發佈回呼 → Notion 標記已發佈",
+        "nodes": nodes, "connections": conns, "active": False,
+        "settings": {"executionOrder": "v1"},
     }
 
 
@@ -1115,6 +1291,11 @@ def main():
     POLL_WF_OUT.write_text(json.dumps(build_polling_workflow(body), ensure_ascii=False, indent=2),
                            encoding="utf-8")
     print(f"✓ 已產生 {POLL_WF_OUT}（Notion 按鈕 ＋ 勾選輪詢，共用同一條鏈）")
+
+    PUBCB_WF_OUT.write_text(
+        json.dumps(build_publish_callback_workflow(), ensure_ascii=False, indent=2),
+        encoding="utf-8")
+    print(f"✓ 已產生 {PUBCB_WF_OUT}（WP 發佈回呼 → Notion 標記已發佈）")
 
 
 if __name__ == "__main__":

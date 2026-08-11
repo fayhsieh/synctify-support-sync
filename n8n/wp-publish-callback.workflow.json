@@ -1,0 +1,136 @@
+{
+  "name": "Synctify — WP 發佈回呼 → Notion 標記已發佈",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "synctify-published-CHANGE-ME-TO-A-RANDOM-STRING",
+        "responseMode": "onReceived",
+        "authentication": "headerAuth",
+        "options": {}
+      },
+      "id": "pub001",
+      "name": "WP 發佈回呼（Webhook）",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -300,
+        300
+      ],
+      "webhookId": "pub002",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "",
+          "name": "Synctify Notion Button"
+        }
+      },
+      "notes": "由輔助外掛（0.2.0+）觸發，不是 Notion 按鈕。\n\nWP 端要在 wp-config.php 定義三個常數：\n  SYNCTIFY_PUBLISH_WEBHOOK_URL    ← 本節點的 Production URL\n  SYNCTIFY_PUBLISH_WEBHOOK_HEADER ← 與憑證同名的 header\n  SYNCTIFY_PUBLISH_WEBHOOK_SECRET ← 與憑證同值\n未定義時外掛靜默停用回呼，其他功能不受影響。\n\n憑證沿用「Synctify Notion Button」——同一批人、同一個信任邊界，\n分開兩組密鑰只是多一份要輪替的東西，換不到實質隔離。"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "pub003",
+              "leftValue": "={{ $json.body?.notion_page_id ?? '' }}",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty",
+                "singleValue": true
+              },
+              "rightValue": ""
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "pub004",
+      "name": "有帶 Notion 母列 id？",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -80,
+        300
+      ],
+      "notes": "非同步流程建立的文章沒有這個 meta，外掛本來就不會送；\n這裡再擋一次，避免把空 id 打進 Notion API。"
+    },
+    {
+      "parameters": {},
+      "id": "pub005",
+      "name": "略過（非同步文章）",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        140,
+        440
+      ]
+    },
+    {
+      "parameters": {
+        "method": "PATCH",
+        "url": "=https://api.notion.com/v1/pages/{{ $json.body.notion_page_id }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "notionApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { \"properties\": { \"上稿狀態\": { \"select\": { \"name\": \"已發佈\" } }, \"最後同步時間\": { \"date\": { \"start\": $now.toISO() } } } } }}",
+        "options": {}
+      },
+      "id": "pub006",
+      "name": "Notion：標記已發佈",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        140,
+        220
+      ],
+      "credentials": {
+        "notionApi": {
+          "id": "xfGHH7Wx4EucMC0X",
+          "name": "Support Center Sync"
+        }
+      },
+      "notes": "兩種 event 都寫「已發佈」：\n  published                → 新文章從草稿發佈\n  elementor_draft_applied  → 既有已發佈文章套用了 Elementor 草稿\n對小編而言兩者是同一件事：站上內容已經是最新的。"
+    }
+  ],
+  "connections": {
+    "WP 發佈回呼（Webhook）": {
+      "main": [
+        [
+          {
+            "node": "有帶 Notion 母列 id？",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "有帶 Notion 母列 id？": {
+      "main": [
+        [
+          {
+            "node": "Notion：標記已發佈",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "略過（非同步文章）",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

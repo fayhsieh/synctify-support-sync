@@ -49,10 +49,15 @@ WordPress 端的自訂 REST 端點，補足標準 REST API 做不到的部分。
 | `POST /synctify/v1/media/sideload` | 把 Notion 的 S3 暫存圖匯入媒體庫，並寫入 title / alt / caption |
 | `POST /synctify/v1/tp/lookup` | 查詢 TranslatePress 字典表（取得未翻譯字串） |
 | `POST /synctify/v1/tp/update` | 寫入譯文（status=2 人工翻譯永不覆蓋） |
-| `POST /synctify/v1/doc/defaults/{id}` | 套用站方統一欄位：封面照 `opengraph`、作者 The Synctify Team、討論 closed、Parent 依 Notion Category 對到分類頁。全部依名稱在站上解析，不寫死 ID |
+| `POST /synctify/v1/doc/defaults/{id}` | 套用站方統一欄位：封面照 `opengraph`、作者 The Synctify Team、討論 closed、Parent 依 Notion Category 對到分類頁。全部依名稱在站上解析，不寫死 ID。另存 `notion_page_id` 供發佈回呼對應 |
 | `POST /synctify/v1/seo/{id}` | 寫入 AIOSEO meta title / description。回傳 `previous` 供還原；現值是 AIOSEO 智慧標籤模板、**或為空（＝沿用全站範本）**的欄位預設跳過不寫，回應的 `preserved` 標明原因（預設只保護 `title`，見 `preserve_smart_tags`） |
 
 另外開啟 Arconix FAQ post type 的 REST 存取。
+
+**發佈回呼**（0.2.0+）：WP 按下發佈（或對已發佈文章套用 Elementor 草稿）時，外掛打一個
+n8n webhook，由 n8n 把 Notion 母列標成「已發佈」。外掛不持有 Notion token。
+需在 `wp-config.php` 定義 `SYNCTIFY_PUBLISH_WEBHOOK_URL` / `_HEADER` / `_SECRET`，
+未定義時靜默停用。
 
 **安裝**：打包成 zip 從後台上傳，或整個檔案放進 `wp-content/mu-plugins/`。
 
