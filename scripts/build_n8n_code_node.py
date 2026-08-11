@@ -167,6 +167,19 @@ for _it in _items:
 if _payloads and "mode" in _payloads[0] and _payloads[0]["mode"] == "apply_media":
     return [{"json": _apply_media(_payloads[0])}]
 
+# mode=version_marks：算出「vN 成為現行版本」後，母列與子列要改哪些字
+if _payloads and "mode" in _payloads[0] and _payloads[0]["mode"] == "version_marks":
+    _p = _payloads[0]
+    _plan = plan_version_marks(_p["rows"] if "rows" in _p else [],
+                               _p["blocks"] if "blocks" in _p else [],
+                               _p["version"] if "version" in _p else "")
+    # 兩個清單都可能是空的（已經是正確狀態）——下游用 splitOut 會自然跳過
+    return [{"json": {"row_renames": _plan["row_renames"],
+                      "block_updates": _plan["block_updates"],
+                      "version": short_version(_p["version"] if "version" in _p else ""),
+                      "nothing_to_do": (not _plan["row_renames"]
+                                        and not _plan["block_updates"])}}]
+
 _blocks, _meta = _collect(_payloads)
 
 if not _blocks:
@@ -1043,7 +1056,7 @@ def build_polling_workflow(code):
     }
 
 
-def build_publish_callback_workflow():
+def build_publish_callback_workflow(code):
     """WP 按下發佈 → 外掛打這個 webhook → 把 Notion 母列標成「已發佈」。
 
     刻意獨立成一條極短的 workflow：它的觸發者是 WordPress 而非 Notion，
@@ -1057,6 +1070,18 @@ def build_publish_callback_workflow():
     def nid():
         _n[0] += 1
         return f"pub{_n[0]:03d}"
+
+    def notion_http(method, url, body=None):
+        p = {"method": method, "url": url,
+             "authentication": "predefinedCredentialType",
+             "nodeCredentialType": "notionApi",
+             "sendHeaders": True,
+             "headerParameters": {"parameters": [
+                 {"name": "Notion-Version", "value": "2022-06-28"}]},
+             "options": {}}
+        if body is not None:
+            p.update({"sendBody": True, "specifyBody": "json", "jsonBody": body})
+        return p
 
     nodes = [
         {"parameters": {
@@ -1134,14 +1159,125 @@ def build_publish_callback_workflow():
                   "設 onError=continue：舊文章的 meta 裡沒有 notion_row_id（那是\n"
                   "外掛 0.2.1 之後才存的），這一步失敗不該讓整條回呼算失敗。"})
 
+    # ── 版本標記自動化（Fay 2026-08-11）：發佈後老闆與小編常忘記手動改這四處，
+    #    改由流程接手。文字判斷全在 Python 那層（有單元測試），這裡只負責打 API。
+    WH = "WP 發佈回呼（Webhook）"
+    row_id = f"$('{WH}').item.json.body.notion_row_id"
+    mother_id = f"$('{WH}').item.json.body.notion_page_id"
+
+    nodes += [
+        {"parameters": notion_http(
+            "GET", "=https://api.notion.com/v1/pages/{{ " + row_id + " }}"),
+         "id": nid(), "name": "Notion：讀取本次發佈的版本",
+         "type": "n8n-nodes-base.httpRequest", "typeVersion": 4.2, "position": [580, 220],
+         "credentials": {"notionApi": {"id": NOTION_CRED_ID, "name": NOTION_CRED_NAME}},
+         "notes": "取這一列的 Version 屬性，決定誰是新的現行版本。"},
+
+        {"parameters": notion_http(
+            "POST", f"https://api.notion.com/v1/databases/{NOTION_DB_ID}/query",
+            '={{ { "filter": { "property": "Parent item", "relation": '
+            '{ "contains": ' + mother_id + ' } }, "page_size": 50 } }}'),
+         "id": nid(), "name": "Notion：取得同篇所有版本",
+         "type": "n8n-nodes-base.httpRequest", "typeVersion": 4.2, "position": [800, 220],
+         "credentials": {"notionApi": {"id": NOTION_CRED_ID, "name": NOTION_CRED_NAME}},
+         "notes": "用 relation contains 一次撈回同一母列底下的所有版本子列，\n"
+                  "不必逐列 GET。要改名的與要拿掉 (Current) 的都在這批裡。"},
+
+        {"parameters": notion_http(
+            "GET", "=https://api.notion.com/v1/blocks/{{ " + mother_id + " }}/children"
+                   "?page_size=100"),
+         "id": nid(), "name": "Notion：取得母列內容區塊",
+         "type": "n8n-nodes-base.httpRequest", "typeVersion": 4.2, "position": [1020, 220],
+         "credentials": {"notionApi": {"id": NOTION_CRED_ID, "name": NOTION_CRED_NAME}},
+         "notes": "Overview 的 Current Version 與 Version History 的標題都在這裡面。"},
+
+        {"parameters": {"assignments": {"assignments": [
+            {"id": nid(), "name": "mode", "value": "version_marks", "type": "string"},
+            {"id": nid(), "name": "version", "type": "string",
+             "value": "={{ $('Notion：讀取本次發佈的版本').item.json"
+                      ".properties['Version']?.select?.name ?? '' }}"},
+            {"id": nid(), "name": "rows", "type": "array",
+             "value": "={{ $('Notion：取得同篇所有版本').item.json.results.map(r => ({"
+                      " id: r.id,"
+                      " title: r.properties['Doc name']?.title?.[0]?.plain_text ?? '',"
+                      " version: r.properties['Version']?.select?.name ?? '' })) }}"},
+            {"id": nid(), "name": "blocks", "type": "array",
+             "value": "={{ $('Notion：取得母列內容區塊').item.json.results }}"},
+        ]}, "options": {}},
+         "id": nid(), "name": "組裝版本標記輸入", "type": "n8n-nodes-base.set",
+         "typeVersion": 3.4, "position": [1240, 220]},
+
+        {"parameters": {"language": "pythonNative", "pythonCode": code},
+         "id": nid(), "name": "算出要改哪些字", "type": "n8n-nodes-base.code",
+         "typeVersion": 2, "position": [1460, 220],
+         "notes": "與轉換節點同一份程式，靠 mode=version_marks 走這條分支。\n"
+                  "已經是正確狀態時兩個清單都是空的，下游 splitOut 自然什麼都不做。"},
+
+        {"parameters": {"fieldToSplitOut": "row_renames", "options": {}},
+         "id": nid(), "name": "拆出要改名的子列", "type": "n8n-nodes-base.splitOut",
+         "typeVersion": 1, "position": [1680, 120]},
+
+        {"parameters": notion_http(
+            "PATCH", "=https://api.notion.com/v1/pages/{{ $json.id }}",
+            '={{ { "properties": { "Doc name": { "title": [ { "text": '
+            '{ "content": $json.title } } ] } } } }}'),
+         "id": nid(), "name": "Notion：改子列篇名",
+         "type": "n8n-nodes-base.httpRequest", "typeVersion": 4.2, "position": [1900, 120],
+         "credentials": {"notionApi": {"id": NOTION_CRED_ID, "name": NOTION_CRED_NAME}},
+         "notes": "只改 (Current) 後綴。站上文章標題不受影響——同步時的 clean_title\n"
+                  "本來就會把版本後綴與 (Current) 剝掉。"},
+
+        {"parameters": {"fieldToSplitOut": "block_updates", "options": {}},
+         "id": nid(), "name": "拆出要改寫的區塊", "type": "n8n-nodes-base.splitOut",
+         "typeVersion": 1, "position": [1680, 320]},
+
+        {"parameters": notion_http(
+            "PATCH", "=https://api.notion.com/v1/blocks/{{ $json.id }}",
+            '={{ { [$json.type]: { "rich_text": $json.rich_text } } }}'),
+         "id": nid(), "name": "Notion：改寫母列區塊",
+         "type": "n8n-nodes-base.httpRequest", "typeVersion": 4.2, "position": [1900, 320],
+         "credentials": {"notionApi": {"id": NOTION_CRED_ID, "name": NOTION_CRED_NAME}},
+         "notes": "Overview 的 Current Version 那行、以及 Version History 的標題。\n"
+                  "rich_text 由 Python 端組好並沿用原本的粗體，避免排版跑掉。"},
+
+        {"parameters": notion_http(
+            "PATCH", "=https://api.notion.com/v1/pages/{{ " + mother_id + " }}",
+            '={{ { "properties": { "Version": { "select": { "name": '
+            "$('Notion：讀取本次發佈的版本').item.json.properties['Version'].select.name"
+            ' } } } } }}'),
+         "id": nid(), "name": "Notion：母列 Version 對齊",
+         "type": "n8n-nodes-base.httpRequest", "typeVersion": 4.2, "position": [1680, 480],
+         "credentials": {"notionApi": {"id": NOTION_CRED_ID, "name": NOTION_CRED_NAME}},
+         "notes": "母列的 Version 屬性＝目前的現行版本，沿用子列的原始標籤\n"
+                  "（v1 的標籤是「v1 (Initial Version)」，不可自行縮寫）。"},
+    ]
+
     conns = {
-        "WP 發佈回呼（Webhook）": {"main": [
-            [{"node": "有帶 Notion 母列 id？", "type": "main", "index": 0}]]},
+        WH: {"main": [[{"node": "有帶 Notion 母列 id？", "type": "main", "index": 0}]]},
         "有帶 Notion 母列 id？": {"main": [
             [{"node": "Notion：標記已發佈", "type": "main", "index": 0}],
             [{"node": "略過（非同步文章）", "type": "main", "index": 0}]]},
         "Notion：標記已發佈": {"main": [
             [{"node": "Notion：子列也標記已發佈", "type": "main", "index": 0}]]},
+        "Notion：子列也標記已發佈": {"main": [
+            [{"node": "Notion：讀取本次發佈的版本", "type": "main", "index": 0}]]},
+        "Notion：讀取本次發佈的版本": {"main": [
+            [{"node": "Notion：取得同篇所有版本", "type": "main", "index": 0}]]},
+        "Notion：取得同篇所有版本": {"main": [
+            [{"node": "Notion：取得母列內容區塊", "type": "main", "index": 0}]]},
+        "Notion：取得母列內容區塊": {"main": [
+            [{"node": "組裝版本標記輸入", "type": "main", "index": 0}]]},
+        "組裝版本標記輸入": {"main": [
+            [{"node": "算出要改哪些字", "type": "main", "index": 0}]]},
+        # 三條並行的收尾：改名、改區塊、對齊母列 Version
+        "算出要改哪些字": {"main": [[
+            {"node": "拆出要改名的子列", "type": "main", "index": 0},
+            {"node": "拆出要改寫的區塊", "type": "main", "index": 0},
+            {"node": "Notion：母列 Version 對齊", "type": "main", "index": 0}]]},
+        "拆出要改名的子列": {"main": [
+            [{"node": "Notion：改子列篇名", "type": "main", "index": 0}]]},
+        "拆出要改寫的區塊": {"main": [
+            [{"node": "Notion：改寫母列區塊", "type": "main", "index": 0}]]},
     }
     return {
         "name": "Synctify — WP 發佈回呼 → Notion 標記已發佈",
@@ -1356,7 +1492,7 @@ def main():
     print(f"✓ 已產生 {POLL_WF_OUT}（Notion 按鈕 ＋ 勾選輪詢，共用同一條鏈）")
 
     PUBCB_WF_OUT.write_text(
-        json.dumps(build_publish_callback_workflow(), ensure_ascii=False, indent=2),
+        json.dumps(build_publish_callback_workflow(body), ensure_ascii=False, indent=2),
         encoding="utf-8")
     print(f"✓ 已產生 {PUBCB_WF_OUT}（WP 發佈回呼 → Notion 標記已發佈）")
 

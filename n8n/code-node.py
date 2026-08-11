@@ -374,6 +374,118 @@ def _blank(lines):
     if lines and lines[-1].strip():
         lines.append("")
 
+
+# ---------- 版本標記（母列的 Current 標示自動維護）----------
+#
+# 每次發佈新版本後，人工要改四個地方，老闆與小編常忘記（Fay 2026-08-11）：
+#   1. 版本子列篇名的 ` (Current)` 後綴
+#   2. 母列 Overview 的 `- Current Version: vN (Month Year)`
+#   3. 母列 Version History 裡 `### **vN – Month Year (Current)**` 的標記
+#   4. 母列的 Version 屬性
+# 這裡負責算出 1～3 要改成什麼；4 是單純的屬性寫入，由 workflow 直接處理。
+#
+# 格式取自實際母列（5-5 Shipment Routing，2026-08-11 讀出）。破折號是 en dash `–`，
+# 標題整段帶粗體——改寫時要保留，否則排版會壞掉。
+
+_CURRENT_SUFFIX = " (Current)"
+_VER_TOKEN = re.compile(r"^\s*v(\d+)", re.I)
+# `v3 – May 2026 (Current)` → 版本、日期、既有標記
+_VH_HEADING = re.compile(
+    r"^\s*v(\d+)\s*[–—-]\s*(.*?)\s*(?:\(\s*current\s*\))?\s*$", re.I | re.S)
+_OVERVIEW_LINE = re.compile(
+    r"^(\s*Current\s+Version\s*:\s*)(.*?)$", re.I | re.S)
+
+
+def short_version(label):
+    """`v1 (Initial Version)` → `v1`；已是短格式則原樣回傳。"""
+    m = _VER_TOKEN.match(label or "")
+    return f"v{m.group(1)}" if m else (label or "").strip()
+
+
+def _same_version(a, b):
+    return short_version(a).lower() == short_version(b).lower()
+
+
+def _restyle(items, text):
+    """用原本第一段的樣式包裝新文字，保留粗體／斜體等標註。"""
+    ann = {}
+    for t in items or []:
+        try:
+            ann = t.get("annotations") or {}
+        except AttributeError:
+            ann = {}
+        break
+    out = {"type": "text", "text": {"content": text}}
+    if ann:
+        out["annotations"] = ann
+    return [out]
+
+
+def strip_current(title):
+    """去掉篇名結尾的 ` (Current)`（容忍大小寫與多餘空白）。"""
+    return re.sub(r"\s*\(\s*current\s*\)\s*$", "", title or "", flags=re.I).rstrip()
+
+
+def plan_version_marks(rows, blocks, version):
+    """算出「vN 成為現行版本」後要做的改動。
+
+    rows   —— 母列底下的版本子列 [{"id":…, "title":…, "version":…}]
+    blocks —— 母列頁面的區塊（Notion API 原生格式）
+    version—— 剛發佈的版本標籤（`v3` 或 `v3 (Initial Version)` 皆可）
+
+    回傳 {"row_renames": [...], "block_updates": [...]}，兩者都只包含**真的需要
+    改動**的項目——沒有變化就不送 API，避免在 Notion 的編輯紀錄裡刷出無意義的版本。
+    """
+    target = short_version(version)
+    renames, updates = [], []
+
+    # ① 子列篇名：目標版本加上 (Current)，其餘拿掉
+    for r in rows or []:
+        title = r.get("title") or ""
+        base = strip_current(title)
+        want = base + _CURRENT_SUFFIX if _same_version(r.get("version") or base, target) else base
+        if want != title:
+            renames.append({"id": r.get("id"), "title": want})
+
+    # 先掃一遍 Version History，取得目標版本的日期字串，供 Overview 沿用
+    target_date = ""
+    for b in blocks or []:
+        if (b.get("type") or "") .startswith("heading_"):
+            m = _VH_HEADING.match(_plain(_rt_items(b.get(b["type"]) or {})))
+            if m and _same_version("v" + m.group(1), target):
+                target_date = (m.group(2) or "").strip()
+                break
+
+    for b in blocks or []:
+        btype = b.get("type") or ""
+        data = b.get(btype) or {}
+        items = _rt_items(data)
+        text = _plain(items)
+
+        # ② Overview 的 `Current Version: …`
+        if btype in ("bulleted_list_item", "paragraph", "numbered_list_item"):
+            m = _OVERVIEW_LINE.match(text)
+            if m:
+                tail = f"{target} ({target_date})" if target_date else target
+                new = m.group(1) + tail
+                if new != text:
+                    updates.append({"id": b.get("id"), "type": btype,
+                                    "rich_text": _restyle(items, new)})
+                continue
+
+        # ③ Version History 標題的 (Current) 標記
+        if btype.startswith("heading_"):
+            m = _VH_HEADING.match(text)
+            if not m:
+                continue
+            base = f"v{m.group(1)}" + (f" – {m.group(2).strip()}" if m.group(2).strip() else "")
+            new = base + _CURRENT_SUFFIX if _same_version("v" + m.group(1), target) else base
+            if new != text:
+                updates.append({"id": b.get("id"), "type": btype,
+                                "rich_text": _restyle(items, new)})
+
+    return {"row_renames": renames, "block_updates": updates}
+
 # ─── converter/notion2elementor.py ───
 #!/usr/bin/env python3
 """
@@ -1062,6 +1174,19 @@ for _it in _items:
 
 if _payloads and "mode" in _payloads[0] and _payloads[0]["mode"] == "apply_media":
     return [{"json": _apply_media(_payloads[0])}]
+
+# mode=version_marks：算出「vN 成為現行版本」後，母列與子列要改哪些字
+if _payloads and "mode" in _payloads[0] and _payloads[0]["mode"] == "version_marks":
+    _p = _payloads[0]
+    _plan = plan_version_marks(_p["rows"] if "rows" in _p else [],
+                               _p["blocks"] if "blocks" in _p else [],
+                               _p["version"] if "version" in _p else "")
+    # 兩個清單都可能是空的（已經是正確狀態）——下游用 splitOut 會自然跳過
+    return [{"json": {"row_renames": _plan["row_renames"],
+                      "block_updates": _plan["block_updates"],
+                      "version": short_version(_p["version"] if "version" in _p else ""),
+                      "nothing_to_do": (not _plan["row_renames"]
+                                        and not _plan["block_updates"])}}]
 
 _blocks, _meta = _collect(_payloads)
 

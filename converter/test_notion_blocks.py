@@ -536,3 +536,81 @@ def test_seo_accepts_literal_br_separator():
     ]
     _md, report = nb.blocks_to_markdown(blocks)
     assert report["seo"] == {"title": SEO_TITLE}
+
+
+# ---------- 版本標記 ----------
+# fixture 依 5-5 Shipment Routing 母列的真實結構（2026-08-11 讀出）：
+# Overview 有 `- Current Version: v3 (May 2026)`，Version History 的標題是
+# `### **vN – Month Year**`，現行版本結尾多一個 ` (Current)`。破折號是 en dash。
+
+def _vh(text, bold=True):
+    return blk("heading_3", {"rich_text": [rt(text, **({"bold": True} if bold else {}))]})
+
+
+def _ov(text):
+    return blk("bulleted_list_item", {"rich_text": [rt(text)]})
+
+
+def _mother_blocks(current="v3"):
+    return [
+        blk("heading_2", {"rich_text": [rt("Overview")]}),
+        _ov(f"Current Version: {current} (May 2026)"),
+        _ov("Status: Active"),
+        blk("heading_2", {"rich_text": [rt("Version History")]}),
+        _vh("v1 – May 2026"),
+        _vh("v2 – May 2026"),
+        _vh("v3 – May 2026 (Current)"),
+    ]
+
+
+ROWS = [
+    {"id": "r1", "title": "5-5 Shipment Routing - v1", "version": "v1 (Initial Version)"},
+    {"id": "r2", "title": "5-5 Shipment Routing - v2", "version": "v2"},
+    {"id": "r3", "title": "5-5 Shipment Routing - v3 (Current)", "version": "v3"},
+]
+
+
+def test_version_marks_move_current_to_v2():
+    plan = nb.plan_version_marks(ROWS, _mother_blocks("v3"), "v2")
+    assert {r["id"]: r["title"] for r in plan["row_renames"]} == {
+        "r2": "5-5 Shipment Routing - v2 (Current)",
+        "r3": "5-5 Shipment Routing - v3",
+    }
+    texts = {u["id"]: u["rich_text"][0]["text"]["content"] for u in plan["block_updates"]}
+    # Overview 沿用 Version History 裡該版本的日期，不自行編造
+    assert any(t == "Current Version: v2 (May 2026)" for t in texts.values())
+    assert "v2 – May 2026 (Current)" in texts.values()
+    assert "v3 – May 2026" in texts.values()
+
+
+def test_version_marks_preserve_bold_on_headings():
+    plan = nb.plan_version_marks(ROWS, _mother_blocks("v3"), "v1")
+    heads = [u for u in plan["block_updates"] if u["type"] == "heading_3"]
+    assert heads, "應該有標題被改動"
+    for u in heads:
+        assert u["rich_text"][0].get("annotations", {}).get("bold") is True
+
+
+def test_version_marks_emit_nothing_when_already_correct():
+    """已經是正確狀態時不可送出任何 API 改動，避免刷 Notion 的編輯紀錄。"""
+    plan = nb.plan_version_marks(ROWS, _mother_blocks("v3"), "v3")
+    assert plan["row_renames"] == []
+    assert plan["block_updates"] == []
+
+
+def test_version_marks_accept_long_version_label():
+    """Version 屬性的 v1 標籤是 `v1 (Initial Version)`，要能對得上。"""
+    plan = nb.plan_version_marks(ROWS, _mother_blocks("v3"), "v1 (Initial Version)")
+    assert {r["id"]: r["title"] for r in plan["row_renames"]} == {
+        "r1": "5-5 Shipment Routing - v1 (Current)",
+        "r3": "5-5 Shipment Routing - v3",
+    }
+
+
+def test_version_marks_ignore_unrelated_blocks():
+    blocks = _mother_blocks("v3") + [
+        blk("paragraph", {"rich_text": [rt("This document tracks the version history.")]}),
+        _vh("Not a version heading"),
+    ]
+    plan = nb.plan_version_marks(ROWS, blocks, "v3")
+    assert plan["block_updates"] == []

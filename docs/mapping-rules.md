@@ -242,6 +242,33 @@ Notion 的結構是**三層**，不是兩層：
 寫進資料庫。後者是為了不必有主機檔案存取權——`wp-config.php` 少一個分號就會讓整站
 白畫面，對非工程角色風險太高。兩者都沒設時整組回呼靜默停用。
 
+## 六之五、版本標記的自動維護
+
+發佈某個版本後，母列與子列有四處要跟著改。原本是人工維護，但老闆與小編常忘記
+（Fay 2026-08-11），改由發佈回呼接手：
+
+| # | 位置 | 動作 |
+| --- | --- | --- |
+| 1 | 版本子列的 `Doc name` | 目標版本加上 ` (Current)`，其餘版本拿掉 |
+| 2 | 母列 Overview 的 `- Current Version: vN (Month Year)` | 換成新的版本 |
+| 3 | 母列 Version History 的 `### **vN – Month Year**` | 目標版本結尾加 ` (Current)`，其餘拿掉 |
+| 4 | 母列的 `Version` 屬性 | 對齊為現行版本 |
+
+格式取自實際母列（5-5 Shipment Routing）。兩個容易弄壞的細節：
+**破折號是 en dash `–`**，且 **Version History 的標題整段帶粗體**——改寫時
+rich_text 要沿用原本的標註，否則排版跑掉。
+
+**Overview 的日期不自行編造**：從 Version History 中該版本的標題讀出來沿用。
+找不到時只寫版本號，不猜月份。
+
+**沒有變化就不送 API**：`plan_version_marks()` 只回傳真的需要改動的項目，
+避免在 Notion 的編輯紀錄裡刷出一堆無意義的版本。
+
+文字判斷全在 `converter/notion_blocks.py`（有單元測試涵蓋改名、粗體保留、
+長版本標籤 `v1 (Initial Version)`、已正確時不動作），n8n 只負責照結果打 API。
+子列改名不影響站上文章標題——同步時的 `clean_title` 本來就會把版本後綴與
+`(Current)` 剝掉（見 §六之三）。
+
 ## 七、寫作端注意事項（給 Support Center Writer Skill）
 
 - 可點擊 UI 路徑一律用 inline code；不可點擊 UI 文字用粗體（Style Guide §5）
