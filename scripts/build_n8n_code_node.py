@@ -144,6 +144,9 @@ def _run(blocks, meta):
         "link_map_size": len(_link_map),
         "link_inputs": {"hub_rows": len(meta["hub_rows"]) if "hub_rows" in meta else 0,
                         "wp_docs": len(meta["wp_docs"]) if "wp_docs" in meta else 0},
+        # 中介 markdown 裡出現的所有連結，含解析前的原始形式。
+        # 連結沒被換掉時，這一欄直接顯示 mention 實際長成什麼樣子。
+        "links_seen": re.findall(r"\]\(([^)]+)\)", markdown),
     }
 
 

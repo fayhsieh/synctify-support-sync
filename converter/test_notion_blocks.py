@@ -837,3 +837,31 @@ def test_user_mention_not_turned_into_link():
                    for c in tpl["content"] for w in c["elements"])
     assert "<a href" not in body
     assert "Fay" in body
+
+
+def test_relative_and_bare_notion_hrefs_resolve():
+    """Notion 對頁面提及給的 href 可能是相對路徑或裸 id，都要認得出來。"""
+    m = nb.build_link_map(HUB_ROWS, WP_DOCS)
+    for href in ("/3272f2ede27d808db5d4d7f4a6796142",
+                 "3272f2ed-e27d-808d-b5d4-d7f4a6796142",
+                 "https://www.notion.so/3272f2ede27d808db5d4d7f4a6796142"):
+        blocks = [head(2, "Export"), _mention_para("7-1 Reports Center", href)]
+        md, _ = nb.blocks_to_markdown(blocks)
+        tpl, _f, _r = n2e.convert(md, "T", "t", sync_date="August 11, 2026", link_map=m)
+        body = "".join(w["settings"].get("editor", "")
+                       for c in tpl["content"] for w in c["elements"])
+        assert "reports-center/" in body, f"未解析：{href}"
+        assert ">Reports Center</a>" in body, f"文字未換：{href}"
+
+
+def test_relative_non_notion_links_untouched():
+    """站內相對連結（/docs/…）不可被誤判成 Notion 頁面。"""
+    blocks = [head(2, "Overview"),
+              blk("paragraph", {"rich_text": [
+                  {"plain_text": "Guide", "annotations": {}, "href": "/docs/guide/"}]})]
+    md, _ = nb.blocks_to_markdown(blocks)
+    tpl, _f, rep = n2e.convert(md, "T", "t", sync_date="August 11, 2026", link_map={})
+    body = "".join(w["settings"].get("editor", "")
+                   for c in tpl["content"] for w in c["elements"])
+    assert 'href="/docs/guide/"' in body
+    assert rep["unresolved_notion_links"] == []

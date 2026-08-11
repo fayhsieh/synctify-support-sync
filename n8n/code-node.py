@@ -678,12 +678,28 @@ _NOTION_ID = re.compile(
 
 
 def notion_page_id_from_url(url):
-    """Notion 網址 → 32 位頁面 id；非 Notion 網址回空字串。
+    """Notion 頁面連結 → 32 位頁面 id；非 Notion 連結回空字串。
+
+    接受三種形式：
+      1. 絕對網址 `https://www.notion.so/...` / `https://app.notion.com/p/...`
+      2. **相對路徑** `/3272f2ed…` —— Notion API 對頁面提及給的 href 可能長這樣，
+         漏掉的話會被當成外部連結直接放行（2026-08-11 實測踩到）
+      3. 裸 id（32 位十六進位）
 
     網址可能帶標題 slug（`.../Reports-Center-3272f2ed…`）或查詢字串（`?pvs=4`），
     故取**最後一個**符合的 id——slug 裡的英文字不會誤判成十六進位。
     """
-    if not _NOTION_HOST.match(url or ""):
+    url = (url or "").strip()
+    if not url:
+        return ""
+    is_notion = bool(_NOTION_HOST.match(url))
+    if not is_notion:
+        # 相對路徑或裸 id：不可以是其他網站的絕對網址
+        if "://" in url:
+            return ""
+        is_notion = url.startswith("/") or bool(re.fullmatch(
+            r"[0-9a-fA-F-]{32,36}", url))
+    if not is_notion:
         return ""
     found = _NOTION_ID.findall(url)
     return found[-1].replace("-", "").lower() if found else ""
@@ -1309,6 +1325,9 @@ def _run(blocks, meta):
         "link_map_size": len(_link_map),
         "link_inputs": {"hub_rows": len(meta["hub_rows"]) if "hub_rows" in meta else 0,
                         "wp_docs": len(meta["wp_docs"]) if "wp_docs" in meta else 0},
+        # 中介 markdown 裡出現的所有連結，含解析前的原始形式。
+        # 連結沒被換掉時，這一欄直接顯示 mention 實際長成什麼樣子。
+        "links_seen": re.findall(r"\]\(([^)]+)\)", markdown),
     }
 
 
