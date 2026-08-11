@@ -92,6 +92,13 @@ n8n 的憑證應存在 n8n credential 管理中，不要寫進 workflow JSON。�
 大部分時間在空掃沒有更新的 Notion。要救回的話把 `scripts/build_n8n_code_node.py`
 的 `POLLING` 改成 `"active"` 重新產生即可，處理鏈完全共用。
 
+**失敗處理**：13 個可能失敗的節點都開了錯誤輸出，統一導向同一條失敗路徑——
+回寫 `❌ 同步失敗` 到被按下的那一列、在該 Notion 頁面留言說明卡在哪個節點
+（用 `$prevNode.name` 取得），最後以 Stop and Error 讓 n8n 的 Executions 也顯示失敗。
+
+> 沒有這條的話，流程斷在中間時 n8n 仍顯示 Succeeded，只有翻 executions 才發現
+> ——2026-08-11 實測踩過。小編不會去看 n8n，訊號必須出現在 Notion。
+
 **發佈回呼**：`n8n/wp-publish-callback.workflow.json`（15 節點）。WP 按下發佈 →
 外掛打 webhook → 標記已發佈、Status 轉 Existing、維護版本標記、對齊母列的
 Version 與 Last edited date。
@@ -123,7 +130,8 @@ Version 與 Last edited date。
 待辦：
 - [ ] 建置 n8n workflow（webhook → 轉換 → WP 寫入 → 狀態回寫）
   - [x] Workflow 1（`n8n/notion-sync-to-wp.workflow.json`）：按鈕觸發、圖片上傳、站方欄位、SEO meta、狀態回寫，端到端實測通過
-  - [ ] Workflow 2 confirm-publish、Workflow 3 translate、Error Workflow
+  - [x] 失敗處理（併入主 workflow，非獨立 Error Workflow：需要文章的 Notion page id，而 n8n 的 Error Trigger 拿不到）
+  - [ ] Workflow 2 confirm-publish、Workflow 3 translate
 - [ ] 圖片上傳邏輯（Notion S3 → WP 媒體庫，含 alt/caption）
 - [ ] TranslatePress 字串切分顆粒度驗證
 - [ ] Support Center Writer prompt 移植＋翻譯品質對照測試

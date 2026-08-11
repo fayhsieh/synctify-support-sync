@@ -674,6 +674,18 @@ def build_polling_workflow(code):
          "typeVersion": 3.4, "position": [2840, 660]},
 
         # ── 兩條拒絕路徑共用的回報
+        {"parameters": {"assignments": {"assignments": [
+            {"id": nid(), "name": "fail_reason", "type": "string",
+             # $prevNode.name ＝ 把資料送進來的那個節點，也就是失敗的那一個。
+             # 十幾個節點共用這一個原因節點，靠它區分，不必每個各配一份。
+             "value": "={{ '同步在「' + $prevNode.name + '」節點失敗：' + "
+                      "($json.error?.message ?? $json.error ?? '未提供錯誤訊息') }}"},
+        ]}, "options": {}},
+         "id": nid(), "name": "原因：節點失敗", "type": "n8n-nodes-base.set",
+         "typeVersion": 3.4, "position": [2840, 780],
+         "notes": "各節點的錯誤輸出都接到這裡。用 $prevNode.name 取得實際失敗的節點名，\n"
+                  "讓小編在 Notion 的留言裡直接看到卡在哪一步。"},
+
         {"parameters": notion_http(
             "PATCH", "=https://api.notion.com/v1/pages/{{ " + f"$('{PICK}').first().json.page_id" + " }}",
             '={{ { "properties": { "上稿狀態": { "select": { "name": "❌ 同步失敗" } } } } }}'),
@@ -681,6 +693,17 @@ def build_polling_workflow(code):
          "typeVersion": 4.2, "position": [3060, 620],
          "credentials": {"notionApi": {"id": NOTION_CRED_ID, "name": NOTION_CRED_NAME}},
          "notes": "寫在「被按下的那一列」而不是母列——使用者在哪裡按就在哪裡看到結果。"},
+
+        {"parameters": {"errorMessage":
+            "=同步未完成：{{ $('原因：節點失敗').isExecuted "
+            "? $('原因：節點失敗').first().json.fail_reason "
+            ": '被防呆攔截（母列或草稿層）' }}"},
+         "id": nid(), "name": "標記本次執行失敗",
+         "type": "n8n-nodes-base.stopAndError", "typeVersion": 1,
+         "position": [3500, 700],
+         "notes": "刻意讓 Executions 顯示為失敗。今天實測踩過：流程斷在中間但 n8n\n"
+                  "仍顯示 Succeeded，只有翻 executions 才發現——那正是這條要防的。\n"
+                  "Notion 的狀態與留言在這之前已經寫完，不受影響。"},
 
         {"parameters": notion_http(
             "POST", "https://api.notion.com/v1/comments",
@@ -915,11 +938,12 @@ def build_polling_workflow(code):
         [{"node": "母列有 WP Post ID？", "type": "main", "index": 0}]]}
 
     # 兩條拒絕路徑匯流 → 回寫失敗 → 留言 → 回到迴圈取下一篇
-    for n in ("原因：按到母列", "原因：按到草稿層"):
+    for n in ("原因：按到母列", "原因：按到草稿層", "原因：節點失敗"):
         conns[n] = {"main": [[{"node": "回寫：同步失敗", "type": "main", "index": 0}]]}
     conns["回寫：同步失敗"] = {"main": [
         [{"node": "Notion：留言說明原因", "type": "main", "index": 0}]]}
-    conns["Notion：留言說明原因"] = {"main": [[{"node": LOOP, "type": "main", "index": 0}]]}
+    conns["Notion：留言說明原因"] = {"main": [
+        [{"node": "標記本次執行失敗", "type": "main", "index": 0}]]}
 
     # 分路：有 Post ID → 查既有文章狀態；沒有 → 建新草稿。兩路都匯到寫入版面。
     conns["母列有 WP Post ID？"] = {"main": [
@@ -949,6 +973,28 @@ def build_polling_workflow(code):
         {"node": "Notion：回寫母列", "type": "main", "index": 0},
         {"node": "組出 FAQ 清單", "type": "main", "index": 0}]]}
     conns["Notion：回寫子列"] = {"main": [[{"node": LOOP, "type": "main", "index": 0}]]}
+
+    # 每個可能失敗的節點都開錯誤輸出，統一接到「原因：節點失敗」。
+    # 不含防呆 IF（它們的第二個輸出是正常分支）與失敗路徑本身（會造成迴圈）。
+    FAILABLE = [
+        "Notion：取得連結對照", "WP：取得文章網址", "Notion：取得頁面 blocks",
+        CONV, "WP：上傳圖片", "回填媒體網址", MOTHER,
+        "WP：查詢既有文章", "WP：建立新草稿", "WP：寫入 Elementor 版面",
+        "WP：套用站方預設欄位", "WP：寫入 SEO meta", "WP：同步 FAQ",
+    ]
+    by_name = {n["name"]: n for n in nodes}
+    for name in FAILABLE:
+        node = by_name.get(name)
+        if not node:
+            continue
+        node["onError"] = "continueErrorOutput"
+        existing = conns.get(name, {}).get("main", [])
+        # 輸出 0 維持原本的下游，輸出 1 是錯誤
+        main = list(existing) if existing else [[]]
+        while len(main) < 2:
+            main.append([])
+        main[1] = [{"node": "原因：節點失敗", "type": "main", "index": 0}]
+        conns[name] = {"main": main}
 
     # ── 輪詢的去留：standby＝保留節點但停用觸發器（不空掃、可一鍵救回）
     #                removed ＝整組拿掉
