@@ -447,6 +447,20 @@ POLL_MINUTES = 1
 # /webhook/* 亦正常回應（未註冊路徑回 404，0.58s），故 Notion 打得到。
 WEBHOOK_PATH = "synctify-sync-CHANGE-ME-TO-A-RANDOM-STRING"
 
+# webhook 的授權：Notion 按鈕的 Send webhook 支援 Add custom header，所以能做真正的
+# header 驗證，而不是只靠「網址猜不到」（網址會滲進 proxy log、瀏覽器紀錄）。
+# 密鑰存在 n8n 的 Header Auth 憑證裡，workflow JSON 只留引用，不入庫。
+WEBHOOK_AUTH_CRED_NAME = "Synctify Notion Button"
+
+# 輪詢的去留（Fay 2026-08-11：更新頻率不高，按鈕通了就不需要一直空掃）
+#   "active"   定時觸發啟用
+#   "standby"  節點保留但觸發器停用 —— 不會空掃，按鈕出事時 UI 上一鍵可救回
+#   "removed"  輪詢節點整組移除
+# 按鈕實測通過後改成 "removed" 重新產生即可，不必動其他任何地方。
+POLLING = "standby"
+POLL_NODE_NAMES = ("定時檢查", "查詢待同步列", "有待同步的列？",
+                   "無事可做（結束）", "拆成每列一筆")
+
 
 def build_polling_workflow(code):
     """輪詢版：不需 Notion Plus 方案。
@@ -507,13 +521,22 @@ def build_polling_workflow(code):
             "httpMethod": "POST",
             "path": WEBHOOK_PATH,
             "responseMode": "onReceived",
+            "authentication": "headerAuth",
             "options": {}},
          "id": nid(), "name": "Notion 按鈕（Webhook）", "type": "n8n-nodes-base.webhook",
          "typeVersion": 2, "position": [-460, 20], "webhookId": nid(),
+         "credentials": {"httpHeaderAuth": {"id": "", "name": WEBHOOK_AUTH_CRED_NAME}},
          "notes": "Notion Content Hub 的「同步到 WP」按鈕 → Send webhook。\n"
                   "\n"
-                  "⚠️ 上線前務必把 Path 換成一組隨機字串——這個網址就是唯一的憑證，\n"
-                  "  而且不可以提交進 git（CLAUDE.md：webhook token 不入庫）。\n"
+                  "【匯入後要做兩件事】\n"
+                  "1. Path 換成一組隨機字串（目前是佔位字串）。\n"
+                  "2. 建立 Header Auth 憑證「" + WEBHOOK_AUTH_CRED_NAME + "」，\n"
+                  "   自訂 header 名稱與一組長隨機值；在 Notion 按鈕的 Send webhook\n"
+                  "   用「Add custom header」填同一組。\n"
+                  "   兩者都不可寫回 repo（CLAUDE.md：webhook token 不入庫）。\n"
+                  "\n"
+                  "為何要 header 而不是只靠猜不到的網址：網址會滲進 proxy log、\n"
+                  "瀏覽器紀錄與轉寄的訊息裡，header 才是真正可輪替的憑證。\n"
                   "\n"
                   "responseMode=onReceived：立刻回 200，不讓 Notion 等整條流程跑完。\n"
                   "按鈕請放在「版本子列」上：母列沒有內容區塊，按了會轉出空文章。"},
@@ -855,8 +878,29 @@ def build_polling_workflow(code):
     # 本篇跑完 → 回到迴圈取下一篇
     conns["Notion：回寫母列"] = {"main": [[{"node": LOOP, "type": "main", "index": 0}]]}
 
+    # ── 輪詢的去留：standby＝保留節點但停用觸發器（不空掃、可一鍵救回）
+    #                removed ＝整組拿掉
+    if POLLING == "standby":
+        for n in nodes:
+            if n["name"] == "定時檢查":
+                n["disabled"] = True
+                n["notes"] = ("⏸ 已停用（Fay 2026-08-11 決定）。更新頻率不高，"
+                              "改由 Notion 按鈕觸發，不需要每分鐘空掃 Notion。\n\n"
+                              "按鈕若出問題，把這個節點重新啟用即可恢復批次同步——"
+                              "底下整條鏈是共用的，不必改任何設定。")
+    elif POLLING == "removed":
+        drop = set(POLL_NODE_NAMES)
+        nodes = [n for n in nodes if n["name"] not in drop]
+        conns = {src: c for src, c in conns.items() if src not in drop}
+        for c in conns.values():
+            c["main"] = [[l for l in out if l["node"] not in drop] for out in c["main"]]
+
+    name = {"active":  "Synctify — Notion → WP 草稿（按鈕 ＋ 勾選輪詢）",
+            "standby": "Synctify — Notion → WP 草稿（按鈕觸發；輪詢待命）",
+            "removed": "Synctify — Notion → WP 草稿（按鈕觸發）"}[POLLING]
+
     return {
-        "name": "Synctify — Notion → WP 草稿（按鈕 ＋ 勾選輪詢）",
+        "name": name,
         "nodes": nodes, "connections": conns, "active": False,
         "settings": {"executionOrder": "v1"},
         "meta": {"synctify_note":
