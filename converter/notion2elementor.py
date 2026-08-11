@@ -111,7 +111,15 @@ _UNRESOLVED_LINKS = []
 
 
 def _resolve_link(url, label):
-    """回傳 (網址, 連結文字)。不是 Notion 連結或查不到對應時原樣回傳。"""
+    """回傳 (網址, 連結文字)。不是 Notion 連結或查不到對應時原樣回傳。
+
+    ⚠️ 這兩個 global 宣告不可省。打包進 n8n Code node 時，整份程式會被包在一個
+    函式裡（因為頂層有 return），「模組層級」的 _LINK_MAP 於是變成外層函式的區域
+    變數。convert() 宣告了 global 所以寫進真正的全域，這裡若不宣告就會沿閉包讀到
+    外層那份空的——查得到卻換不掉，而且完全不報錯（2026-08-11 實測踩到）。
+    _eid_counter 一直沒事，正是因為它的讀寫兩端都有宣告。
+    """
+    global _LINK_MAP, _UNRESOLVED_LINKS
     page_id = notion_page_id_from_url(url)
     if not page_id:
         return url, label               # 不是 Notion 連結，完全不動

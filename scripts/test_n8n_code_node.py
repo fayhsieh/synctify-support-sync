@@ -147,6 +147,45 @@ def main():
         print(f"    {'✅' if v else '❌'} {k}")
     failures += [k for k, v in checks_b.items() if not v]
 
+    # ── 情境 2c：Notion 內部連結解析 ──
+    # 這一項專門守「被包進函式後模組層級狀態會變成外層區域變數」的坑：
+    # convert() 宣告 global 寫入，讀取端若沒宣告就會讀到外層那份空的，
+    # 結果是查得到卻換不掉、而且完全不報錯（2026-08-11 實測踩到）。
+    # 必須跑過打包後的程式才抓得到——直接 import 模組時不會重現。
+    link_blocks = [
+        {"id": "h", "type": "heading_2",
+         "heading_2": {"rich_text": [{"plain_text": "Export"}]}},
+        {"id": "p", "type": "paragraph", "paragraph": {"rich_text": [
+            {"plain_text": "See ", "annotations": {}},
+            {"plain_text": "7-1 Reports Center", "annotations": {},
+             "href": "https://app.notion.com/p/3272f2ede27d808db5d4d7f4a6796142"},
+        ]}},
+    ]
+    hub_rows = [{"id": "3272f2ed-e27d-808d-b5d4-d7f4a6796142",
+                 "properties": {
+                     "WP Post ID": {"rich_text": [{"plain_text": "6118"}]},
+                     "Doc name": {"title": [{"plain_text": "7-1 Reports Center"}]},
+                     "Parent item": {"relation": []}}}]
+    wp_docs = [{"id": 6118,
+                "link": "https://support.synctify.io/docs/x/reports-center/",
+                "title": {"rendered": "Reports Center"}}]
+    out_c = run_as_n8n(source, items=[{"json": dict(
+        b, title="T", faq_group="t", sync_date="July 29, 2026",
+        hub_rows=hub_rows, wp_docs=wp_docs)} for b in link_blocks])
+    rc = out_c[0]["json"]
+    written = rc["links_written"]
+    checks_c = {
+        "對照表有組起來": rc["link_map_size"] == 1,
+        "診斷認得出這是 Notion 連結": rc["links_seen"][0]["in_map"] is True,
+        "實際寫出的是 WP 永久連結": written == ["https://support.synctify.io/docs/x/reports-center/"],
+        "連結文字換成 WP 標題（去掉 7-1 編號）":
+            ">Reports Center</a>" in json.dumps(rc["template"], ensure_ascii=False),
+    }
+    print("\n情境 2c｜Notion 內部連結 → WP 永久連結")
+    for k, v in checks_c.items():
+        print(f"    {'✅' if v else '❌'} {k}")
+    failures += [k for k, v in checks_c.items() if not v]
+
     # ── 情境 3：確認沙箱真的有在擋（import 與不安全內建）──
     print("\n情境 3｜沙箱自我驗證")
     try:
