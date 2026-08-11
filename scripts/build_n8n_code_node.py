@@ -51,6 +51,13 @@ TEST_TITLE = "Manage Exception Orders"
 TEST_FAQ_GROUP = "manage-exception-orders"
 
 # n8n 憑證「引用」——只是識別碼，不含任何密鑰（CLAUDE.md：匯出時確認為引用而非明文）
+# WP 的 Basic Auth 憑證。**只是 n8n 內部的識別碼，不是帳密**——帳密留在 n8n 的
+# 憑證管理裡，這裡只放引用（CLAUDE.md：憑證欄位須為引用而非明文）。
+# 留空時產生的節點不帶 credentials，匯入後每個 WP 節點都會有紅色三角形，
+# 要逐一雙擊才會自動補上（Fay 2026-08-11 回報）。
+WP_CRED_ID = ""          # ← 填入後每次匯入就不必再手動選
+WP_CRED_NAME = "WordPress Credential"
+
 NOTION_CRED_ID = "xfGHH7Wx4EucMC0X"
 NOTION_CRED_NAME = "Support Center Sync"
 
@@ -368,6 +375,12 @@ def build_polling_workflow(code):
         if body is not None:
             p.update({"sendBody": True, "specifyBody": "json", "jsonBody": body})
         return p
+
+    def wp_creds():
+        """WP 節點的憑證引用。ID 未填時回 None，行為與先前相同。"""
+        if not WP_CRED_ID:
+            return None
+        return {"httpBasicAuth": {"id": WP_CRED_ID, "name": WP_CRED_NAME}}
 
     doc_name = f"$('{PICK}').first().json.doc_name"
     clean_title = (f"({doc_name})"
@@ -998,6 +1011,14 @@ def build_polling_workflow(code):
         {"node": "Notion：回寫母列", "type": "main", "index": 0},
         {"node": "組出 FAQ 清單", "type": "main", "index": 0}]]}
     conns["Notion：回寫子列"] = {"main": [[{"node": LOOP, "type": "main", "index": 0}]]}
+
+    # 統一補上 WP 憑證引用：漏掉的話每個 WP 節點匯入後都有紅色三角形，
+    # 要逐一雙擊才會自動補上，且未清乾淨前無法 Publish（Fay 2026-08-11 回報）。
+    _wc = wp_creds()
+    if _wc:
+        for _n in nodes:
+            if _n["parameters"].get("genericAuthType") == "httpBasicAuth":
+                _n.setdefault("credentials", {}).update(_wc)
 
     # 每個可能失敗的節點都開錯誤輸出，統一接到「原因：節點失敗」。
     # 不含防呆 IF（它們的第二個輸出是正常分支）與失敗路徑本身（會造成迴圈）。
