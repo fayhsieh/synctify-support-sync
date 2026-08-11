@@ -694,24 +694,31 @@ def test_normal_callout_still_renders():
 HUB_ROWS = [
     {"id": "3272f2ed-e27d-808d-b5d4-d7f4a6796142",      # 母列：7-1 Reports Center
      "properties": {"WP Post ID": {"rich_text": [{"plain_text": "6118"}]},
+                    "Doc name": {"title": [{"plain_text": "7-1 Reports Center"}]},
                     "Parent item": {"relation": []}}},
     {"id": "3282f2ed-e27d-804a-966b-ed0721b0cc08",      # 其版本子列（自己沒有 Post ID）
      "properties": {"WP Post ID": {"rich_text": []},
+                    "Doc name": {"title": [{"plain_text": "7-1 Reports Center - v1 (Current)"}]},
                     "Parent item": {"relation": [
                         {"id": "3272f2ed-e27d-808d-b5d4-d7f4a6796142"}]}}},
     {"id": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",      # 尚未同步：查不到網址
      "properties": {"WP Post ID": {"rich_text": []},
+                    "Doc name": {"title": [{"plain_text": "9-9 Draft Doc"}]},
                     "Parent item": {"relation": []}}},
 ]
-WP_DOCS = [{"id": 6118, "link": "https://support.synctify.io/docs/synctify-documentation/reports/reports-center/"}]
+WP_DOCS = [{"id": 6118,
+            "link": "https://support.synctify.io/docs/synctify-documentation/reports/reports-center/",
+            "title": {"rendered": "Reports Center"}}]
 
 
 def test_link_map_covers_mother_and_version_rows():
     m = nb.build_link_map(HUB_ROWS, WP_DOCS)
     url = "https://support.synctify.io/docs/synctify-documentation/reports/reports-center/"
-    assert m["3272f2ede27d808db5d4d7f4a6796142"] == url
+    assert m["3272f2ede27d808db5d4d7f4a6796142"]["url"] == url
+    assert m["3272f2ede27d808db5d4d7f4a6796142"]["title"] == "Reports Center"
+    assert m["3272f2ede27d808db5d4d7f4a6796142"]["doc_name"] == "7-1 Reports Center"
     # 連到版本子列也要解析得出來——WP Post ID 只記在母列
-    assert m["3282f2ede27d804a966bed0721b0cc08"] == url
+    assert m["3282f2ede27d804a966bed0721b0cc08"]["url"] == url
     assert "aaaaaaaabbbbccccddddeeeeeeeeeeee" not in m
 
 
@@ -759,3 +766,74 @@ def test_external_links_untouched():
                    for c in tpl["content"] for w in c["elements"])
     assert 'href="https://synctify.net/"' in body
     assert rep["unresolved_notion_links"] == []
+
+
+def _mention_para(text, page_url):
+    """Notion 的頁面提及：顯示文字就是被提及頁面的 Doc name。"""
+    return blk("paragraph", {"rich_text": [
+        {"plain_text": "For more information, see ", "annotations": {}},
+        {"plain_text": text, "annotations": {}, "href": page_url},
+        {"plain_text": ".", "annotations": {}}]})
+
+
+def test_page_mention_uses_wp_title_not_notion_doc_name():
+    """提及的文字是 Doc name（帶編號前綴），站上沒有編號，要換成 WP 標題。"""
+    m = nb.build_link_map(HUB_ROWS, WP_DOCS)
+    blocks = [head(2, "Export"),
+              _mention_para("7-1 Reports Center",
+                            "https://app.notion.com/p/3272f2ede27d808db5d4d7f4a6796142")]
+    md, _ = nb.blocks_to_markdown(blocks)
+    tpl, _f, rep = n2e.convert(md, "T", "t", sync_date="August 11, 2026", link_map=m)
+    body = "".join(w["settings"].get("editor", "")
+                   for c in tpl["content"] for w in c["elements"])
+    assert ">Reports Center</a>" in body
+    assert "7-1" not in body
+    assert "notion." not in body
+
+
+def test_author_written_link_text_is_preserved():
+    """作者自訂的連結文字不可被標題蓋掉——只有等於 Doc name 時才換。"""
+    m = nb.build_link_map(HUB_ROWS, WP_DOCS)
+    blocks = [head(2, "Export"),
+              _mention_para("the reports guide",
+                            "https://app.notion.com/p/3272f2ede27d808db5d4d7f4a6796142")]
+    md, _ = nb.blocks_to_markdown(blocks)
+    tpl, _f, _r = n2e.convert(md, "T", "t", sync_date="August 11, 2026", link_map=m)
+    body = "".join(w["settings"].get("editor", "")
+                   for c in tpl["content"] for w in c["elements"])
+    assert ">the reports guide</a>" in body
+    assert "reports-center/" in body
+
+
+def test_page_mention_without_href_still_becomes_link():
+    """mention 的 href 不保證存在；沒有它就產不出連結，也就無從換成 WP 網址。"""
+    m = nb.build_link_map(HUB_ROWS, WP_DOCS)
+    blocks = [head(2, "Export"),
+              blk("paragraph", {"rich_text": [
+                  {"plain_text": "See ", "annotations": {}},
+                  {"plain_text": "7-1 Reports Center", "annotations": {},
+                   "type": "mention",
+                   "mention": {"type": "page",
+                               "page": {"id": "3272f2ed-e27d-808d-b5d4-d7f4a6796142"}}},
+                  {"plain_text": ".", "annotations": {}}]})]
+    md, _ = nb.blocks_to_markdown(blocks)
+    tpl, _f, _r = n2e.convert(md, "T", "t", sync_date="August 11, 2026", link_map=m)
+    body = "".join(w["settings"].get("editor", "")
+                   for c in tpl["content"] for w in c["elements"])
+    assert "reports-center/" in body
+    assert ">Reports Center</a>" in body
+
+
+def test_user_mention_not_turned_into_link():
+    """只有頁面提及要變連結；使用者提及不該產生網址。"""
+    blocks = [head(2, "Overview"),
+              blk("paragraph", {"rich_text": [
+                  {"plain_text": "Owner: ", "annotations": {}},
+                  {"plain_text": "Fay", "annotations": {}, "type": "mention",
+                   "mention": {"type": "user", "user": {"id": "abc"}}}]})]
+    md, _ = nb.blocks_to_markdown(blocks)
+    tpl, _f, _r = n2e.convert(md, "T", "t", sync_date="August 11, 2026", link_map={})
+    body = "".join(w["settings"].get("editor", "")
+                   for c in tpl["content"] for w in c["elements"])
+    assert "<a href" not in body
+    assert "Fay" in body

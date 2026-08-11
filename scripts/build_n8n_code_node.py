@@ -140,6 +140,10 @@ def _run(blocks, meta):
         "seo": blocks_report["seo"],
         # 換不掉的 Notion 連結——寫作端要修的內容問題，往上帶方便回報
         "unresolved_notion_links": report["unresolved_notion_links"],
+        # 診斷用：連結沒被換掉時，一眼看出是對照表沒進來還是查不到這一篇
+        "link_map_size": len(_link_map),
+        "link_inputs": {"hub_rows": len(meta["hub_rows"]) if "hub_rows" in meta else 0,
+                        "wp_docs": len(meta["wp_docs"]) if "wp_docs" in meta else 0},
     }
 
 
@@ -514,7 +518,7 @@ def build_polling_workflow(code):
                   "否則排在後面的文章會解析不到（目前約 90 列）。"},
 
         {"parameters": wp_http("GET",
-            "=" + WP_BASE + "/wp-json/wp/v2/docs?per_page=100&_fields=id,link"
+            "=" + WP_BASE + "/wp-json/wp/v2/docs?per_page=100&_fields=id,link,title"
             "&status=publish,draft&include="
             "{{ $json.results.map(r => r.properties['WP Post ID']?.rich_text?.[0]"
             "?.plain_text).filter(Boolean).join(',') || '0' }}"),

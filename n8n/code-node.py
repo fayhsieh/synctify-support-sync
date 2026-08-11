@@ -93,11 +93,30 @@ def rich_text(items):
             s = f"**{s}**"
         if a.get("italic"):
             s = f"*{s}*"
-        href = t.get("href")
+        href = t.get("href") or _mention_href(t)
         if href:
             s = f"[{s}]({href})"
         out.append(s)
     return "".join(out)
+
+
+def _mention_href(item):
+    """頁面提及 → Notion 網址。
+
+    寫作端引用其他文章時最常用的就是 `@頁面` 提及。它在 rich_text 裡是
+    type=mention，`href` **不保證存在**——沒有 href 就產不出連結，後面的
+    「換成 WP 永久連結」也就無從發生。故從 mention.page.id 自己組出來。
+    """
+    try:
+        if item.get("type") != "mention":
+            return ""
+        mention = item.get("mention") or {}
+        if mention.get("type") != "page":
+            return ""
+        page_id = (mention.get("page") or {}).get("id") or ""
+    except AttributeError:
+        return ""
+    return f"https://www.notion.so/{page_id.replace('-', '')}" if page_id else ""
 
 
 def _plain(items):
@@ -519,37 +538,62 @@ def normalize_notion_id(value):
     return (value or "").replace("-", "").strip().lower()
 
 
+# WP 的 title.rendered 是 HTML 實體編碼過的（`Add &#038; Edit Categories`）。
+# n8n 沙箱只給 re，沒有 html 模組，故自己解最常見的幾種。
+_ENTITY_NUM = re.compile(r"&#(\d+);")
+_ENTITY_NAMED = {"&amp;": "&", "&lt;": "<", "&gt;": ">", "&quot;": '"', "&nbsp;": " "}
+
+
+def unescape_wp_title(text):
+    out = _ENTITY_NUM.sub(lambda m: chr(int(m.group(1))), text or "")
+    for ent, ch in _ENTITY_NAMED.items():
+        out = out.replace(ent, ch)
+    return out.strip()
+
+
 def build_link_map(hub_rows, wp_docs):
-    """{Notion 頁面 id: WP 永久連結}。
+    """{Notion 頁面 id: {"url", "title", "doc_name"}}。
 
     hub_rows —— Content Hub 的查詢結果（Notion API 原生格式）
-    wp_docs  —— WP 的 docs 清單，每筆需有 id 與 link
+    wp_docs  —— WP 的 docs 清單，每筆需有 id、link、title
 
-    WP Post ID 只記在母列，但寫作者可能連到版本子列，所以子列沿用母列的網址。
+    `doc_name` 是給連結文字判斷用的：Notion 的頁面提及（mention）會把被提及頁面的
+    Doc name 當成顯示文字，那個名稱帶編號前綴（`7-1 Reports Center`），站上並沒有。
+    連結文字若正好等於 Doc name，就代表它是提及而非作者自訂的字，可以換成 WP 標題。
+
+    WP Post ID 只記在母列，但寫作者可能連到版本子列，所以子列沿用母列的資料。
     """
     wp = {}
     for d in wp_docs or []:
         if d.get("id") and d.get("link"):
-            wp[str(d["id"])] = d["link"]
+            title = d.get("title") or {}
+            wp[str(d["id"])] = {
+                "url": d["link"],
+                "title": unescape_wp_title(title.get("rendered") if isinstance(title, dict) else title),
+            }
 
-    direct, parent_of = {}, {}
+    direct, doc_names, parent_of = {}, {}, {}
     for r in hub_rows or []:
         rid = normalize_notion_id(r.get("id"))
         if not rid:
             continue
         props = r.get("properties") or {}
+        tt = (props.get("Doc name") or {}).get("title") or []
+        doc_names[rid] = (tt[0].get("plain_text") or "").strip() if tt else ""
         rt = (props.get("WP Post ID") or {}).get("rich_text") or []
         post_id = (rt[0].get("plain_text") or "").strip() if rt else ""
         if post_id and post_id in wp:
-            direct[rid] = wp[post_id]
+            direct[rid] = dict(wp[post_id])
         rel = (props.get("Parent item") or {}).get("relation") or []
         if rel:
             parent_of[rid] = normalize_notion_id(rel[0].get("id"))
 
-    out = dict(direct)
+    out = {k: dict(v) for k, v in direct.items()}
     for rid, parent in parent_of.items():
         if rid not in out and parent in direct:
-            out[rid] = direct[parent]
+            out[rid] = dict(direct[parent])
+    for rid, entry in out.items():
+        entry["doc_name"] = doc_names.get(rid, "")
     return out
 
 # ─── converter/notion2elementor.py ───
@@ -649,16 +693,23 @@ _LINK_MAP = {}
 _UNRESOLVED_LINKS = []
 
 
-def _resolve_link(url):
+def _resolve_link(url, label):
+    """回傳 (網址, 連結文字)。不是 Notion 連結或查不到對應時原樣回傳。"""
     page_id = notion_page_id_from_url(url)
     if not page_id:
-        return url                      # 不是 Notion 連結，原樣保留
-    target = _LINK_MAP.get(page_id)
-    if target:
-        return target
-    if url not in _UNRESOLVED_LINKS:
-        _UNRESOLVED_LINKS.append(url)
-    return url
+        return url, label               # 不是 Notion 連結，完全不動
+    entry = _LINK_MAP.get(page_id)
+    if not entry:
+        if url not in _UNRESOLVED_LINKS:
+            _UNRESOLVED_LINKS.append(url)
+        return url, label
+    # Notion 的頁面提及會把 Doc name 當顯示文字，那個名稱帶編號前綴（`7-1 …`），
+    # 站上沒有。文字等於 Doc name ＝ 它是提及而非作者自訂的字，換成 WP 標題；
+    # 作者自己打的連結文字（「see the reports guide」）則保留不動。
+    text = label
+    if entry.get("title") and label.strip() == (entry.get("doc_name") or "").strip():
+        text = entry["title"]
+    return entry["url"], text
 
 
 # ---------- 行內格式轉換 ----------
@@ -690,7 +741,7 @@ def inline_md_to_html(text):
     # 連結：對齊站上慣例——連結文字不保留粗體，一律新分頁開啟
     def _link(m):
         label, url = m.group(1), m.group(2)
-        url = _resolve_link(url)
+        url, label = _resolve_link(url, label)
         label = re.sub(r"\*\*(.+?)\*\*", r"\1", label)  # 去除粗體
         return f'<a href="{url}" target="_blank" rel="noopener">{label}</a>'
     text = re.sub(r"\[([^\]]+)\]\(([^)]+)\)", _link, text)
@@ -1254,6 +1305,10 @@ def _run(blocks, meta):
         "seo": blocks_report["seo"],
         # 換不掉的 Notion 連結——寫作端要修的內容問題，往上帶方便回報
         "unresolved_notion_links": report["unresolved_notion_links"],
+        # 診斷用：連結沒被換掉時，一眼看出是對照表沒進來還是查不到這一篇
+        "link_map_size": len(_link_map),
+        "link_inputs": {"hub_rows": len(meta["hub_rows"]) if "hub_rows" in meta else 0,
+                        "wp_docs": len(meta["wp_docs"]) if "wp_docs" in meta else 0},
     }
 
 

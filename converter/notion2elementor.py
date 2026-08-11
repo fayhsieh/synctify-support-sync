@@ -94,16 +94,23 @@ _LINK_MAP = {}
 _UNRESOLVED_LINKS = []
 
 
-def _resolve_link(url):
+def _resolve_link(url, label):
+    """回傳 (網址, 連結文字)。不是 Notion 連結或查不到對應時原樣回傳。"""
     page_id = notion_page_id_from_url(url)
     if not page_id:
-        return url                      # 不是 Notion 連結，原樣保留
-    target = _LINK_MAP.get(page_id)
-    if target:
-        return target
-    if url not in _UNRESOLVED_LINKS:
-        _UNRESOLVED_LINKS.append(url)
-    return url
+        return url, label               # 不是 Notion 連結，完全不動
+    entry = _LINK_MAP.get(page_id)
+    if not entry:
+        if url not in _UNRESOLVED_LINKS:
+            _UNRESOLVED_LINKS.append(url)
+        return url, label
+    # Notion 的頁面提及會把 Doc name 當顯示文字，那個名稱帶編號前綴（`7-1 …`），
+    # 站上沒有。文字等於 Doc name ＝ 它是提及而非作者自訂的字，換成 WP 標題；
+    # 作者自己打的連結文字（「see the reports guide」）則保留不動。
+    text = label
+    if entry.get("title") and label.strip() == (entry.get("doc_name") or "").strip():
+        text = entry["title"]
+    return entry["url"], text
 
 
 # ---------- 行內格式轉換 ----------
@@ -135,7 +142,7 @@ def inline_md_to_html(text):
     # 連結：對齊站上慣例——連結文字不保留粗體，一律新分頁開啟
     def _link(m):
         label, url = m.group(1), m.group(2)
-        url = _resolve_link(url)
+        url, label = _resolve_link(url, label)
         label = re.sub(r"\*\*(.+?)\*\*", r"\1", label)  # 去除粗體
         return f'<a href="{url}" target="_blank" rel="noopener">{label}</a>'
     text = re.sub(r"\[([^\]]+)\]\(([^)]+)\)", _link, text)
