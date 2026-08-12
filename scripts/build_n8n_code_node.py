@@ -32,8 +32,12 @@ import uuid
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 CONVERTER = ROOT / "converter"
 OUT = ROOT / "n8n" / "code-node.py"
-PUBCB_WF_OUT = ROOT / "n8n" / "wp-publish-callback.workflow.json"
-SYNC_WF_OUT = ROOT / "n8n" / "notion-sync-to-wp.workflow.json"
+def wf_paths(target, base_dir=None):
+    """依 target 決定產出檔名。正式站用原本的名字，其餘加後綴避免混淆。"""
+    d = base_dir or (ROOT / "n8n")
+    sfx = TARGETS[target]["suffix"]
+    return (d / f"notion-sync-to-wp{sfx}.workflow.json",
+            d / f"wp-publish-callback{sfx}.workflow.json")
 # 舊檔名（曾經含輪詢）。輪詢移除後名稱誤導，改名並主動刪除舊檔——
 # 殘留的過期 workflow 被誤匯入過一次，代價很高。
 # 已被取代的產物。建置時主動刪除——殘留的過期 workflow 被誤匯入過一次，
@@ -56,14 +60,62 @@ TEST_FAQ_GROUP = "manage-exception-orders"
 # 憑證管理裡，這裡只放引用（CLAUDE.md：憑證欄位須為引用而非明文）。
 # 留空時產生的節點不帶 credentials，匯入後每個 WP 節點都會有紅色三角形，
 # 要逐一雙擊才會自動補上（Fay 2026-08-11 回報）。
-WP_CRED_ID = "oIyDk22ZdtDbphHm"
-WP_CRED_NAME = "WordPress Credential"
+# ── 目標站台 ────────────────────────────────────────────────
+# 一個開關切換整組站台相依設定。可用 --target 覆寫，不必改檔案。
+#
+# 站台相依的**內容**（封面照、作者、分類頁、FAQ 群組）不在這裡——那些一律由
+# 端點在站上依名稱解析，所以搬站不必改任何 ID（見 docs/mapping-rules.md §六之二）。
+# 這裡只放「連到哪一台、用哪組憑證、聽哪個 webhook」。
+TARGET = "prod"
+
+TARGETS = {
+    "prod": {
+        "wp_base": "https://support.synctify.net",
+        # 正式站要在 n8n 另外建一組 Basic Auth 憑證（Application Password 兩站獨立）
+        "wp_cred_id": "",
+        "wp_cred_name": "WordPress Credential (Prod)",
+        "webhook_env": "N8N_WEBHOOK_PATH",
+        "publish_env": "N8N_PUBLISH_WEBHOOK_PATH",
+        # 回寫哪個 Notion 屬性。兩站要並行時，把測試站改成獨立欄位
+        # （例如 "WP Post ID (Test)"），才不會互相覆蓋。
+        "post_id_prop": "WP Post ID",
+        "suffix": "",
+    },
+    "test": {
+        "wp_base": "https://support.synctify.io",
+        "wp_cred_id": "oIyDk22ZdtDbphHm",
+        "wp_cred_name": "WordPress Credential",
+        "webhook_env": "N8N_WEBHOOK_PATH_TEST",
+        "publish_env": "N8N_PUBLISH_WEBHOOK_PATH_TEST",
+        "post_id_prop": "WP Post ID",
+        "suffix": ".test",
+    },
+}
+
+
+def use_target(name):
+    """套用目標站台設定。回傳該站台的 dict。"""
+    global TARGET, WP_BASE, WP_CRED_ID, WP_CRED_NAME, POST_ID_PROP
+    if name not in TARGETS:
+        raise SystemExit(f"✗ 未知的 target：{name}（可用：{', '.join(TARGETS)}）")
+    TARGET = name
+    t = TARGETS[name]
+    WP_BASE = t["wp_base"]
+    WP_CRED_ID = t["wp_cred_id"]
+    WP_CRED_NAME = t["wp_cred_name"]
+    POST_ID_PROP = t["post_id_prop"]
+    return t
+
+
+WP_CRED_ID = ""
+WP_CRED_NAME = ""
+POST_ID_PROP = "WP Post ID"
 
 NOTION_CRED_ID = "xfGHH7Wx4EucMC0X"
 NOTION_CRED_NAME = "Support Center Sync"
 
 # 測試站（CLAUDE.md：WP 端改動一律先在測試站驗證）
-WP_BASE = "https://support.synctify.io"
+WP_BASE = ""     # 由 use_target() 設定
 
 HEADER = '''# ══════════════════════════════════════════════════════════════════
 #  自動產生，請勿直接編輯
@@ -571,7 +623,7 @@ def build_polling_workflow(code):
         {"parameters": wp_http("GET",
             "=" + WP_BASE + "/wp-json/wp/v2/docs?per_page=100&_fields=id,link,title"
             "&status=publish,draft&include="
-            "{{ $json.results.map(r => r.properties['WP Post ID']?.rich_text?.[0]"
+            "{{ $json.results.map(r => r.properties['" + POST_ID_PROP + "']?.rich_text?.[0]"
             "?.plain_text).filter(Boolean).join(',') || '0' }}"),
          "id": nid(), "name": "WP：取得文章網址", "type": "n8n-nodes-base.httpRequest",
          "typeVersion": 4.2, "position": [1260, 300],
@@ -764,7 +816,7 @@ def build_polling_workflow(code):
         {"parameters": {"conditions": {
             "options": {"caseSensitive": True, "typeValidation": "loose", "version": 2},
             "conditions": [{"id": nid(),
-                            "leftValue": "={{ $json.properties['WP Post ID']"
+                            "leftValue": "={{ $json.properties['" + POST_ID_PROP + "']"
                                          "?.rich_text?.[0]?.plain_text ?? '' }}",
                             "operator": {"type": "string", "operation": "notEmpty",
                                          "singleValue": True}, "rightValue": ""}],
@@ -773,7 +825,7 @@ def build_polling_workflow(code):
          "typeVersion": 2.2, "position": [2620, 300]},
 
         {"parameters": wp_http("GET",
-            "=" + WP_BASE + "/wp-json/wp/v2/docs/{{ $json.properties['WP Post ID']"
+            "=" + WP_BASE + "/wp-json/wp/v2/docs/{{ $json.properties['" + POST_ID_PROP + "']"
             ".rich_text[0].plain_text }}?context=edit"),
          "id": nid(), "name": "WP：查詢既有文章", "type": "n8n-nodes-base.httpRequest",
          "typeVersion": 4.2, "position": [2840, 100],
@@ -904,7 +956,7 @@ def build_polling_workflow(code):
             "PATCH",
             "=https://api.notion.com/v1/pages/{{ " + f"$('{PICK}').first().json.mother_id" + " }}",
             '={{ { "properties": { '
-            '"WP Post ID": { "rich_text": [ { "text": { "content": '
+            '"' + POST_ID_PROP + '": { "rich_text": [ { "text": { "content": '
             'String($(\'WP：寫入 Elementor 版面\').item.json.post_id) } } ] }, '
             # 同步成功一律「草稿已建立」（Fay 2026-08-11 決定）。原本會依 autosave_id
             # 分寫「待確認發佈」，但實務上兩者對小編是同一件事：看到這個狀態就代表
@@ -1063,9 +1115,10 @@ def build_polling_workflow(code):
         for c in conns.values():
             c["main"] = [[l for l in out if l["node"] not in drop] for out in c["main"]]
 
-    name = {"active":  "Synctify — Notion → WP 草稿（按鈕 ＋ 勾選輪詢）",
-            "standby": "Synctify — Notion → WP 草稿（按鈕觸發；輪詢待命）",
-            "removed": "Synctify — Notion → WP 草稿（按鈕觸發）"}[POLLING]
+    site = {"prod": "正式站", "test": "測試站"}.get(TARGET, TARGET)
+    name = {"active":  f"Synctify — Notion → WP 草稿（{site}；按鈕 ＋ 勾選輪詢）",
+            "standby": f"Synctify — Notion → WP 草稿（{site}；按鈕觸發，輪詢待命）",
+            "removed": f"Synctify — Notion → WP 草稿（{site}；按鈕觸發）"}[POLLING]
 
     return {
         "name": name,
@@ -1320,7 +1373,8 @@ def build_publish_callback_workflow(code):
             [{"node": "Notion：改寫母列區塊", "type": "main", "index": 0}]]},
     }
     return {
-        "name": "Synctify — WP 發佈回呼 → Notion 標記已發佈",
+        "name": f"Synctify — WP 發佈回呼 → Notion 標記已發佈"
+                f"（{ {'prod': '正式站', 'test': '測試站'}.get(TARGET, TARGET) }）",
         "nodes": nodes, "connections": conns, "active": False,
         "settings": {"executionOrder": "v1"},
     }
@@ -1350,25 +1404,27 @@ def build_local(body):
     既有的通道，讓進版控的產出永遠是佔位字串。
     """
     env = read_env()
-    need = {"N8N_WEBHOOK_PATH": "主流程", "N8N_PUBLISH_WEBHOOK_PATH": "發佈回呼"}
+    t = TARGETS[TARGET]
+    need = {t["webhook_env"]: "主流程", t["publish_env"]: "發佈回呼"}
     missing = [f"{k}（{label}）" for k, label in need.items() if not env.get(k)]
     if missing:
         print("✗ .env 缺少：\n  - " + "\n  - ".join(missing))
         print("\n  產生方式：")
-        print('    echo "N8N_WEBHOOK_PATH=synctify-sync-$(openssl rand -hex 16)" >> .env')
-        print('    echo "N8N_PUBLISH_WEBHOOK_PATH=synctify-published-$(openssl rand -hex 16)" >> .env')
+        print(f'    echo "{t["webhook_env"]}=synctify-sync-$(openssl rand -hex 16)" >> .env')
+        print(f'    echo "{t["publish_env"]}=synctify-published-$(openssl rand -hex 16)" >> .env')
         return False
 
     global WEBHOOK_PATH, PUBLISH_WEBHOOK_PATH
-    WEBHOOK_PATH = env["N8N_WEBHOOK_PATH"]
-    PUBLISH_WEBHOOK_PATH = env["N8N_PUBLISH_WEBHOOK_PATH"]
+    WEBHOOK_PATH = env[t["webhook_env"]]
+    PUBLISH_WEBHOOK_PATH = env[t["publish_env"]]
 
     out_dir = ROOT / "n8n" / "local"
     out_dir.mkdir(parents=True, exist_ok=True)
-    (out_dir / "notion-sync-to-wp.workflow.json").write_text(
+    sync_out, pubcb_out = wf_paths(TARGET, out_dir)
+    sync_out.write_text(
         json.dumps(build_polling_workflow(body), ensure_ascii=False, indent=2),
         encoding="utf-8")
-    (out_dir / "wp-publish-callback.workflow.json").write_text(
+    pubcb_out.write_text(
         json.dumps(build_publish_callback_workflow(body), ensure_ascii=False, indent=2),
         encoding="utf-8")
     print(f"✓ 已產生 {out_dir}/（含真實 path，可直接匯入；此目錄已 gitignore）")
@@ -1377,12 +1433,19 @@ def build_local(body):
 
 def main():
     ap = argparse.ArgumentParser()
+    ap.add_argument("--target", choices=sorted(TARGETS), default=TARGET,
+                    help=f"目標站台（預設 {TARGET}）")
     ap.add_argument("--local", action="store_true",
                     help="從 .env 讀真實 webhook path，另外產一份可直接匯入的檔案到 "
                          "n8n/local/（已 gitignore）。進版控的產出永遠維持佔位字串。")
     ap.add_argument("--check", action="store_true",
                     help="只檢查產物是否與來源同步，不寫檔（CI／提交前用）")
     args = ap.parse_args()
+    t = use_target(args.target)
+    print(f"目標站台：{args.target}（{t['wp_base']}）")
+    if not t["wp_cred_id"]:
+        print(f"⚠️  {args.target} 的 WP 憑證 ID 尚未填（TARGETS['{args.target}']['wp_cred_id']）"
+              "——產出的 WP 節點會沒有憑證，匯入後要逐一雙擊補上")
 
     body = build()
     if args.check:
@@ -1390,14 +1453,15 @@ def main():
         if not OUT.exists() or OUT.read_text(encoding="utf-8") != body:
             problems.append(str(OUT))
         # workflow 只比對內嵌的程式，避免每次重生的 uuid 造成假性差異
-        if SYNC_WF_OUT.exists():
-            embedded = json.loads(SYNC_WF_OUT.read_text(encoding="utf-8"))
+        sync_out, _ = wf_paths(TARGET)
+        if sync_out.exists():
+            embedded = json.loads(sync_out.read_text(encoding="utf-8"))
             code_node = [n for n in embedded["nodes"]
                          if n["type"] == "n8n-nodes-base.code"]
             if not code_node or code_node[0]["parameters"]["pythonCode"] != body:
-                problems.append(str(SYNC_WF_OUT))
+                problems.append(str(sync_out))
         else:
-            problems.append(str(SYNC_WF_OUT))
+            problems.append(str(sync_out))
         if problems:
             print("✗ 與 converter/ 來源不同步，請重新產生：\n  - " + "\n  - ".join(problems))
             sys.exit(1)
@@ -1413,14 +1477,14 @@ def main():
             stale.unlink()
             print(f"✓ 已移除過期檔 {stale.name}")
 
-    SYNC_WF_OUT.write_text(json.dumps(build_polling_workflow(body), ensure_ascii=False, indent=2),
-                           encoding="utf-8")
-    print(f"✓ 已產生 {SYNC_WF_OUT}（Notion 按鈕觸發）")
-
-    PUBCB_WF_OUT.write_text(
+    sync_out, pubcb_out = wf_paths(TARGET)
+    sync_out.write_text(json.dumps(build_polling_workflow(body), ensure_ascii=False, indent=2),
+                        encoding="utf-8")
+    print(f"✓ 已產生 {sync_out.name}（{TARGET}：Notion 按鈕觸發）")
+    pubcb_out.write_text(
         json.dumps(build_publish_callback_workflow(body), ensure_ascii=False, indent=2),
         encoding="utf-8")
-    print(f"✓ 已產生 {PUBCB_WF_OUT}（WP 發佈回呼 → Notion 標記已發佈）")
+    print(f"✓ 已產生 {pubcb_out.name}（{TARGET}：WP 發佈回呼）")
 
     if args.local and not build_local(body):
         sys.exit(1)

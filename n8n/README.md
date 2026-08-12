@@ -18,6 +18,30 @@ webhook 的 path 同樣不可寫回這裡——它就是那條端點的識別碼
 **那些只是 n8n 內部識別碼，不是帳密**——帳密與密鑰留在 n8n 的憑證管理裡。
 換 n8n 環境或重建憑證時要一併更新這三個常數，否則匯入後會出現紅色三角形。
 
+## 目標站台
+
+`scripts/build_n8n_code_node.py` 的 `TARGET` 決定產出要打哪一台，也可以用
+`--target` 覆寫不必改檔案：
+
+```bash
+python scripts/build_n8n_code_node.py                    # 正式站（預設）
+python scripts/build_n8n_code_node.py --target test      # 測試站
+```
+
+| target | 站台 | 產出檔名 | webhook path 取自 |
+| --- | --- | --- | --- |
+| `prod` | support.synctify.net | `notion-sync-to-wp.workflow.json` | `.env` 的 `N8N_WEBHOOK_PATH` |
+| `test` | support.synctify.io | `notion-sync-to-wp.test.workflow.json` | `.env` 的 `N8N_WEBHOOK_PATH_TEST` |
+
+一個開關切換四件事：WP 網址、WP 憑證、webhook path、回寫哪個 Notion 屬性。
+workflow 名稱也會標明站台，避免在 n8n 裡認錯。
+
+**站台相依的「內容」不在這裡**——封面照、作者、分類頁、FAQ 群組一律由端點在站上
+依名稱解析，所以搬站不必改任何 ID（見 `docs/mapping-rules.md` §六之二）。
+
+> 兩站要同時運作時，把 `TARGETS["test"]["post_id_prop"]` 改成獨立欄位
+> （例如 `WP Post ID (Test)`）並在 Notion 加上該欄位，否則兩邊的回寫會互相覆蓋。
+
 ## 匯入時不必手填 Path
 
 進版控的 JSON 裡 webhook 的 `path` 是**佔位字串**——真實 path 屬於端點識別碼，
