@@ -43,29 +43,39 @@ CATEGORIES = ["Getting Started", "Settings", "Products", "Integrations", "Orders
               "Inventory", "Reports", "Overview", "Finance", "Troubleshooting"]
 KNOWN_MISSING_CATEGORY = "Automation"
 
-# Notion 母列記著的 WP Post ID → 該篇標題（2026-08-12 由測試站取得）。
-# 測試站是正式站的資料庫複製，故這些 ID 兩站應當一致；對不上就代表
-# Notion 的 WP Post ID 在目標站台指向了別篇文章，同步會覆蓋錯的文章。
-SHARED_POSTS = {
-    5601: "Configure Warehouse", 5620: "Manage User Access", 6483: "Roles & Permission",
-    5635: "Add & Edit Categories", 5868: "Add/Edit/Delete Variant Attributes",
-    5883: "Add/Edit/Archive Product", 5907: "Configure SKU Aliases",
+# Notion 母列記著的 WP Post ID → 該篇標題（2026-08-12 由 Notion 取得；
+# Fay 已逐列與正式站對齊過，所以這是「正式站應有的樣子」，不是測試站的快照）。
+# 標題由 Doc name 去掉管理編號前綴與結尾的全形括號備註而來。
+#
+# 對不上代表 Notion 的 WP Post ID 在目標站台指向別篇文章——同步會把 Elementor
+# 草稿寫進錯的文章。這是整份檢查裡最重要的一項。
+EXPECTED_POSTS = {
+    5601: "Configure Warehouse",
+    5620: "Manage User Access",
+    5635: "Add & Edit Categories",
+    5868: "Add/Edit/Delete Variant Attributes",
+    5883: "Add/Edit/Archive Product",
+    5907: "Configure SKU Aliases",
     5921: "Connect Integrations",
-    6627: "Amazon Seller Central (Appstore) Integration Guide",
+    6041: "Manage Sales Orders",   # Notion 已改名；正式站可能仍是 Manage 3PL Orders
+    6074: "Manage Exception Orders",
+    6086: "Manage Stock Level",
+    6104: "Inventory Logs",
+    6118: "Reports Center",
+    6132: "Performance Metrics",
+    6483: "Roles & Permission",
     6616: "Walmart Marketplace Integration Guide",
-    6788: "Walmart Supplier One Integration Guide",
+    6627: "Amazon Seller Central (Appstore) Integration Guide",
+    6651: "Etsy Integration Guide",
     6691: "Wayfair & CastleGate Integration Guide",
-    6651: "Etsy Integration Guide", 6746: "Temu Integration Guide",
-    6041: "Manage 3PL Orders", 6074: "Manage Exception Orders",
-    7068: "Shipment Routing", 7251: "New Order Frozen Period",
-    6086: "Manage Stock Level", 6104: "Inventory Logs", 6118: "Reports Center",
-    6132: "Performance Metrics", 7150: "Remittance Reconciliation",
+    6746: "Temu Integration Guide",
+    6788: "Walmart Supplier One Integration Guide",
+    7068: "Shipment Routing",
+    7150: "Remittance Reconciliation",
+    7251: "New Order Frozen Period",
+    7761: "TikTok Shop Integration Guide",   # 正式站人工發佈後回填
+    7802: "BigCommerce Integration Guide",   # 同上
 }
-
-# 只存在於測試站的文章——搬站前要把 Notion 母列的 WP Post ID 清空，
-# 讓正式站第一次同步時重新建立並回填。
-TEST_ONLY_POSTS = {7570: "BigCommerce Integration Guide",
-                   7561: "TikTok Shop Integration Guide"}
 
 REQUIRED_ROUTES = [
     "/synctify/v1/elementor/(?P<id>\\d+)",
@@ -179,11 +189,16 @@ def main():
         print("\n連不上就不必往下了——後面每一項都會跟著失敗，訊息只會更混亂。")
         return 1
     code, me = c.get("/wp-json/wp/v2/users/me?context=edit&_fields=id,name,capabilities")
-    c.check("Application Password 有效", code == 200,
+    authed = c.check("Application Password 有效", code == 200,
             f"登入為 {me.get('name')!r}" if code == 200 else
             (".env 的 WP_USERNAME / WP_APP_PASSWORD 對這個站台無效——"
              "兩站的 Application Password 是各自獨立的"
              if (me or {}).get("code") == "rest_not_logged_in" else str(me)[:120]))
+    if not authed:
+        # 認證不過就別往下了——後面每一項都會變成「找不到」，
+        # 25 行誤導訊息比一行真正的原因難懂得多。
+        print("\n認證沒過，後續檢查都會失真，先停在這裡。")
+        return 1
     caps = (me.get("capabilities") or {}) if code == 200 else {}
     c.check("具備 edit_posts 權限", bool(caps.get("edit_posts")))
     c.check("具備 manage_options 權限（/settings 端點需要）",
@@ -250,35 +265,32 @@ def main():
 
     # ── 5. Notion 的 WP Post ID 在這個站台指向正確的文章 ──
     print("\n【5】Notion 記錄的 WP Post ID 是否對得上")
-    wrong, absent = [], []
-    for pid, expect in SHARED_POSTS.items():
+    absent, renamed = [], []
+    for pid, expect in sorted(EXPECTED_POSTS.items()):
         code, d = c.get(f"/wp-json/wp/v2/docs/{pid}?context=edit&_fields=id,title")
         if code != 200:
-            absent.append(f"{pid}（{expect}）")
+            absent.append(f"{pid}（Notion 說是「{expect}」）")
             continue
-        actual = strip_html((d.get("title") or {}).get("raw") or (d.get("title") or {}).get("rendered"))
+        actual = strip_html((d.get("title") or {}).get("raw")
+                            or (d.get("title") or {}).get("rendered"))
         if actual != expect:
-            wrong.append(f"{pid}：預期 {expect!r}，實際 {actual!r}")
-    c.check(f"{len(SHARED_POSTS)} 篇既有文章的 ID 對得上", not wrong and not absent,
-            "\n       ".join(wrong + [f"找不到：{a}" for a in absent]))
+            renamed.append(f"{pid}：Notion「{expect}」／站上「{actual}」")
 
-    print("\n【6】只存在於測試站的文章")
-    for pid, name in TEST_ONLY_POSTS.items():
-        code, d = c.get(f"/wp-json/wp/v2/docs/{pid}?context=edit&_fields=id,title")
-        actual = strip_html((d.get("title") or {}).get("raw", "")) if code == 200 else None
-        if code != 200:
-            print(f"  ℹ️ {pid} 在此站不存在（預期如此）"
-                  f"——搬站前請把 Notion 母列「{name}」的 WP Post ID 清空")
-        elif actual != name:
-            c.check(f"{pid} 指向別篇文章", False,
-                    f"此站的 {pid} 是 {actual!r}，不是 {name!r}——"
-                    f"Notion 若留著這個 ID 會覆蓋到錯的文章")
-        else:
-            print(f"  ℹ️ {pid} 在此站也叫 {name!r}（同一站或已同步過）")
+    # 文章不存在 ＝ ID 無效，同步一定出錯 → 硬性失敗
+    c.check(f"{len(EXPECTED_POSTS)} 個 Post ID 在此站都存在", not absent,
+            "\n       ".join(absent))
+    # 標題不同未必是錯（可能是還沒同步過去的改名）→ 只回報，腳本沒資格判定
+    if renamed:
+        print(f"  ⚠️ 有 {len(renamed)} 篇標題與 Notion 不同。請確認是預期中的改名，"
+              "而不是 ID 指向了別篇文章：")
+        for r in renamed:
+            print(f"       {r}")
+    else:
+        print("  ℹ️ 所有標題都與 Notion 一致")
 
-    # ── 7. 相依外掛（透過端點行為判斷，不寫入）──
-    print("\n【7】相依外掛")
-    probe = next(iter(SHARED_POSTS))
+    # ── 6. 相依外掛（透過端點行為判斷，不寫入）──
+    print("\n【6】相依外掛")
+    probe = next(iter(EXPECTED_POSTS))
     code, seo = c.get(f"/wp-json/synctify/v1/seo/{probe}", "POST", {})
     c.check("All in One SEO 已啟用", not (code == 501 and seo.get("code") == "no_aioseo"),
             "端點回 no_aioseo" if seo.get("code") == "no_aioseo" else "")
@@ -288,7 +300,7 @@ def main():
             "讀不到外掛清單時此項僅供參考" if not names else "")
 
     # ── 8. 發佈回呼設定 ──
-    print("\n【8】發佈回呼設定（可稍後再設，不影響同步）")
+    print("\n【7】發佈回呼設定（可稍後再設，不影響同步）")
     code, st = c.get("/wp-json/synctify/v1/settings")
     if code == 200:
         print(f"  ℹ️ callback_enabled = {st.get('callback_enabled')}"
