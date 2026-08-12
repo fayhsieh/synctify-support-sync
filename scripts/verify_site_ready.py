@@ -153,6 +153,12 @@ def diagnose(code, payload):
                 f"n8n 能寫入正式站就是因為它的 IP 已在白名單裡。")
     if payload.get("_error"):
         return payload["_error"]
+    # REST API 安全外掛（miniOrange 等）會用自己的格式擋下來，訊息與 WP 的不同
+    if isinstance(payload, dict) and payload.get("error") in ("Restricted", "UNAUTHORIZED"):
+        why = payload.get("error_reason") or payload.get("error_description") or ""
+        return (f"被 REST API 安全外掛攔下（HTTP {code}）：{why[:180]}\n"
+                f"       實測：/synctify/v1/* 可通過，被擋的是內建的 /wp/v2/*。"
+                f"這會讓同步流程無法建立草稿與查詢文章。")
     if payload.get("_notjson") is not None:
         body = payload["_notjson"].strip()
         return (f"HTTP {code}，回的不是 JSON"
