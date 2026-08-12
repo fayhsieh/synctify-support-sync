@@ -13,6 +13,11 @@ Application Password，測試站那組在正式站無效）。
 
 ⚠️ 全部是 GET 與唯讀的 POST（帶空 body 的端點只回報差異、不寫入），
 可以安全地對正式站執行。
+
+已知環境限制：正式站 support.synctify.net 在 AWS WAF 的 challenge 規則後面
+（回 HTTP 202＋空白內容，期待瀏覽器執行 JS 驗證），一般 API client 一律通不過。
+要從本機執行必須先請維運把來源 IP 加進白名單——n8n 能寫入正式站就是因為
+它的 IP 已在白名單裡。
 """
 import argparse
 import base64
@@ -102,20 +107,48 @@ class Checker:
                                      method=method, headers=headers)
         try:
             with urllib.request.urlopen(req, timeout=45) as r:
-                return r.status, json.load(r)
+                body = r.read().decode(errors="replace")
+                # 空白內容刻意**不**當成 {}：WAF 的 challenge 就是回 202＋空內容，
+                # 當成合法 JSON 會把標頭裡的原因吃掉，只剩沒用的「HTTP 202」。
+                if not body.strip():
+                    return r.status, {"_notjson": "", "_hdr": dict(r.headers)}
+                try:
+                    return r.status, json.loads(body)
+                except json.JSONDecodeError:
+                    return r.status, {"_notjson": body[:200],
+                                      "_hdr": dict(r.headers)}
         except urllib.error.HTTPError as e:
             raw = e.read().decode(errors="replace")
             try:
                 return e.code, json.loads(raw or "{}")
             except json.JSONDecodeError:
-                return e.code, {"_raw": raw[:200]}
-        except Exception as e:                       # 連不到、憑證錯、非 JSON
+                return e.code, {"_notjson": raw[:200], "_hdr": dict(e.headers)}
+        except Exception as e:                       # DNS、連線、逾時
             return 0, {"_error": f"{type(e).__name__}: {e}"}
 
     def check(self, name, ok, detail=""):
         self.results.append((bool(ok), name, detail))
         print(f"  {'✅' if ok else '❌'} {name}" + (f"\n       {detail}" if detail else ""))
         return bool(ok)
+
+
+def diagnose(code, payload):
+    """把「回了東西但不是 JSON」翻譯成看得懂的原因。"""
+    hdr = {k.lower(): v for k, v in (payload.get("_hdr") or {}).items()}
+    waf = hdr.get("x-amzn-waf-action")
+    if waf:
+        return (f"AWS WAF 的 {waf} 動作（HTTP {code}）。"
+                f"它期待瀏覽器執行 JS 驗證，API client 一律通不過。\n"
+                f"       需要請維運把你的來源 IP 加進 WAF 白名單——"
+                f"n8n 能寫入正式站就是因為它的 IP 已在白名單裡。")
+    if payload.get("_error"):
+        return payload["_error"]
+    if payload.get("_notjson") is not None:
+        body = payload["_notjson"].strip()
+        return (f"HTTP {code}，回的不是 JSON"
+                + (f"：{body[:120]}" if body else "（空白內容）")
+                + f"\n       server={hdr.get('server', '?')}")
+    return f"HTTP {code}"
 
 
 def strip_html(t):
@@ -141,13 +174,16 @@ def main():
     # ── 1. 連得到、認證過得了 ──
     print("\n【1】連線與認證")
     code, root = c.get("/wp-json/")
-    if not c.check("REST API 可連線", code == 200,
-                   root.get("_error") or root.get("_raw", "")[:120]):
-        print("\n連不上就不必往下了。若是 WAF 擋住，需要把你的來源 IP 加進白名單。")
+    ok = code == 200 and "_notjson" not in root and "_error" not in root
+    if not c.check("REST API 可連線", ok, "" if ok else diagnose(code, root)):
+        print("\n連不上就不必往下了——後面每一項都會跟著失敗，訊息只會更混亂。")
         return 1
     code, me = c.get("/wp-json/wp/v2/users/me?context=edit&_fields=id,name,capabilities")
     c.check("Application Password 有效", code == 200,
-            f"登入為 {me.get('name')!r}" if code == 200 else str(me)[:120])
+            f"登入為 {me.get('name')!r}" if code == 200 else
+            (".env 的 WP_USERNAME / WP_APP_PASSWORD 對這個站台無效——"
+             "兩站的 Application Password 是各自獨立的"
+             if (me or {}).get("code") == "rest_not_logged_in" else str(me)[:120]))
     caps = (me.get("capabilities") or {}) if code == 200 else {}
     c.check("具備 edit_posts 權限", bool(caps.get("edit_posts")))
     c.check("具備 manage_options 權限（/settings 端點需要）",
