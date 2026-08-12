@@ -71,9 +71,9 @@ TARGET = "prod"
 TARGETS = {
     "prod": {
         "wp_base": "https://support.synctify.net",
-        # 正式站要在 n8n 另外建一組 Basic Auth 憑證（Application Password 兩站獨立）
-        "wp_cred_id": "",
-        "wp_cred_name": "WordPress Credential (Prod)",
+        # 兩站的 Application Password 各自獨立，所以 n8n 也是兩組憑證
+        "wp_cred_id": "7yIBiKpBdDB40C4I",
+        "wp_cred_name": "WordPress Credential (Production)",
         "webhook_env": "N8N_WEBHOOK_PATH",
         "publish_env": "N8N_PUBLISH_WEBHOOK_PATH",
         # 回寫哪個 Notion 屬性。兩站要並行時，把測試站改成獨立欄位
@@ -84,7 +84,7 @@ TARGETS = {
     "test": {
         "wp_base": "https://support.synctify.io",
         "wp_cred_id": "oIyDk22ZdtDbphHm",
-        "wp_cred_name": "WordPress Credential",
+        "wp_cred_name": "WordPress Credential (Sandbox)",
         "webhook_env": "N8N_WEBHOOK_PATH_TEST",
         "publish_env": "N8N_PUBLISH_WEBHOOK_PATH_TEST",
         "post_id_prop": "WP Post ID",
