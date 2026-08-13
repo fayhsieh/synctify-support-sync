@@ -9,6 +9,7 @@ webhook 的 path 同樣不可寫回這裡——它就是那條端點的識別碼
 | --- | --- |
 | `notion-sync-to-wp.workflow.json` | 主流程：Notion 按鈕 → 轉換 → WP 草稿 → 回寫 Notion（33 節點） |
 | `wp-publish-callback.workflow.json` | WP 按發佈 → 標記已發佈、Status 轉 Existing、維護版本標記（15 節點） |
+| `diagnose-prod-access.workflow.json` | 診斷：從 n8n 打正式站四個路由，判斷是誰擋的（6 節點，**唯讀**）。手寫的，不由 `build_n8n_code_node.py` 產生 |
 | `code-node.py` | 上面兩條 workflow 共用的 Code node 程式，**兩邊都要貼同一份** |
 | `n8n-workflow-blueprint.md` | Workflow 2／3 的節點藍圖（尚未實作） |
 | `translation-node-migration.md` | Workflow 3 翻譯 prompt 的移植方案 |
@@ -17,6 +18,28 @@ webhook 的 path 同樣不可寫回這裡——它就是那條端點的識別碼
 `NOTION_CRED_ID`、`WEBHOOK_AUTH_CRED_ID`），所以匯入後不必再逐一雙擊節點補憑證。
 **那些只是 n8n 內部識別碼，不是帳密**——帳密與密鑰留在 n8n 的憑證管理裡。
 換 n8n 環境或重建憑證時要一併更新這三個常數，否則匯入後會出現紅色三角形。
+
+## 診斷：正式站打不進去的時候
+
+`diagnose-prod-access.workflow.json`：Import from File → Execute Workflow，不必
+Publish。全部是 GET、唯讀，不會在站上留下任何東西。
+
+**要從 n8n 跑，不是從自己的電腦跑。** 攔截可能發生在網路層（WAF 按來源 IP 判斷），
+本機通得過不代表 n8n 通得過，反過來也一樣——2026-08-13 就是為了回答維運「到底是
+哪個 workflow、有沒有具體紀錄」才做的。
+
+`整理結果` 節點會依回應特徵自動判定是誰擋的：
+
+| 特徵 | 判定 |
+| --- | --- |
+| 回應標頭有 `x-amzn-waf-action`（HTTP 202＋HTML/空白內容） | AWS WAF |
+| JSON 的鍵是 `status` / `error` / `error_description` | REST 安全外掛（miniOrange） |
+| JSON 的鍵是 `code` / `message` / `data` | WordPress 原生 |
+
+HTTP 節點都開了 `neverError` 與 `responseFormat: text`，所以 401/403 不會讓節點
+中斷、WAF 回的 HTML 也不會因為解析不了 JSON 而讓原因變成 `undefined`。
+
+另有 `n8n 的對外 IP` 節點——維運要比對白名單時，這個比任何猜測都準。
 
 ## 目標站台
 

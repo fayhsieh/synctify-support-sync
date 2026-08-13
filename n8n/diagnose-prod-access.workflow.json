@@ -1,0 +1,124 @@
+{
+  "name": "診斷：n8n → 正式站可達性",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "a1000000-0000-4000-8000-000000000001",
+      "name": "手動執行",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [-200, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// 要探測的路由。全部是 GET、唯讀，不會寫入任何資料。\nconst base = 'https://support.synctify.net';\nreturn [\n  { json: { label: 'A. REST 索引 /wp-json/',        url: base + '/wp-json/' } },\n  { json: { label: 'B. 內建 /wp/v2/users/me',       url: base + '/wp-json/wp/v2/users/me?context=edit&_fields=id,name' } },\n  { json: { label: 'C. 內建 /wp/v2/docs',           url: base + '/wp-json/wp/v2/docs?per_page=1&_fields=id' } },\n  { json: { label: 'D. 自訂 /synctify/v1/settings', url: base + '/wp-json/synctify/v1/settings' } },\n];\n"
+      },
+      "id": "a1000000-0000-4000-8000-000000000002",
+      "name": "探測清單",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [40, 380]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $json.url }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "options": {
+          "timeout": 30000,
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true,
+              "responseFormat": "text"
+            }
+          }
+        }
+      },
+      "id": "a1000000-0000-4000-8000-000000000003",
+      "name": "打正式站（帶認證）",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [280, 380],
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "7yIBiKpBdDB40C4I",
+          "name": "WordPress Credential (Production)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// 把回應整理成可以直接截圖給維運看的格式。\n// 注意：靠位置對回探測清單——診斷用途夠了，不要拿這個寫法去做正式流程。\nconst KEEP = ['x-amzn-waf-action', 'x-cache', 'server', 'content-type', 'via', 'x-amz-cf-pop', 'www-authenticate'];\nconst probes = $('探測清單').all();\nconst rows = [];\n\n$input.all().forEach((item, i) => {\n  const r = item.json || {};\n  const hdrs = {};\n  for (const [k, v] of Object.entries(r.headers || {})) {\n    if (KEEP.includes(k.toLowerCase())) hdrs[k.toLowerCase()] = v;\n  }\n  const raw = typeof r.body === 'string' ? r.body\n            : typeof r.data === 'string' ? r.data\n            : JSON.stringify(r.body ?? r.data ?? '');\n\n  // WAF 的 challenge：HTTP 202 ＋ x-amzn-waf-action 標頭 ＋ HTML/空白內容。\n  // miniOrange 的攔截：JSON，鍵是 status/error/error_description。\n  // WordPress 原生：JSON，鍵是 code/message/data。\n  let 判定 = '（看內容）';\n  if (hdrs['x-amzn-waf-action']) 判定 = 'AWS WAF：' + hdrs['x-amzn-waf-action'];\n  else if (/\"error_description\"|\"error_reason\"/.test(raw)) 判定 = 'REST 安全外掛（miniOrange）攔截';\n  else if (/\"code\"\\s*:\\s*\"rest_/.test(raw)) 判定 = 'WordPress 原生回應';\n  else if (r.statusCode >= 200 && r.statusCode < 300) 判定 = '通過';\n\n  rows.push({ json: {\n    探測: probes[i]?.json?.label ?? ('#' + i),\n    HTTP: r.statusCode,\n    判定,\n    標頭: hdrs,\n    回應內容: (raw || '（空白）').slice(0, 400),\n    執行時間: new Date().toISOString(),\n  }});\n});\n\nreturn rows;\n"
+      },
+      "id": "a1000000-0000-4000-8000-000000000004",
+      "name": "整理結果",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [520, 380]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "https://api.ipify.org?format=json",
+        "options": {
+          "timeout": 20000,
+          "response": {
+            "response": {
+              "fullResponse": false,
+              "neverError": true
+            }
+          }
+        }
+      },
+      "id": "a1000000-0000-4000-8000-000000000005",
+      "name": "n8n 的對外 IP",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [280, 140]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "https://support.synctify.net/wp-json/wp/v2/users/me",
+        "options": {
+          "timeout": 30000,
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true,
+              "responseFormat": "text"
+            }
+          }
+        }
+      },
+      "id": "a1000000-0000-4000-8000-000000000006",
+      "name": "打正式站（不帶認證，對照組）",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [280, 620]
+    }
+  ],
+  "connections": {
+    "手動執行": {
+      "main": [
+        [
+          { "node": "探測清單", "type": "main", "index": 0 },
+          { "node": "n8n 的對外 IP", "type": "main", "index": 0 },
+          { "node": "打正式站（不帶認證，對照組）", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "探測清單": {
+      "main": [[{ "node": "打正式站（帶認證）", "type": "main", "index": 0 }]]
+    },
+    "打正式站（帶認證）": {
+      "main": [[{ "node": "整理結果", "type": "main", "index": 0 }]]
+    }
+  },
+  "active": false,
+  "settings": { "executionOrder": "v1" },
+  "meta": {},
+  "tags": []
+}
