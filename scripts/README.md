@@ -1,5 +1,28 @@
 # scripts
 
+## wp_env.py —— 兩站的帳密共存
+
+`.env` 同時放正式站與測試站的憑證，腳本用 `--target` 選，不必改檔案切來切去。
+命名慣例跟 `N8N_WEBHOOK_PATH` / `N8N_WEBHOOK_PATH_TEST` 一致：
+
+| target | 站台 | .env 變數 |
+| --- | --- | --- |
+| `prod`（多數腳本的預設） | support.synctify.net | `WP_USERNAME` / `WP_APP_PASSWORD` |
+| `test` | support.synctify.io | `WP_USERNAME_TEST` / `WP_APP_PASSWORD_TEST` |
+
+`WP_BASE_URL` / `WP_BASE_URL_TEST` 可留空，模組內有預設網址。
+
+確認兩站都填齊了：
+
+```bash
+./.venv/bin/python scripts/wp_env.py
+```
+
+**兩站的 Application Password 各自獨立**，拿錯那組會 401——而那個 401 的外觀
+跟站台故障、跟被安全外掛攔截都很像。搬站期間最容易誤判的就是這一項，所以錯誤
+訊息會指名是哪個站台的哪個變數。
+
+
 ## verify_endpoints.py
 
 對測試站的六個 `/synctify/v1/` 端點各實打一次驗證（含認證負向測試與自動清理）。
@@ -7,7 +30,7 @@
 
 **前置：**
 
-1. `.env` 填好 `WP_BASE_URL` / `WP_USERNAME` / `WP_APP_PASSWORD`
+1. `.env` 填好測試站那組（`WP_USERNAME_TEST` / `WP_APP_PASSWORD_TEST`，見上）
 2. 啟動轉換 service：
 
    ```bash
@@ -22,9 +45,8 @@
 
 轉換 service 若不在預設位址，用 `CONVERTER_URL` 覆蓋。
 
-> ⚠️ 測試站目前被 SSO/OAuth 閘門擋在最前面，所有請求會 302 轉去 Google 登入而到不了
-> WordPress。腳本會在前置探測時偵測到並提早中止。需先在閘門把 `/wp-json/` 設為例外
-> （改由 Application Password 認證）或提供可通過 proxy 的憑證，才能完成驗證。
+> ⚠️ **這支會寫入**，所以預設打測試站，跟唯讀的 `verify_site_ready.py` 相反。
+> 要打正式站得自己加 `--target prod`，而且會再問一次確認（`--yes` 可跳過）。
 
 
 ## verify_site_ready.py —— 搬站前的前置檢查（唯讀）
@@ -33,11 +55,11 @@
 **全部是 GET 與唯讀的 POST，可以安全地對正式站執行。**
 
 ```bash
-./.venv/bin/python scripts/verify_site_ready.py --base https://support.synctify.net
+./.venv/bin/python scripts/verify_site_ready.py                  # 正式站（預設）
+./.venv/bin/python scripts/verify_site_ready.py --target test    # 測試站
 ```
 
-帳密取自 `.env` 的 `WP_USERNAME` / `WP_APP_PASSWORD`——**正式站要用正式站自己的
-Application Password**，測試站那組在正式站無效。
+帳密由 `wp_env` 依 `--target` 取（見上）。`--base` 可以只覆寫網址、沿用同一組帳密。
 
 檢查八組：連線與認證、輔助外掛與 9 條路由、站方預設欄位的三個名稱解析
 （封面照／作者／分類頁）、Arconix FAQ、**Notion 記錄的 WP Post ID 是否指向

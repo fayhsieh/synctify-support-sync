@@ -5,31 +5,30 @@
 用途：把流程搬到另一個站台之前，先確認那個站台具備所有先決條件。少一項就會在
 第一次同步時失敗——例如分類頁不存在會讓 /doc/defaults 回 422 直接卡住。
 
-    ./.venv/bin/python scripts/verify_site_ready.py                 # 用 .env 的 WP_BASE_URL
-    ./.venv/bin/python scripts/verify_site_ready.py --base https://support.synctify.net
+    ./.venv/bin/python scripts/verify_site_ready.py                  # 正式站（預設）
+    ./.venv/bin/python scripts/verify_site_ready.py --target test    # 測試站
+    ./.venv/bin/python scripts/verify_site_ready.py --base https://…  # 只換網址
 
-帳密取自 .env 的 WP_USERNAME / WP_APP_PASSWORD（正式站要用正式站自己的
-Application Password，測試站那組在正式站無效）。
+帳密由 `wp_env` 依 --target 取自 .env（無後綴＝正式站、_TEST＝測試站）。
+兩站的 Application Password 各自獨立，拿錯那組會 401。
 
 ⚠️ 全部是 GET 與唯讀的 POST（帶空 body 的端點只回報差異、不寫入），
 可以安全地對正式站執行。
 
-已知環境限制：正式站 support.synctify.net 在 AWS WAF 的 challenge 規則後面
-（回 HTTP 202＋空白內容，期待瀏覽器執行 JS 驗證），一般 API client 一律通不過。
-要從本機執行必須先請維運把來源 IP 加進白名單——n8n 能寫入正式站就是因為
-它的 IP 已在白名單裡。
+已知環境限制（2026-08-13 更新）：正式站裝了 miniOrange 的 REST API
+Authentication 外掛，免費版把 `/wp-json/` 索引與所有自訂命名空間擋成 403
+Restricted、內建端點回 401，所以這支腳本會停在檢查 1。那不是站台或憑證的
+問題，`diagnose()` 會據回應特徵指出來。AWS WAF 那層已於同日從 n8n 實測排除。
 """
 import argparse
-import base64
 import html
 import json
-import pathlib
 import re
 import sys
 import urllib.error
 import urllib.request
 
-ROOT = pathlib.Path(__file__).resolve().parent.parent
+import wp_env
 
 # 站台相依的東西一律以「名稱」定義——這也是搬站不必改 ID 的原因，
 # 與 wp-plugin/synctify-sync-helper.php 的常數必須一致。
@@ -49,6 +48,10 @@ KNOWN_MISSING_CATEGORY = "Automation"
 #
 # 對不上代表 Notion 的 WP Post ID 在目標站台指向別篇文章——同步會把 Elementor
 # 草稿寫進錯的文章。這是整份檢查裡最重要的一項。
+#
+# ⚠️ 這份對照表對準的是**正式站**，所以 `--target test` 必定會有兩筆對不上：
+# 7761 / 7802 是正式站人工發佈後回填的 ID，測試站上沒有那兩篇。那是預期的，
+# 不是測試站壞了。
 EXPECTED_POSTS = {
     5601: "Configure Warehouse",
     5620: "Manage User Access",
@@ -90,26 +93,17 @@ REQUIRED_ROUTES = [
 ]
 
 
-def read_env():
-    out = {}
-    f = ROOT / ".env"
-    if f.exists():
-        for line in f.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if line and not line.startswith("#") and "=" in line:
-                k, v = line.split("=", 1)
-                out[k.strip()] = v.strip()
-    return out
-
-
 class Checker:
     def __init__(self, base, auth):
+        # auth 是**完整的** Authorization 標頭值（含 "Basic " 前綴），
+        # 由 wp_env.WPTarget.basic_auth_header() 產生。不要在這裡再補前綴——
+        # 補兩次會變成 "Basic Basic …"，站台一律回 401，看起來就像帳密錯。
         self.base, self.auth = base.rstrip("/"), auth
         self.results = []
 
     def get(self, path, method="GET", body=None):
         data = json.dumps(body).encode() if body is not None else None
-        headers = {"Authorization": f"Basic {self.auth}",
+        headers = {"Authorization": self.auth,
                    "User-Agent": "synctify-verify/1.0"}
         if data:
             headers["Content-Type"] = "application/json"
@@ -173,19 +167,20 @@ def strip_html(t):
 
 def main():
     ap = argparse.ArgumentParser(description="搬站前的前置檢查（唯讀）")
-    ap.add_argument("--base", help="目標站台網址，預設取 .env 的 WP_BASE_URL")
+    wp_env.add_target_arg(ap)
+    ap.add_argument("--base", help="覆寫網址（帳密仍取自 --target 對應的那組）")
     args = ap.parse_args()
 
-    env = read_env()
-    base = (args.base or env.get("WP_BASE_URL", "")).rstrip("/")
-    user, pw = env.get("WP_USERNAME", ""), env.get("WP_APP_PASSWORD", "").replace(" ", "")
-    if not (base and user and pw):
-        print("✗ .env 需要 WP_BASE_URL / WP_USERNAME / WP_APP_PASSWORD")
+    try:
+        wp = wp_env.resolve(args.target, base_override=args.base)
+    except wp_env.MissingCredentials as e:
+        print(f"✗ {e}")
         return 1
-    auth = base64.b64encode(f"{user}:{pw}".encode()).decode()
-    c = Checker(base, auth)
+    sfx = wp_env.TARGETS[wp.target]["suffix"]
+    c = Checker(wp.base, wp.basic_auth_header())
 
-    print(f"\n檢查目標：{base}\n" + "=" * 62)
+    print(f"\n檢查目標：{wp.base}（{wp.label}，--target {wp.target}）"
+          f"\n" + "=" * 62)
 
     # ── 1. 連得到、認證過得了 ──
     print("\n【1】連線與認證")
@@ -197,8 +192,8 @@ def main():
     code, me = c.get("/wp-json/wp/v2/users/me?context=edit&_fields=id,name,capabilities")
     authed = c.check("Application Password 有效", code == 200,
             f"登入為 {me.get('name')!r}" if code == 200 else
-            (".env 的 WP_USERNAME / WP_APP_PASSWORD 對這個站台無效——"
-             "兩站的 Application Password 是各自獨立的"
+            (f".env 的 WP_USERNAME{sfx} / WP_APP_PASSWORD{sfx} 對{wp.label}無效"
+             "——兩站的 Application Password 是各自獨立的"
              if (me or {}).get("code") == "rest_not_logged_in" else str(me)[:120]))
     if not authed:
         # 認證不過就別往下了——後面每一項都會變成「找不到」，

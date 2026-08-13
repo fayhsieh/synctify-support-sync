@@ -15,39 +15,56 @@
 安全設計：建一篇專用測試草稿當標的，不碰既有內容；結束時把草稿丟垃圾桶（非永久刪除）。
 
 前置：
-  - .env 需填 WP_BASE_URL / WP_USERNAME / WP_APP_PASSWORD（及選填 TP_TARGET_LANGUAGE）
+  - .env 需填該站台的 WP_USERNAME / WP_APP_PASSWORD（測試站是 _TEST 後綴，見 wp_env）
+    及選填 TP_TARGET_LANGUAGE
   - 轉換 service 需先啟動（預設 http://127.0.0.1:8800，可用環境變數 CONVERTER_URL 覆蓋）：
         ./.venv/bin/python -m uvicorn service.app:app --port 8800
 
 執行：
-    ./.venv/bin/python scripts/verify_endpoints.py
+    ./.venv/bin/python scripts/verify_endpoints.py                  # 測試站（預設）
+    ./.venv/bin/python scripts/verify_endpoints.py --target prod    # 需二次確認
+
+**這支腳本會寫入**（建草稿、寫 Elementor、寫 SEO、寫 TP），所以預設打測試站，
+跟唯讀的 verify_site_ready.py 相反。要打正式站必須自己加 --target prod，
+而且會再問一次——正式站上多一篇垃圾桶裡的草稿雖然不致命，但那是小編在用的站。
 
 備註：測試站若被 SSO/OAuth 閘門擋在最前面，所有請求會 302 轉去登入頁而到不了
 WordPress——此時需先在閘門放行 /wp-json/ 或提供可通過 proxy 的憑證。
 """
+import argparse
 import os
-import pathlib
 import sys
 
 import httpx
 
-ROOT = pathlib.Path(__file__).resolve().parent.parent
+import wp_env
 
-# ---- 讀 .env ----
-env = {}
-for line in (ROOT / ".env").read_text().splitlines():
-    line = line.strip()
-    if not line or line.startswith("#") or "=" not in line:
-        continue
-    k, v = line.split("=", 1)
-    env[k.strip()] = v.strip()
+ROOT = wp_env.ROOT
 
-WP = env["WP_BASE_URL"].rstrip("/")
-USER = env["WP_USERNAME"]
-PW = env["WP_APP_PASSWORD"].replace(" ", "")  # WP app password 去空白
+# ---- 選站台、讀 .env ----
+_ap = argparse.ArgumentParser(description="對 /synctify/v1/ 端點各實打一次（會寫入）")
+wp_env.add_target_arg(_ap, default="test", help_extra="這支會寫入，所以預設測試站。")
+_ap.add_argument("--yes", action="store_true", help="跳過打正式站時的二次確認")
+_args = _ap.parse_args()
+
+try:
+    _wp = wp_env.resolve(_args.target)
+except wp_env.MissingCredentials as e:
+    sys.exit(f"✗ {e}")
+
+if _wp.target == "prod" and not _args.yes:
+    print(f"⚠️  即將對{_wp.label}（{_wp.base}）執行**會寫入**的驗證："
+          f"\n    建立一篇測試草稿、寫 Elementor 版面與 SEO meta，結束後丟垃圾桶。")
+    if input("    確定要繼續嗎？輸入 yes：").strip().lower() != "yes":
+        sys.exit("已取消。")
+
+WP = _wp.base
+USER, PW = _wp.user, _wp.password
+env = wp_env.read_env()
 LANG = env.get("TP_TARGET_LANGUAGE", "zh_CN")
 CONV = os.environ.get("CONVERTER_URL", "http://127.0.0.1:8800").rstrip("/")
 
+print(f"驗證目標：{WP}（{_wp.label}）\n")
 auth = httpx.BasicAuth(USER, PW)
 client = httpx.Client(timeout=30.0)
 
