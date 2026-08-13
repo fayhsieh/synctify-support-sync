@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Synctify Sync Helper
  * Description: Notion → n8n → WordPress 自動上稿流程的輔助端點：開啟 Arconix FAQ REST、寫入 Elementor data、讀寫 TranslatePress 字典表、寫入 AIOSEO meta。
- * Version: 0.5.2
+ * Version: 0.6.0
  * Author: Synctify Marketing (Fay)
  *
  * 安裝：外掛 → 上傳外掛（打包成 zip），或直接放入 wp-content/mu-plugins/
@@ -834,8 +834,17 @@ add_action( 'rest_api_init', function () {
 	 * 行內標記（<strong>、shortcode 產生的 <code> 等），呼叫端無法重現。
 	 * 所以撈「這次要翻什麼」必須反過來問 TP 它登錄了什麼。
 	 *
-	 * status: 0=未翻譯 1=機翻 2=人工。省略則不篩。
-	 * 回傳 { total, limit, offset, items:[{id, original, translated, status}] }
+	 * 篩選（皆選填）：
+	 *   status      0=未翻譯 1=機翻 2=人工
+	 *   block_type  TranslatePress 用它區分字串型態：0＝一般（TP 自動登錄的片段）、
+	 *               1＝區塊（人工在編輯器「上升到外層」建立的整句，original 含 HTML）。
+	 *               同一句話兩種列會並存，撈錯就會翻到已被淘汰的片段。
+	 *   post_id     只要屬於這篇文章的字串。經 trp_original_meta 關聯
+	 *               （dictionary.original_id → meta.original_id，meta_key='post_parent_id'）。
+	 *               沒有這個篩選就只能拿到全站清單，無法「只翻剛發佈那篇」。
+	 *   search      original 的子字串比對
+	 *
+	 * 回傳 items 的每一筆含 block_type 與 original_id，呼叫端才分得出兩代字串。
 	 */
 	register_rest_route( 'synctify/v1', '/tp/strings', array(
 		'methods'             => 'GET',
@@ -847,17 +856,34 @@ add_action( 'rest_api_init', function () {
 			global $wpdb;
 			$where  = array( '1=1' );
 			$params = array();
+			$join   = '';
 
-			// status 要區分「沒帶」與「帶了 0」——0 是最常用的篩選值（未翻譯），
-			// 用 empty() 判斷會把它當成沒帶，整個篩選失效。
-			$status = $req->get_param( 'status' );
-			if ( null !== $status && '' !== $status ) {
-				$where[]  = 'status = %d';
-				$params[] = (int) $status;
+			$post_id = $req->get_param( 'post_id' );
+			if ( null !== $post_id && '' !== $post_id ) {
+				$meta = $wpdb->prefix . 'trp_original_meta';
+				if ( ! $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $meta ) ) ) {
+					return new WP_Error( 'no_original_meta',
+						'This site has no trp_original_meta table; post_id filtering is unavailable.',
+						array( 'status' => 501 ) );
+				}
+				$join     = " INNER JOIN `{$meta}` m ON m.original_id = d.original_id"
+				          . " AND m.meta_key = 'post_parent_id' ";
+				$where[]  = 'm.meta_value = %s';
+				$params[] = (string) (int) $post_id;   // meta_value 是字串欄位
+			}
+
+			// status / block_type 要區分「沒帶」與「帶了 0」——0 在兩者都是有意義的值
+			// （未翻譯／一般字串），用 empty() 判斷會把它當成沒帶而讓篩選整個失效。
+			foreach ( array( 'status', 'block_type' ) as $col ) {
+				$v = $req->get_param( $col );
+				if ( null !== $v && '' !== $v ) {
+					$where[]  = "d.{$col} = %d";
+					$params[] = (int) $v;
+				}
 			}
 			$search = (string) $req->get_param( 'search' );
 			if ( '' !== $search ) {
-				$where[]  = 'original LIKE %s';
+				$where[]  = 'd.original LIKE %s';
 				$params[] = '%' . $wpdb->esc_like( $search ) . '%';
 			}
 			$cond = implode( ' AND ', $where );
@@ -865,13 +891,15 @@ add_action( 'rest_api_init', function () {
 			$limit  = min( 500, max( 1, (int) ( $req->get_param( 'limit' ) ?: 100 ) ) );
 			$offset = max( 0, (int) $req->get_param( 'offset' ) );
 
-			$count_sql = "SELECT COUNT(*) FROM {$table} WHERE {$cond}";
+			// 一個 original_id 可能對到多列 meta，用 DISTINCT 避免重複計數
+			$count_sql = "SELECT COUNT(DISTINCT d.id) FROM `{$table}` d {$join} WHERE {$cond}";
 			$total = (int) ( $params
 				? $wpdb->get_var( $wpdb->prepare( $count_sql, $params ) )
 				: $wpdb->get_var( $count_sql ) );
 
-			$rows_sql = "SELECT id, original, translated, status FROM {$table} "
-			          . "WHERE {$cond} ORDER BY id ASC LIMIT %d OFFSET %d";
+			$rows_sql = "SELECT DISTINCT d.id, d.original, d.translated, d.status,"
+			          . " d.block_type, d.original_id FROM `{$table}` d {$join} "
+			          . "WHERE {$cond} ORDER BY d.id ASC LIMIT %d OFFSET %d";
 			$rows = $wpdb->get_results(
 				$wpdb->prepare( $rows_sql, array_merge( $params, array( $limit, $offset ) ) )
 			);
@@ -883,10 +911,12 @@ add_action( 'rest_api_init', function () {
 				'offset'   => $offset,
 				'items'    => array_map( function ( $r ) {
 					return array(
-						'id'         => (int) $r->id,
-						'original'   => $r->original,
-						'translated' => $r->translated,
-						'status'     => (int) $r->status,
+						'id'          => (int) $r->id,
+						'original'    => $r->original,
+						'translated'  => $r->translated,
+						'status'      => (int) $r->status,
+						'block_type'  => (int) $r->block_type,
+						'original_id' => (int) $r->original_id,
 					);
 				}, $rows ?: array() ),
 			);
