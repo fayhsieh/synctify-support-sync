@@ -89,6 +89,7 @@ REQUIRED_ROUTES = [
     "/synctify/v1/seo/(?P<id>\\d+)",
     "/synctify/v1/settings",
     "/synctify/v1/tp/lookup",
+    "/synctify/v1/tp/strings",
     "/synctify/v1/tp/update",
 ]
 

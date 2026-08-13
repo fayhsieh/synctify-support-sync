@@ -47,7 +47,8 @@ WordPress 端的自訂 REST 端點，補足標準 REST API 做不到的部分。
 | `POST /synctify/v1/elementor/{id}/draft` | 只寫入 Elementor autosave 版本，主文章與前台完全不動（已發佈文章的更新走這條） |
 | `DELETE /synctify/v1/elementor/{id}/draft` | 刪掉上面那筆 autosave。WP core 不允許從 REST 刪 autosave，Elementor UI 的 Discard 也只清得掉「當前登入者自己寫的」那筆，所以需要這支 |
 | `POST /synctify/v1/media/sideload` | 把 Notion 的 S3 暫存圖匯入媒體庫，並寫入 title / alt / caption |
-| `POST /synctify/v1/tp/lookup` | 查詢 TranslatePress 字典表（取得未翻譯字串） |
+| `GET /synctify/v1/tp/strings` | **列舉** TranslatePress 字典表（依 `language` / `status` / `search` 篩選，分頁）。`/tp/lookup` 要呼叫端先知道字串長什麼樣，但 TP 儲存的 `original` 帶行內標記、猜不出來（實測 12 句只命中 3 句），所以撈「這次要翻什麼」得用這支 |
+| `POST /synctify/v1/tp/lookup` | 查詢指定字串的翻譯狀態（給定字串清單 → 回 id/譯文/status） |
 | `POST /synctify/v1/tp/update` | 寫入譯文（status=2 人工翻譯永不覆蓋） |
 | `POST /synctify/v1/doc/defaults/{id}` | 套用站方統一欄位：封面照 `opengraph`、作者 The Synctify Team、討論 closed、Parent 依 Notion Category 對到分類頁。全部依名稱在站上解析，不寫死 ID。另存 `notion_page_id` 供發佈回呼對應 |
 | `POST /synctify/v1/faq/sync` | 把 FAQ 題目同步進 Arconix FAQ（依 group 分類詞）。以標題比對，人工建立的既有題目會被認領而非重複建立；移除只動管過的且僅移到垃圾桶；`items` 為空時刻意不清除 |

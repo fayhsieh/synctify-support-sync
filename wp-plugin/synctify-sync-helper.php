@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Synctify Sync Helper
  * Description: Notion → n8n → WordPress 自動上稿流程的輔助端點：開啟 Arconix FAQ REST、寫入 Elementor data、讀寫 TranslatePress 字典表、寫入 AIOSEO meta。
- * Version: 0.4.0
+ * Version: 0.5.0
  * Author: Synctify Marketing (Fay)
  *
  * 安裝：外掛 → 上傳外掛（打包成 zip），或直接放入 wp-content/mu-plugins/
@@ -752,6 +752,74 @@ add_action( 'rest_api_init', function () {
 				'orphans'  => $orphans,   // 對不上且非自動管理，未觸碰
 				// items 為空時刻意跳過清除——那比較像轉換失敗而非真的要刪光
 				'prune_skipped_empty_items' => $prune_skipped,
+			);
+		},
+	) );
+
+	/* 2b-2. TranslatePress 字典表列舉（唯讀）
+	 * GET /wp-json/synctify/v1/tp/strings?language=zh_CN&status=0&limit=100&offset=0&search=stock
+	 *
+	 * 為什麼需要這支：/tp/lookup 是「你給字串、我回狀態」，前提是呼叫端知道要查什麼。
+	 * 實測（2026-08-13，測試站 post 6086）證明猜不到——用剝掉 HTML 標籤的段落文字去查，
+	 * 12 句只命中 3 句，命中的全是沒有任何行內格式的純段落。TP 儲存的 original 帶著
+	 * 行內標記（<strong>、shortcode 產生的 <code> 等），呼叫端無法重現。
+	 * 所以撈「這次要翻什麼」必須反過來問 TP 它登錄了什麼。
+	 *
+	 * status: 0=未翻譯 1=機翻 2=人工。省略則不篩。
+	 * 回傳 { total, limit, offset, items:[{id, original, translated, status}] }
+	 */
+	register_rest_route( 'synctify/v1', '/tp/strings', array(
+		'methods'             => 'GET',
+		'permission_callback' => $permission,
+		'callback'            => function ( WP_REST_Request $req ) {
+			$table = synctify_tp_table( (string) $req->get_param( 'language' ) );
+			if ( is_wp_error( $table ) ) return $table;
+
+			global $wpdb;
+			$where  = array( '1=1' );
+			$params = array();
+
+			// status 要區分「沒帶」與「帶了 0」——0 是最常用的篩選值（未翻譯），
+			// 用 empty() 判斷會把它當成沒帶，整個篩選失效。
+			$status = $req->get_param( 'status' );
+			if ( null !== $status && '' !== $status ) {
+				$where[]  = 'status = %d';
+				$params[] = (int) $status;
+			}
+			$search = (string) $req->get_param( 'search' );
+			if ( '' !== $search ) {
+				$where[]  = 'original LIKE %s';
+				$params[] = '%' . $wpdb->esc_like( $search ) . '%';
+			}
+			$cond = implode( ' AND ', $where );
+
+			$limit  = min( 500, max( 1, (int) ( $req->get_param( 'limit' ) ?: 100 ) ) );
+			$offset = max( 0, (int) $req->get_param( 'offset' ) );
+
+			$count_sql = "SELECT COUNT(*) FROM {$table} WHERE {$cond}";
+			$total = (int) ( $params
+				? $wpdb->get_var( $wpdb->prepare( $count_sql, $params ) )
+				: $wpdb->get_var( $count_sql ) );
+
+			$rows_sql = "SELECT id, original, translated, status FROM {$table} "
+			          . "WHERE {$cond} ORDER BY id ASC LIMIT %d OFFSET %d";
+			$rows = $wpdb->get_results(
+				$wpdb->prepare( $rows_sql, array_merge( $params, array( $limit, $offset ) ) )
+			);
+
+			return array(
+				'language' => (string) $req->get_param( 'language' ),
+				'total'    => $total,
+				'limit'    => $limit,
+				'offset'   => $offset,
+				'items'    => array_map( function ( $r ) {
+					return array(
+						'id'         => (int) $r->id,
+						'original'   => $r->original,
+						'translated' => $r->translated,
+						'status'     => (int) $r->status,
+					);
+				}, $rows ?: array() ),
 			);
 		},
 	) );
