@@ -1,5 +1,41 @@
 # Workflow 3 翻譯節點：Support Article Writer（Miles）prompt 移植方案
 
+> ## ⚠️ 2026-08-14 更新：翻譯單位改為「整個區塊」，不是 TP 撈出的片段
+>
+> 底下「翻片段」的前提**已被實測推翻**。TranslatePress 自動登錄的字串是以行內
+> 元素的邊界切分的片段——粗體、inline code、連結、我們的 shortcode 都是切點。
+> 所以 `Click **Submit** to update the stock level.` 在字典裡只剩
+> `to update the stock level.`。拿這種殘句去翻，產出就是 Support Center 早期
+> 那批讀起來很生硬的譯文。
+>
+> 字典表的 `block_type` 區分兩代：**0＝TP 自動登錄的片段**、**1＝整句**
+> （`original` 含渲染後的 HTML）。關鍵事實：`block_type=1` 的列原本只有人在 TP
+> 編輯器「上升到外層」才會生成，而且一生成就已是 `status=2`——實測 post 7251，
+> `block_type=1 且 status=0` 是 **0 筆，且不可能不是 0**。
+>
+> 因此自動流程若照原設計「撈 status=0」，撈到的**必然**是片段。
+>
+> **已驗證的解法**：由我們自己產生 `block_type=1` 的列。
+> `POST /synctify/v1/tp/block`（外掛 0.7.0）會同時寫 `trp_original_strings`、
+> `trp_original_meta`（掛 `post_parent_id`）與字典表三張表。2026-08-14 在測試站
+> post 7251 實測一列，前台正常渲染成
+> `<p class="translation-block">找到<strong>新订单冻结期</strong>并启用它。</p>`
+> ——TP 把我們插入的列當成正牌區塊翻譯處理，與人工建立的無異。
+>
+> **原文從哪來**：抓已發佈頁面的 HTML，取區塊元素的 innerHTML。那正是 TP 看到的
+> 同一份來源。換行不必逐位元復刻——實測 6 筆存 `\r\n`、頁面給 `\n` 的列照樣生效，
+> TP 比對時會正規化。
+>
+> **節點 9 的硬性要求**（由既有譯文的實際缺陷推導）：
+> - **只翻文字節點，標籤與屬性原封不動**。人工譯文出過錯：id 2833 的譯文多一個
+>   沒有開頭的 `</span>`（壞掉的 HTML 正掛在站上），id 2835 把
+>   `<span class="direction_step">` 換成了 `<strong>`。
+> - **過濾非散文內容**。字典裡有 GTM 的 `<iframe>`（id 3020，status=0）、
+>   錨點 href（`#31-etsy`）這類東西。
+>
+> 底下關於**在地化規則、術語 gate、品質對照測試**的內容仍然有效，
+> 只是套用的對象從「片段」變成「整個區塊（含 HTML）」。
+
 ## 前提：只移植 Workflow B（翻譯），且要改成「翻片段」而非「翻整篇」
 
 Skill 有兩個工作流：
