@@ -151,8 +151,13 @@ def diagnose(code, payload):
     if isinstance(payload, dict) and payload.get("error") in ("Restricted", "UNAUTHORIZED"):
         why = payload.get("error_reason") or payload.get("error_description") or ""
         return (f"被 REST API 安全外掛攔下（HTTP {code}）：{why[:180]}\n"
-                f"       實測：/synctify/v1/* 可通過，被擋的是內建的 /wp/v2/*。"
-                f"這會讓同步流程無法建立草稿與查詢文章。")
+                f"       正式站的 miniOrange REST API Authentication（不是 OAuth 那個）。"
+                f"免費版把 /wp-json/ 索引與所有自訂命名空間擋成 403 Restricted、"
+                f"內建端點回 401，\n"
+                f"       且 401 與帳密對錯無關（帶對的、帶錯的、不帶，回應完全相同），"
+                f"免費版沒有對應的開關。\n"
+                f"       要確認是誰擋的，從 n8n 跑 "
+                f"n8n/diagnose-prod-access.workflow.json（唯讀）。")
     if payload.get("_notjson") is not None:
         body = payload["_notjson"].strip()
         return (f"HTTP {code}，回的不是 JSON"

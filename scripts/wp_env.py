@@ -35,6 +35,18 @@ class MissingCredentials(Exception):
     """.env 少了這個站台需要的變數。訊息直接寫給使用者看，照著補就好。"""
 
 
+def normalize_base(url):
+    """補上省略的 scheme。
+
+    在 .env 裡填 `support.synctify.net` 是很自然的手誤，但 urllib 會把它當成
+    相對路徑然後拋 ValueError——那個 traceback 完全看不出真正的原因。
+    """
+    url = (url or "").strip().rstrip("/")
+    if url and "://" not in url:
+        url = "https://" + url
+    return url
+
+
 def read_env(root=ROOT):
     """把 .env 讀成 dict。檔案不存在時回空 dict，由呼叫端報錯。"""
     out = {}
@@ -91,7 +103,8 @@ def resolve(target=DEFAULT_TARGET, root=ROOT, base_override=None):
             f"找不到 {pathlib.Path(root) / '.env'}（或內容是空的）。\n"
             f"    複製 .env.example 為 .env 再填入實際值。")
 
-    base = base_override or env.get(f"WP_BASE_URL{sfx}") or spec["base"]
+    base = normalize_base(base_override or env.get(f"WP_BASE_URL{sfx}")
+                          or spec["base"])
     user = env.get(f"WP_USERNAME{sfx}", "")
     pw = env.get(f"WP_APP_PASSWORD{sfx}", "").replace(" ", "")
 
