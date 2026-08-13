@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Synctify Sync Helper
  * Description: Notion → n8n → WordPress 自動上稿流程的輔助端點：開啟 Arconix FAQ REST、寫入 Elementor data、讀寫 TranslatePress 字典表、寫入 AIOSEO meta。
- * Version: 0.6.0
+ * Version: 0.7.0
  * Author: Synctify Marketing (Fay)
  *
  * 安裝：外掛 → 上傳外掛（打包成 zip），或直接放入 wp-content/mu-plugins/
@@ -996,6 +996,145 @@ add_action( 'rest_api_init', function () {
 				'not_found'     => $not_found,
 				'failed'        => $failed,
 			);
+		},
+	) );
+
+	/* 2d-2. 建立／更新「整句」字典列（TranslatePress 的 block string）
+	 * POST /wp-json/synctify/v1/tp/block
+	 * body: {
+	 *   "language": "zh_CN",
+	 *   "post_id": 7251,
+	 *   "dry_run": true,                       // 只回報會做什麼，不寫入
+	 *   "items": [ { "original": "<整段 HTML>", "translated": "<譯文 HTML>",
+	 *                "block_type": 1 } ]       // block_type 省略時依有無標籤自動判定
+	 * }
+	 *
+	 * 為什麼需要這支：TP 自動登錄的一律是「片段」（block_type=0，以行內元素邊界切分），
+	 * 「整句」列（block_type=1，original 含渲染後 HTML）**只有人在 TP 編輯器上升到外層
+	 * 才會生成，而且一生成就已是 status=2**。實測 post 7251：block_type=1 且 status=0
+	 * 的列是 0 筆，且不可能不是 0。所以全新文章只會有片段列，自動流程照「撈 status=0」
+	 * 翻出來的必然是片段品質——那正是 Fay 已經淘汰的做法。
+	 *
+	 * 要維持品質就得由我們產生整句列，而那需要同時寫三張表：
+	 *   trp_original_strings（原文登錄）→ trp_original_meta（掛 post_parent_id）
+	 *   → trp_dictionary_*（譯文本體，block_type=1，original_id 指回去）
+	 *
+	 * status 一律寫 1（機器翻譯）。**已是 status=2 的列永不覆蓋**（與 /tp/update 同規則）。
+	 */
+	register_rest_route( 'synctify/v1', '/tp/block', array(
+		'methods'             => 'POST',
+		'permission_callback' => $permission,
+		'callback'            => function ( WP_REST_Request $req ) {
+			$p     = (array) $req->get_json_params();
+			$table = synctify_tp_table( (string) ( $p['language'] ?? '' ) );
+			if ( is_wp_error( $table ) ) return $table;
+
+			$post_id = isset( $p['post_id'] ) ? (int) $p['post_id'] : 0;
+			if ( ! $post_id || ! get_post( $post_id ) ) {
+				return new WP_Error( 'bad_request',
+					'post_id is required and must be an existing post', array( 'status' => 400 ) );
+			}
+			$items = isset( $p['items'] ) && is_array( $p['items'] ) ? $p['items'] : array();
+			if ( empty( $items ) ) {
+				return new WP_Error( 'bad_request', 'items (array) is required', array( 'status' => 400 ) );
+			}
+			$dry = ! empty( $p['dry_run'] );
+
+			global $wpdb;
+			$orig_t = $wpdb->prefix . 'trp_original_strings';
+			$meta_t = $wpdb->prefix . 'trp_original_meta';
+			foreach ( array( $orig_t, $meta_t ) as $t ) {
+				if ( ! $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $t ) ) ) {
+					return new WP_Error( 'no_trp_tables',
+						"Missing {$t}; this TranslatePress version cannot associate strings with posts.",
+						array( 'status' => 501 ) );
+				}
+			}
+
+			$out = array();
+			foreach ( $items as $item ) {
+				$original   = isset( $item['original'] ) ? (string) $item['original'] : '';
+				$translated = isset( $item['translated'] ) ? (string) $item['translated'] : '';
+				if ( '' === trim( $original ) ) {
+					$out[] = array( 'action' => 'skipped_empty_original' );
+					continue;
+				}
+				// 沒有標籤的整段，在 TP 眼中就是一般字串——強行標成 block 反而對不上
+				$block_type = array_key_exists( 'block_type', $item )
+					? (int) $item['block_type']
+					: ( preg_match( '/<[a-z][^>]*>/i', $original ) ? 1 : 0 );
+
+				$row = $wpdb->get_row( $wpdb->prepare(
+					"SELECT id, status, block_type, original_id FROM `{$table}` WHERE original = %s LIMIT 1",
+					$original
+				) );
+
+				if ( $row && 2 === (int) $row->status ) {
+					$out[] = array( 'action' => 'skipped_human', 'dictionary_id' => (int) $row->id );
+					continue;   // 人工精修的譯文永不覆蓋
+				}
+				if ( $dry ) {
+					$out[] = array(
+						'action'        => $row ? 'would_update' : 'would_create',
+						'dictionary_id' => $row ? (int) $row->id : null,
+						'block_type'    => $row ? (int) $row->block_type : $block_type,
+					);
+					continue;
+				}
+
+				// 1. 原文登錄（已存在就沿用，避免產生重複的 original_id）
+				$original_id = $row && $row->original_id
+					? (int) $row->original_id
+					: (int) $wpdb->get_var( $wpdb->prepare(
+						"SELECT id FROM `{$orig_t}` WHERE original = %s LIMIT 1", $original ) );
+				if ( ! $original_id ) {
+					if ( false === $wpdb->insert( $orig_t, array( 'original' => $original ), array( '%s' ) ) ) {
+						$out[] = array( 'action' => 'failed', 'where' => 'original_strings',
+						                'error' => $wpdb->last_error );
+						continue;
+					}
+					$original_id = (int) $wpdb->insert_id;
+				}
+
+				// 2. 關聯到文章（同一組 original_id + post 只掛一次）
+				$has_meta = (int) $wpdb->get_var( $wpdb->prepare(
+					"SELECT COUNT(*) FROM `{$meta_t}` WHERE original_id = %d"
+					. " AND meta_key = 'post_parent_id' AND meta_value = %s",
+					$original_id, (string) $post_id ) );
+				if ( ! $has_meta ) {
+					$wpdb->insert( $meta_t, array(
+						'original_id' => $original_id,
+						'meta_key'    => 'post_parent_id',
+						'meta_value'  => (string) $post_id,
+					), array( '%d', '%s', '%s' ) );
+				}
+
+				// 3. 譯文本體
+				if ( $row ) {
+					$ok = $wpdb->update( $table,
+						array( 'translated' => $translated, 'status' => 1,
+						       'block_type' => $block_type, 'original_id' => $original_id ),
+						array( 'id' => (int) $row->id ),
+						array( '%s', '%d', '%d', '%d' ), array( '%d' ) );
+					$out[] = ( false === $ok )
+						? array( 'action' => 'failed', 'where' => 'dictionary_update',
+						         'error' => $wpdb->last_error )
+						: array( 'action' => 'updated', 'dictionary_id' => (int) $row->id,
+						         'original_id' => $original_id, 'block_type' => $block_type );
+				} else {
+					$ok = $wpdb->insert( $table, array(
+						'original' => $original, 'translated' => $translated,
+						'status' => 1, 'block_type' => $block_type, 'original_id' => $original_id,
+					), array( '%s', '%s', '%d', '%d', '%d' ) );
+					$out[] = ( false === $ok )
+						? array( 'action' => 'failed', 'where' => 'dictionary_insert',
+						         'error' => $wpdb->last_error )
+						: array( 'action' => 'created', 'dictionary_id' => (int) $wpdb->insert_id,
+						         'original_id' => $original_id, 'block_type' => $block_type );
+				}
+			}
+
+			return array( 'ok' => true, 'dry_run' => $dry, 'post_id' => $post_id, 'results' => $out );
 		},
 	) );
 
