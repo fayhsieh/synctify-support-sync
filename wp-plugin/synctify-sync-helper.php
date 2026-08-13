@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Synctify Sync Helper
  * Description: Notion → n8n → WordPress 自動上稿流程的輔助端點：開啟 Arconix FAQ REST、寫入 Elementor data、讀寫 TranslatePress 字典表、寫入 AIOSEO meta。
- * Version: 0.5.1
+ * Version: 0.5.2
  * Author: Synctify Marketing (Fay)
  *
  * 安裝：外掛 → 上傳外掛（打包成 zip），或直接放入 wp-content/mu-plugins/
@@ -768,7 +768,7 @@ add_action( 'rest_api_init', function () {
 	register_rest_route( 'synctify/v1', '/tp/info', array(
 		'methods'             => 'GET',
 		'permission_callback' => $permission,
-		'callback'            => function () {
+		'callback'            => function ( WP_REST_Request $req ) {
 			global $wpdb;
 			$settings = get_option( 'trp_settings' );
 			if ( empty( $settings ) ) {
@@ -784,7 +784,7 @@ add_action( 'rest_api_init', function () {
 				$tables[ $t ] = (int) $wpdb->get_var( "SELECT COUNT(*) FROM `{$t}`" );
 			}
 
-			return array(
+			$out = array(
 				'trp_version'          => defined( 'TRP_PLUGIN_VERSION' ) ? TRP_PLUGIN_VERSION : null,
 				'default_language'     => $settings['default-language'] ?? null,
 				'translation_languages'=> $settings['translation-languages'] ?? array(),
@@ -793,6 +793,35 @@ add_action( 'rest_api_init', function () {
 				'has_original_strings' => isset( $tables[ $wpdb->prefix . 'trp_original_strings' ] ),
 				'has_original_meta'    => isset( $tables[ $wpdb->prefix . 'trp_original_meta' ] ),
 			);
+
+			// ?schema=1：連欄位與少量樣本一起回傳。用來確認 original_meta 到底靠
+			// 哪個欄位把字串關聯到文章——這決定「只翻剛發佈那篇」要怎麼實作，
+			// 不該憑對 TP 的印象決定。
+			if ( $req->get_param( 'schema' ) ) {
+				$meta_t = $wpdb->prefix . 'trp_original_meta';
+				$orig_t = $wpdb->prefix . 'trp_original_strings';
+
+				$cols = array();
+				foreach ( array_keys( $tables ) as $t ) {
+					$cols[ $t ] = $wpdb->get_col( "SHOW COLUMNS FROM `{$t}`" );
+				}
+				$out['columns'] = $cols;
+
+				if ( isset( $tables[ $meta_t ] ) ) {
+					$out['original_meta_keys'] = $wpdb->get_results(
+						"SELECT meta_key, COUNT(*) AS n FROM `{$meta_t}` GROUP BY meta_key ORDER BY n DESC",
+						ARRAY_A
+					);
+					$out['sample_original_meta'] = $wpdb->get_results(
+						"SELECT * FROM `{$meta_t}` ORDER BY meta_id DESC LIMIT 5", ARRAY_A );
+				}
+				if ( isset( $tables[ $orig_t ] ) ) {
+					$out['sample_original_strings'] = $wpdb->get_results(
+						"SELECT * FROM `{$orig_t}` ORDER BY id DESC LIMIT 3", ARRAY_A );
+				}
+			}
+
+			return $out;
 		},
 	) );
 
