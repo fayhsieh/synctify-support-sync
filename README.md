@@ -47,6 +47,7 @@ WordPress 端的自訂 REST 端點，補足標準 REST API 做不到的部分。
 | `POST /synctify/v1/elementor/{id}/draft` | 只寫入 Elementor autosave 版本，主文章與前台完全不動（已發佈文章的更新走這條） |
 | `DELETE /synctify/v1/elementor/{id}/draft` | 刪掉上面那筆 autosave。WP core 不允許從 REST 刪 autosave，Elementor UI 的 Discard 也只清得掉「當前登入者自己寫的」那筆，所以需要這支 |
 | `POST /synctify/v1/media/sideload` | 把 Notion 的 S3 暫存圖匯入媒體庫，並寫入 title / alt / caption |
+| `GET /synctify/v1/tp/info` | TranslatePress 環境探查：版本、語言設定、實際存在的 `trp_*` 表與各表筆數。字典表沒有「字串屬於哪篇文章」，能不能做「只翻剛發佈那篇」取決於站上有沒有 `trp_original_strings` / `trp_original_meta` |
 | `GET /synctify/v1/tp/strings` | **列舉** TranslatePress 字典表（依 `language` / `status` / `search` 篩選，分頁）。`/tp/lookup` 要呼叫端先知道字串長什麼樣，但 TP 儲存的 `original` 帶行內標記、猜不出來（實測 12 句只命中 3 句），所以撈「這次要翻什麼」得用這支 |
 | `POST /synctify/v1/tp/lookup` | 查詢指定字串的翻譯狀態（給定字串清單 → 回 id/譯文/status） |
 | `POST /synctify/v1/tp/update` | 寫入譯文（status=2 人工翻譯永不覆蓋） |
@@ -138,7 +139,13 @@ webhook 的 path 不入庫，進版控的 JSON 是佔位字串。跑
   - [x] 失敗處理（併入主 workflow，非獨立 Error Workflow：需要文章的 Notion page id，而 n8n 的 Error Trigger 拿不到）
   - [ ] Workflow 2 confirm-publish、Workflow 3 translate
 - [ ] 圖片上傳邏輯（Notion S3 → WP 媒體庫，含 alt/caption）
-- [ ] TranslatePress 字串切分顆粒度驗證
+- [x] **TranslatePress 字串切分顆粒度驗證**（2026-08-13，測試站實測）：TP **不存 HTML
+  標籤**，而是**以行內元素的邊界切分**——粗體、inline code、連結、我們的 shortcode
+  都是切點，兩個行內元素之間的一段純文字就是字典的一列。所以
+  `Click **Submit** to update the stock level.` 在字典裡只有 `to update the stock level.`。
+  兩個後果：(a) 呼叫端無法重現字串形態，撈清單必須用 `GET /tp/strings` 問 TP；
+  (b) **翻譯單位是殘句而非完整句**，節點 9 的 prompt 必須補語境，否則產出會很生硬
+  （人工譯者處理 id=930 時把半句改寫成完整句並補了冒號）
 - [ ] Support Center Writer prompt 移植＋翻譯品質對照測試
 - [x] Notion Content Hub 上稿按鈕（2026-08-11 公司升級 Plus 方案後解鎖，端到端實測通過）
 - [x] 發佈回呼：WP 按發佈 → Notion 標記已發佈＋版本標記自動維護（2026-08-11 實測通過）

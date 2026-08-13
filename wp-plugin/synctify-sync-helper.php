@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Synctify Sync Helper
  * Description: Notion → n8n → WordPress 自動上稿流程的輔助端點：開啟 Arconix FAQ REST、寫入 Elementor data、讀寫 TranslatePress 字典表、寫入 AIOSEO meta。
- * Version: 0.5.0
+ * Version: 0.5.1
  * Author: Synctify Marketing (Fay)
  *
  * 安裝：外掛 → 上傳外掛（打包成 zip），或直接放入 wp-content/mu-plugins/
@@ -752,6 +752,46 @@ add_action( 'rest_api_init', function () {
 				'orphans'  => $orphans,   // 對不上且非自動管理，未觸碰
 				// items 為空時刻意跳過清除——那比較像轉換失敗而非真的要刪光
 				'prune_skipped_empty_items' => $prune_skipped,
+			);
+		},
+	) );
+
+	/* 2b-1. TranslatePress 環境探查（唯讀）
+	 * GET /wp-json/synctify/v1/tp/info
+	 *
+	 * 為什麼需要：字典表 trp_dictionary_* 只有 original → translated，**沒有**
+	 * 「這列屬於哪篇文章」。所以「撈剛發佈那篇的未翻譯字串」能不能做，取決於這個
+	 * 站上的 TranslatePress 有沒有建 trp_original_strings / trp_original_meta
+	 * 那組關聯表（較新版本才有）。有＝節點 3 可以直接查；沒有＝只能靠前後比對。
+	 * 這是架構層級的分岔，不該用猜的。
+	 */
+	register_rest_route( 'synctify/v1', '/tp/info', array(
+		'methods'             => 'GET',
+		'permission_callback' => $permission,
+		'callback'            => function () {
+			global $wpdb;
+			$settings = get_option( 'trp_settings' );
+			if ( empty( $settings ) ) {
+				return new WP_Error( 'no_trp', 'TranslatePress not configured', array( 'status' => 501 ) );
+			}
+
+			$like   = $wpdb->esc_like( $wpdb->prefix . 'trp_' ) . '%';
+			$names  = $wpdb->get_col( $wpdb->prepare( 'SHOW TABLES LIKE %s', $like ) );
+			$tables = array();
+			foreach ( (array) $names as $t ) {
+				// 表名來自 SHOW TABLES，不是使用者輸入，可安全內插；
+				// 仍用反引號包住以防表名含特殊字元。
+				$tables[ $t ] = (int) $wpdb->get_var( "SELECT COUNT(*) FROM `{$t}`" );
+			}
+
+			return array(
+				'trp_version'          => defined( 'TRP_PLUGIN_VERSION' ) ? TRP_PLUGIN_VERSION : null,
+				'default_language'     => $settings['default-language'] ?? null,
+				'translation_languages'=> $settings['translation-languages'] ?? array(),
+				'tables'               => $tables,
+				// 有這兩張表，字串才可能關聯得到文章
+				'has_original_strings' => isset( $tables[ $wpdb->prefix . 'trp_original_strings' ] ),
+				'has_original_meta'    => isset( $tables[ $wpdb->prefix . 'trp_original_meta' ] ),
 			);
 		},
 	) );
