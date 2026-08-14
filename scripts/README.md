@@ -23,6 +23,34 @@
 訊息會指名是哪個站台的哪個變數。
 
 
+## glossary_audit.py / glossary_sync.py —— 術語表對帳與回寫
+
+`glossary_audit.py` 是**唯讀報告**（簡繁檢查、一致性對帳、候選新詞）；
+`glossary_sync.py` 把**算得出來的欄位**寫回 Notion 的產品用術語表。
+
+```bash
+./.venv/bin/python scripts/glossary_sync.py --target test          # dry-run
+./.venv/bin/python scripts/glossary_sync.py --target test --write
+```
+
+| | |
+| --- | --- |
+| **會寫** | 文件現況、OMS v0 現況、i18n key、一致性、文件出現次數、OMS 使用處數 |
+| **絕不碰** | 简体中文、繁體中文、已確認、備註、類型 |
+
+這條界線是最重要的設計。術語表要成為單一真實來源，靠的是「每一筆都有人決定過」；
+腳本一旦能覆蓋 `简体中文` 或 `已確認`，那個保證就沒了——與外掛 `/tp/update`
+永不覆蓋 `status=2` 是同一個原則。
+
+資料來源是 OMS repo 的 `resources/lang/`（需 `gh` 已登入）與 Support Center 的
+TranslatePress 人工譯文。需要 `.env` 的 `NOTION_API_KEY`。
+
+**OMS 使用處數比文件出現次數重要**：前者是該字串對應幾個 i18n key ＝ 改動會影響
+產品幾個地方。2026-08-14 實測文件次數 97 筆都是 1、幾乎無鑑別度，而 OMS 處數
+分布在 1–14；`Active` 在產品用了 10 處、文件 0 次——只看文件次數會把影響面
+最大的詞排到最底。
+
+
 ## verify_endpoints.py
 
 對測試站的六個 `/synctify/v1/` 端點各實打一次驗證（含認證負向測試與自動清理）。
