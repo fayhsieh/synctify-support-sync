@@ -738,10 +738,47 @@ def _resolve_link(url, label):
 
 # ---------- 行內格式轉換 ----------
 
+# Notion 會夾帶的協作標記。三種都是「留言／協作」留下的痕跡，
+# 一律拆掉外層 span、保留裡面的文字（見 docs/mapping-rules.md §四之三）。
+#
+# ⚠️ 漏掉任何一種的後果是它會出現在**公開頁面**上。2026-08-14 掃描測試站 36 篇
+# 已發佈文章，7 篇帶著 notion-enable-hover 或 notionvc 註解——那些是人工上稿的
+# 舊文，但也證明少列一種就會漏出去。
+_NOTION_SPAN_MARKERS = (
+    r'discussion-urls\s*=',        # 留言錨點
+    r'class="[^"]*notion-enable-hover',  # 懸浮提示包裹（曾漏掉）
+)
+
+
+def _unwrap_span(text, marker):
+    """拆掉符合 marker 的 <span>，保留內容。
+
+    不能用 `<span …>(.*?)</span>` ——非貪婪比對遇到巢狀 span 會停在**內層**的
+    收尾標籤，把外層的 `</span>` 留在原文裡。這裡改用深度計數找對應的收尾。
+    """
+    open_re = re.compile(r"<span\b[^>]*?%s[^>]*>" % marker, re.I)
+    while True:
+        m = open_re.search(text)
+        if not m:
+            return text
+        depth, close = 1, None
+        for t in re.finditer(r"<(/?)span\b[^>]*>", text[m.end():]):
+            depth += -1 if t.group(1) else 1
+            if depth == 0:
+                close = (m.end() + t.start(), m.end() + t.end())
+                break
+        if close is None:      # 沒有對應收尾（來源殘缺）——只拆開始標籤，避免無限迴圈
+            text = text[:m.start()] + text[m.end():]
+            continue
+        text = text[:m.start()] + text[m.end():close[0]] + text[close[1]:]
+
+
 def strip_notion_artifacts(text):
     """剔除 Notion 留言標記與雜訊"""
-    text = re.sub(r'<span discussion-urls="[^"]*">(.*?)</span>', r"\1", text, flags=re.S)
-    text = re.sub(r"<!--\s*notionvc:[^>]*-->", "", text)
+    for marker in _NOTION_SPAN_MARKERS:
+        text = _unwrap_span(text, marker)
+    # 註解內容不含 `>`，但用 .*? 比 [^>]* 保險
+    text = re.sub(r"<!--\s*notionvc:.*?-->", "", text, flags=re.S)
     return text
 
 def inline_md_to_html(text):

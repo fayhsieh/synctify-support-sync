@@ -176,7 +176,7 @@ Callout 首行若為粗體獨立行 → alert_title，其餘內容 → alert_des
 | Version History 段（`### vN - 日期`） | 不同步，僅留 Notion 內部追蹤 |
 | 內部審核筆記（帶 toggle 的 callout、標題含「Content Review Notes」） | 不同步，自動剔除 |
 | **圖片佔位鷹架**：首行為 `Image Placeholder` 的 callout（內含檔名與 caption/alt） | 不同步，整個剔除。標記寫在 callout 自身或第一個子區塊都認。計入 `report["excluded_placeholders"]` |
-| Notion 留言標記（discussion span）、notionvc 註解 | 剔除 |
+| Notion 協作標記，**三種都要剔除**：`<span discussion-urls="…">`、`<span class="notion-enable-hover">`、`<!-- notionvc: … -->` | span 拆掉外層、保留裡面的文字；註解整段移除。由 `strip_notion_artifacts()` 處理。<br>**漏一種就會出現在公開頁面上**——2026-08-14 掃描測試站 36 篇已發佈文章，7 篇帶著 `notion-enable-hover` 或 `notionvc`（人工上稿的舊文，其譯文已在正式站完成，決定不回頭改；新版本走流程時自然乾淨）。<br>拆 span 用深度計數找對應的收尾標籤，**不能用 `<span …>(.*?)</span>`**——非貪婪比對遇到巢狀 span 會停在內層的 `</span>`，把外層那個留在原文裡 |
 
 ## 六之二、Notion 沒有、但 WP 每篇必填的欄位
 
