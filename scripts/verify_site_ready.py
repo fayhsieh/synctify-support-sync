@@ -145,8 +145,12 @@ def diagnose(code, payload):
     if waf:
         return (f"AWS WAF 的 {waf} 動作（HTTP {code}）。"
                 f"它期待瀏覽器執行 JS 驗證，API client 一律通不過。\n"
-                f"       需要請維運把你的來源 IP 加進 WAF 白名單——"
-                f"n8n 能寫入正式站就是因為它的 IP 已在白名單裡。")
+                f"       這是**你這台機器的來源 IP** 沒被放行，跟站台狀態無關"
+                f"（連著 Sam 的 VPN 時就不會出現）。\n"
+                f"       n8n 的來源 IP 則不受影響——2026-08-13 從 n8n 實測四個路由"
+                f"全部直達 Apache，沒有任何 x-amzn-waf-action。\n"
+                f"       要看正式站現在的真實狀態，從 n8n 跑 "
+                f"n8n/diagnose-prod-access.workflow.json（唯讀）。")
     if payload.get("_error"):
         return payload["_error"]
     # REST API 安全外掛（miniOrange 等）會用自己的格式擋下來，訊息與 WP 的不同
