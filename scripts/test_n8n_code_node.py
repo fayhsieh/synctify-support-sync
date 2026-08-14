@@ -17,6 +17,7 @@ import textwrap
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 CODE = ROOT / "n8n" / "code-node.py"
+TP_CODE = ROOT / "n8n" / "tp-code-node.py"
 
 # n8n v2 的 Python runner 會拒絕「不安全的內建函式」。實測 `hasattr` 即被擋
 # （錯誤：name 'hasattr' is not defined），故此處以保守清單模擬：
@@ -201,11 +202,60 @@ def main():
     except NameError:
         print("    ✅ hasattr 被正確擋下（對應 n8n 實測錯誤）")
 
+    # ── 情境 4：Workflow 3 的區塊抽取節點 ──
+    print("\n情境 4｜tp-code-node.py（抽出待翻譯區塊）")
+    tp_source = TP_CODE.read_text(encoding="utf-8")
+
+    page = (
+        '<html><body><header><p>側邊欄不該被抽到</p></header>'
+        '<div data-elementor-type="wp-post" data-elementor-id="7251" '
+        'class="elementor elementor-7251">'
+        "<p>Find <strong>New Order Frozen Period</strong> and enable it.</p>"
+        "<p>Already translated by a human.</p>"
+        '<p><iframe src="https://www.googletagmanager.com/ns.html?id=GTM-X"></iframe></p>'
+        "</div><footer><p>頁尾不該被抽到</p></footer></body></html>"
+        + "<!-- padding -->" * 40          # 撐過介面層的長度門檻
+    )
+    tp_items = [
+        {"json": {"data": page}},                       # HTTP：頁面（responseFormat=text）
+        {"json": {"language": "zh_CN", "total": 1, "items": [
+            {"id": 1, "original": "Already translated by a human.",
+             "translated": "已由人工翻譯。", "status": 2, "block_type": 1}]}},
+    ]
+    out = run_as_n8n(tp_source, items=tp_items)[0]["json"]
+    pend = [b["original"] for b in out.get("pending", [])]
+    checks_d = {
+        "在只允許 re 的環境下跑得起來": out.get("ok") is True,
+        "自己從頁面認出 post_id": out.get("post_id") == 7251,
+        "抽到待翻譯的區塊": pend == ["Find <strong>New Order Frozen Period</strong> and enable it."],
+        "人工譯文（status=2）不再重送": "Already translated by a human." not in pend,
+        "側邊欄與頁尾被範圍擋掉": not any("不該被抽到" in p for p in pend),
+        "GTM 的 iframe 被當成非散文跳過": not any("googletagmanager" in p for p in pend),
+    }
+    for k, v in checks_d.items():
+        print(f"    {'✅' if v else '❌'} {k}")
+    failures += [k for k, v in checks_d.items() if not v]
+
+    # 兩個輸入互換順序仍要能認出來——實際接線可能是 Merge，也可能兩條線直接接進來
+    out2 = run_as_n8n(tp_source, items=list(reversed(tp_items)))[0]["json"]
+    ok_order = out2.get("ok") is True and out2.get("post_id") == 7251
+    print(f"    {'✅' if ok_order else '❌'} 輸入順序顛倒也認得出來")
+    if not ok_order:
+        failures.append("tp：輸入順序顛倒就失敗")
+
+    # 缺 HTML 時要回可讀的原因，而不是丟例外讓 n8n 顯示 undefined
+    out3 = run_as_n8n(tp_source, items=[{"json": {"foo": "bar"}}])[0]["json"]
+    # 訊息刻意用 n8n UI 上的標籤（Response Format），照著找得到那個設定
+    ok_err = out3.get("ok") is False and "Response Format" in (out3.get("error") or "")
+    print(f"    {'✅' if ok_err else '❌'} 缺頁面 HTML 時給出可讀的原因")
+    if not ok_err:
+        failures.append("tp：缺 HTML 時沒有可讀訊息")
+
     print("\n" + "=" * 55)
     if failures:
         print("❌ 未通過：" + "、".join(failures))
         sys.exit(1)
-    print("✅ 全部通過 —— n8n/code-node.py 可在僅允許 re 的環境下正確執行")
+    print("✅ 全部通過 —— n8n/*code-node.py 可在僅允許 re 的環境下正確執行")
 
 
 if __name__ == "__main__":

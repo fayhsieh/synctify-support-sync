@@ -1,3 +1,17 @@
+# ══════════════════════════════════════════════════════════════════
+#  自動產生，請勿直接編輯
+#  來源：converter/tp_blocks.py
+#  重新產生：./.venv/bin/python scripts/build_n8n_code_node.py
+#  修改請改 converter/tp_blocks.py 並跑 pytest，再重新產生後貼回 n8n
+#
+#  Workflow 3｜節點「抽出待翻譯區塊」
+#  輸入：任意順序的 items，其中要有
+#     (a) 已發佈頁面的 HTML —— 字串欄位（HTTP Request 設 responseFormat=text）
+#     (b) GET /synctify/v1/tp/strings 的回應 —— 帶 items 陣列
+#  輸出：單一 item，含 pending 清單。要逐段翻譯就在後面接 Split Out。
+# ══════════════════════════════════════════════════════════════════
+
+# ─── converter/tp_blocks.py ───
 """從已發佈頁面的 HTML 取出「可翻譯的區塊」——Workflow 3 節點 2／3。
 
 ## 為什麼要從 HTML 抽，而不是問 TranslatePress
@@ -194,3 +208,70 @@ def pending_blocks(html, post_id=None, existing=None):
         # 一起帶進簡中版。呼叫端應該把它報出來，而不是靜靜地翻下去。
         "notion_residue": [b["original"] for b in pending if b["has_notion_residue"]],
     }
+
+
+# ══════════════════════════════════════════════════════════════════
+#  n8n 介面層
+# ══════════════════════════════════════════════════════════════════
+
+def _unwrap(_it):
+    if isinstance(_it, dict):
+        _j = _it.get("json")
+        return _j if isinstance(_j, dict) else _it
+    return {}
+
+
+def _pick_inputs(_items):
+    """從 items 裡認出「HTML」與「字典列」，不管它們的先後或來自哪個節點。
+
+    Python Code node 只拿得到 `_items`（跨節點取值一律行不通），而上游是兩個
+    HTTP 節點。與其把接線方式寫死，不如靠形狀判斷——Merge 成一個 item、或兩條
+    線直接接進來，兩種接法都能吃。
+    """
+    _html, _existing = "", []
+    for _raw in _items or []:
+        _j = _unwrap(_raw)
+        for _k in ("data", "body", "html", "page", "content"):
+            _v = _j.get(_k)
+            # 頁面 HTML 一定夠長且含標籤；避免把短字串誤認成頁面
+            if isinstance(_v, str) and len(_v) > 500 and "<" in _v:
+                _html = _v
+        _rows = _j.get("items")
+        if isinstance(_rows, list) and _rows and isinstance(_rows[0], dict) \
+                and "original" in _rows[0]:
+            _existing = _rows
+    return _html, _existing
+
+
+_html, _existing = _pick_inputs(_items)
+
+if not _html:
+    return [{"json": {
+        "ok": False,
+        "error": "沒有收到頁面 HTML。上游的 HTTP Request 節點要設 "
+                 "Response Format = text，並確認它的輸出有進到這個節點。",
+        "received_items": len(_items or []),
+    }}]
+
+_out = pending_blocks(_html, None, _existing)
+
+if not _out["post_id"]:
+    return [{"json": {
+        "ok": False,
+        "error": "頁面裡找不到 data-elementor-id，抓到的可能不是文章頁"
+                 "（例如被導去登入頁或 WAF 的驗證頁）。",
+        "html_head": _html[:200],
+    }}]
+
+return [{"json": {
+    "ok": True,
+    "post_id": _out["post_id"],
+    "total_blocks": _out["total_blocks"],
+    "already_human": _out["already_human"],
+    "pending_count": len(_out["pending"]),
+    "pending": _out["pending"],
+    # 這篇的來源帶著 Notion 留言標記——翻譯會把髒東西一起帶進簡中版。
+    # 不中止流程，但要讓人看得到。
+    "notion_residue_count": len(_out["notion_residue"]),
+    "notion_residue": _out["notion_residue"][:5],
+}}]

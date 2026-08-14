@@ -141,6 +141,19 @@ def test_has_inline標示是否行內混排():
     assert [b["has_inline"] for b in got] == [False, True]
 
 
+def test_從頁面認出post_id():
+    """n8n 的 Python Code node 只拿得到 _items，跨節點取值行不通——
+    頁面自己帶著 id，就少一個依賴。"""
+    assert tb.detect_post_id(wrap("<p>x</p>", 7251)) == 7251
+    assert tb.detect_post_id("<html><body>no elementor</body></html>") is None
+
+
+def test_pending_blocks可以不給post_id():
+    out = tb.pending_blocks(wrap("<p>Alpha.</p>", 7251))
+    assert out["post_id"] == 7251
+    assert [b["original"] for b in out["pending"]] == ["Alpha."]
+
+
 def test_標記notion留言殘留但不剔除():
     """original 必須與頁面逐字相符，動了就對不上 TP 的比對——所以只標記。
 
