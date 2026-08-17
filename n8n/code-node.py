@@ -1,8 +1,12 @@
 # ══════════════════════════════════════════════════════════════════
 #  自動產生，請勿直接編輯
 #  來源：converter/notion_blocks.py + converter/notion2elementor.py
-#  重新產生：./.venv/bin/python scripts/build_n8n_code_node.py
+#  重新產生：./.venv/bin/python scripts/build_n8n_code_node.py [--target test]
 #  修改請改 converter/*.py 並跑 pytest，再重新產生後貼回 n8n
+#
+#  ⚠️ 這份內容**依 target 而不同**（Post ID 欄位名兩站不一樣），
+#     不能兩站共用同一份。要貼哪一站就用該 target 產生，
+#     或直接匯入對應的 workflow JSON（裡面已經嵌好了）。
 # ══════════════════════════════════════════════════════════════════
 
 # ─── converter/notion_blocks.py ───
@@ -551,7 +555,7 @@ def unescape_wp_title(text):
     return out.strip()
 
 
-def build_link_map(hub_rows, wp_docs):
+def build_link_map(hub_rows, wp_docs, post_id_prop="WP Post ID"):
     """{Notion 頁面 id: {"url", "title", "doc_name"}}。
 
     hub_rows —— Content Hub 的查詢結果（Notion API 原生格式）
@@ -562,6 +566,9 @@ def build_link_map(hub_rows, wp_docs):
     連結文字若正好等於 Doc name，就代表它是提及而非作者自訂的字，可以換成 WP 標題。
 
     WP Post ID 只記在母列，但寫作者可能連到版本子列，所以子列沿用母列的資料。
+
+    post_id_prop —— 兩站並行時各自有欄位（測試站是「WP Post ID (Test)」），
+    讀錯的話連結會對到另一站的文章 ID，永久連結就全部對不上。
     """
     wp = {}
     for d in wp_docs or []:
@@ -580,7 +587,7 @@ def build_link_map(hub_rows, wp_docs):
         props = r.get("properties") or {}
         tt = (props.get("Doc name") or {}).get("title") or []
         doc_names[rid] = (tt[0].get("plain_text") or "").strip() if tt else ""
-        rt = (props.get("WP Post ID") or {}).get("rich_text") or []
+        rt = (props.get(post_id_prop) or {}).get("rich_text") or []
         post_id = (rt[0].get("plain_text") or "").strip() if rt else ""
         if post_id and post_id in wp:
             direct[rid] = dict(wp[post_id])
@@ -1449,7 +1456,8 @@ def _run(blocks, meta):
     # Notion 內部連結 → WP 永久連結。對照表由上游兩個節點提供；沒給就跳過解析，
     # 行為與加這個功能之前一致。
     _link_map = build_link_map(meta["hub_rows"] if "hub_rows" in meta else [],
-                               meta["wp_docs"] if "wp_docs" in meta else [])
+                               meta["wp_docs"] if "wp_docs" in meta else [],
+                               "WP Post ID")
     template, faq_items, report = convert(markdown, title, faq_group,
                                           sync_date=sync_date, link_map=_link_map)
     report["blocks"] = blocks_report

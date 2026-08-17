@@ -543,7 +543,7 @@ def unescape_wp_title(text):
     return out.strip()
 
 
-def build_link_map(hub_rows, wp_docs):
+def build_link_map(hub_rows, wp_docs, post_id_prop="WP Post ID"):
     """{Notion 頁面 id: {"url", "title", "doc_name"}}。
 
     hub_rows —— Content Hub 的查詢結果（Notion API 原生格式）
@@ -554,6 +554,9 @@ def build_link_map(hub_rows, wp_docs):
     連結文字若正好等於 Doc name，就代表它是提及而非作者自訂的字，可以換成 WP 標題。
 
     WP Post ID 只記在母列，但寫作者可能連到版本子列，所以子列沿用母列的資料。
+
+    post_id_prop —— 兩站並行時各自有欄位（測試站是「WP Post ID (Test)」），
+    讀錯的話連結會對到另一站的文章 ID，永久連結就全部對不上。
     """
     wp = {}
     for d in wp_docs or []:
@@ -572,7 +575,7 @@ def build_link_map(hub_rows, wp_docs):
         props = r.get("properties") or {}
         tt = (props.get("Doc name") or {}).get("title") or []
         doc_names[rid] = (tt[0].get("plain_text") or "").strip() if tt else ""
-        rt = (props.get("WP Post ID") or {}).get("rich_text") or []
+        rt = (props.get(post_id_prop) or {}).get("rich_text") or []
         post_id = (rt[0].get("plain_text") or "").strip() if rt else ""
         if post_id and post_id in wp:
             direct[rid] = dict(wp[post_id])

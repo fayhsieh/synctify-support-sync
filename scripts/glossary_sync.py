@@ -44,7 +44,11 @@ from collections import Counter, defaultdict
 import wp_env
 from glossary_audit import fetch_tp_corpus
 
-GLOSSARY_DS = "aed72de7-d753-403d-b9c0-2d362c357205"   # 產品用術語表
+# 產品用術語表。⚠️ 這裡要的是 **database** ID，不是 collection／data source ID
+# （後者是 aed72de7-d753-403d-b9c0-2d362c357205，丟給公開 API 會回 404
+# object_not_found，而錯誤訊息只會說「請確認有分享給整合」，很容易誤判成權限問題）。
+# 與 .env.example 對 NOTION_CONTENT_HUB_DB_ID 記下的是同一個坑。
+GLOSSARY_DB = "1ab2891d5ddd48db97d1f1c1afeefcf5"
 OMS_REPO = "Synct1fy/v0"
 OMS_LANG_PATH = "resources/lang"
 
@@ -149,7 +153,7 @@ def fetch_glossary(token):
         body = {"page_size": 100}
         if cursor:
             body["start_cursor"] = cursor
-        data = notion(f"/databases/{GLOSSARY_DS}/query", token, "POST", body)
+        data = notion(f"/databases/{GLOSSARY_DB}/query", token, "POST", body)
         for pg in data.get("results", []):
             title = pg["properties"].get("English", {}).get("title", [])
             rows.append({"id": pg["id"],
@@ -216,7 +220,12 @@ def main():
         key = row["english"].lower()
         o, d = oms.get(key), docs.get(key)
         if not o and not d:
+            # 兩邊都比對不到就**整筆跳過**，不要把欄位清空。
+            # 比對是「完全相符的字串」，而像 SSCC、ASIN 這種只出現在句子裡面、
+            # 不是獨立詞條的詞，腳本本來就找不到——那不代表資訊不存在，
+            # 只代表這支腳本無從驗證。擦掉人手寫的內容比留著舊值糟得多。
             missing.append(row["english"])
+            continue
         oms_cn = sorted(o["cn"]) if o else []
         doc_cn = sorted(d["cn"]) if d else []
 
@@ -236,7 +245,8 @@ def main():
 
     print(f"需要更新 {len(changed)} 筆，已是最新 {unchanged} 筆")
     if missing:
-        print(f"⚠️ 有 {len(missing)} 筆在 OMS 與文件裡都找不到（可能是人工新增的詞）：")
+        print(f"ℹ️ 有 {len(missing)} 筆兩邊都比對不到，**整筆跳過、原值保留**")
+        print("   （多是只出現在句子裡、不是獨立詞條的詞，腳本無從驗證）：")
         print("   " + "、".join(missing[:12]) + ("…" if len(missing) > 12 else ""))
 
     if not args.write:

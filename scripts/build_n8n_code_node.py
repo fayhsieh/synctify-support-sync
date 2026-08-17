@@ -80,6 +80,8 @@ TARGETS = {
         # 回寫哪個 Notion 屬性。兩站要並行時，把測試站改成獨立欄位
         # （例如 "WP Post ID (Test)"），才不會互相覆蓋。
         "post_id_prop": "WP Post ID",
+        "status_prop": "上稿狀態",
+        "synced_at_prop": "最後同步時間",
         "suffix": "",
     },
     "test": {
@@ -88,7 +90,11 @@ TARGETS = {
         "wp_cred_name": "WordPress Credential (Sandbox)",
         "webhook_env": "N8N_WEBHOOK_PATH_TEST",
         "publish_env": "N8N_PUBLISH_WEBHOOK_PATH_TEST",
-        "post_id_prop": "WP Post ID",
+        # ⚠️ 兩站並行時**必須**用各自的欄位。共用的話測試站同步會蓋掉正式站的
+        # Post ID，下一次正式站同步就寫到不存在的文章去了（狀態同理）。
+        "post_id_prop": "WP Post ID (Test)",
+        "status_prop": "上稿狀態 (Test)",
+        "synced_at_prop": "最後同步時間 (Test)",
         "suffix": ".test",
     },
 }
@@ -96,7 +102,8 @@ TARGETS = {
 
 def use_target(name):
     """套用目標站台設定。回傳該站台的 dict。"""
-    global TARGET, WP_BASE, WP_CRED_ID, WP_CRED_NAME, POST_ID_PROP
+    global TARGET, WP_BASE, WP_CRED_ID, WP_CRED_NAME
+    global POST_ID_PROP, STATUS_PROP, SYNCED_AT_PROP
     if name not in TARGETS:
         raise SystemExit(f"✗ 未知的 target：{name}（可用：{', '.join(TARGETS)}）")
     TARGET = name
@@ -105,12 +112,16 @@ def use_target(name):
     WP_CRED_ID = t["wp_cred_id"]
     WP_CRED_NAME = t["wp_cred_name"]
     POST_ID_PROP = t["post_id_prop"]
+    STATUS_PROP = t["status_prop"]
+    SYNCED_AT_PROP = t["synced_at_prop"]
     return t
 
 
 WP_CRED_ID = ""
 WP_CRED_NAME = ""
 POST_ID_PROP = "WP Post ID"
+STATUS_PROP = "上稿狀態"
+SYNCED_AT_PROP = "最後同步時間"
 
 NOTION_CRED_ID = "xfGHH7Wx4EucMC0X"
 NOTION_CRED_NAME = "Support Center Sync"
@@ -121,8 +132,12 @@ WP_BASE = ""     # 由 use_target() 設定
 HEADER = '''# ══════════════════════════════════════════════════════════════════
 #  自動產生，請勿直接編輯
 #  來源：converter/notion_blocks.py + converter/notion2elementor.py
-#  重新產生：./.venv/bin/python scripts/build_n8n_code_node.py
+#  重新產生：./.venv/bin/python scripts/build_n8n_code_node.py [--target test]
 #  修改請改 converter/*.py 並跑 pytest，再重新產生後貼回 n8n
+#
+#  ⚠️ 這份內容**依 target 而不同**（Post ID 欄位名兩站不一樣），
+#     不能兩站共用同一份。要貼哪一站就用該 target 產生，
+#     或直接匯入對應的 workflow JSON（裡面已經嵌好了）。
 # ══════════════════════════════════════════════════════════════════
 '''
 
@@ -193,7 +208,8 @@ def _run(blocks, meta):
     # Notion 內部連結 → WP 永久連結。對照表由上游兩個節點提供；沒給就跳過解析，
     # 行為與加這個功能之前一致。
     _link_map = build_link_map(meta["hub_rows"] if "hub_rows" in meta else [],
-                               meta["wp_docs"] if "wp_docs" in meta else [])
+                               meta["wp_docs"] if "wp_docs" in meta else [],
+                               "__POST_ID_PROP__")
     template, faq_items, report = convert(markdown, title, faq_group,
                                           sync_date=sync_date, link_map=_link_map)
     report["blocks"] = blocks_report
@@ -433,6 +449,9 @@ def build():
     # 兩個模組都有 `import re`，保留第一個即可
     conv_src = re.sub(r"^import re$", "", conv_src, count=1, flags=re.M)
 
+    # ADAPTER 是靜態字串，欄位名要在組裝時代入——兩站的 Post ID 欄位不同，
+    # 讀錯會讓連結對照表指向另一站的文章 ID。
+    adapter = ADAPTER.replace("__POST_ID_PROP__", POST_ID_PROP)
     body = "\n".join([
         HEADER,
         "# ─── converter/notion_blocks.py ───",
@@ -440,7 +459,7 @@ def build():
         "",
         "# ─── converter/notion2elementor.py ───",
         conv_src.rstrip(),
-        ADAPTER.rstrip(),
+        adapter.rstrip(),
         "",
     ])
     return body
@@ -875,7 +894,7 @@ def build_polling_workflow(code):
 
         {"parameters": notion_http(
             "PATCH", "=https://api.notion.com/v1/pages/{{ " + f"$('{PICK}').first().json.page_id" + " }}",
-            '={{ { "properties": { "上稿狀態": { "select": { "name": "❌ 同步失敗" } } } } }}'),
+            '={{ { "properties": { "' + STATUS_PROP + '": { "select": { "name": "❌ 同步失敗" } } } } }}'),
          "id": nid(), "name": "回寫：同步失敗", "type": "n8n-nodes-base.httpRequest",
          "typeVersion": 4.2, "position": [3060, 620],
          "credentials": {"notionApi": {"id": NOTION_CRED_ID, "name": NOTION_CRED_NAME}},
@@ -1059,8 +1078,8 @@ def build_polling_workflow(code):
             # 同步成功一律「草稿已建立」（Fay 2026-08-11 決定）。原本會依 autosave_id
             # 分寫「待確認發佈」，但實務上兩者對小編是同一件事：看到這個狀態就代表
             # 同步成功、可以去 WP 處理。「已發佈」改由外掛在 WP 端按下發佈時回呼寫入。
-            '"上稿狀態": { "select": { "name": "草稿已建立" } }, '
-            '"最後同步時間": { "date": { "start": $now.toISO() } } } } }}'),
+            '"' + STATUS_PROP + '": { "select": { "name": "草稿已建立" } }, '
+            '"' + SYNCED_AT_PROP + '": { "date": { "start": $now.toISO() } } } } }}'),
          "id": nid(), "name": "Notion：回寫母列",
          "type": "n8n-nodes-base.httpRequest", "typeVersion": 4.2, "position": [3940, 220],
          "credentials": {"notionApi": {"id": NOTION_CRED_ID, "name": NOTION_CRED_NAME}},
@@ -1072,8 +1091,8 @@ def build_polling_workflow(code):
             "PATCH",
             "=https://api.notion.com/v1/pages/{{ " + f"$('{PICK}').first().json.page_id" + " }}",
             '={{ { "properties": { '
-            '"上稿狀態": { "select": { "name": "草稿已建立" } }, '
-            '"最後同步時間": { "date": { "start": $now.toISO() } } } } }}'),
+            '"' + STATUS_PROP + '": { "select": { "name": "草稿已建立" } }, '
+            '"' + SYNCED_AT_PROP + '": { "date": { "start": $now.toISO() } } } } }}'),
          "id": nid(), "name": "Notion：回寫子列",
          "type": "n8n-nodes-base.httpRequest", "typeVersion": 4.2, "position": [4160, 300],
          "credentials": {"notionApi": {"id": NOTION_CRED_ID, "name": NOTION_CRED_NAME}},
@@ -1301,8 +1320,8 @@ def build_publish_callback_workflow(code):
             "nodeCredentialType": "notionApi",
             "sendBody": True, "specifyBody": "json",
             "jsonBody": '={{ { "properties": { '
-                        '"上稿狀態": { "select": { "name": "已發佈" } }, '
-                        '"最後同步時間": { "date": { "start": $now.toISO() } } } } }}',
+                        '"' + STATUS_PROP + '": { "select": { "name": "已發佈" } }, '
+                        '"' + SYNCED_AT_PROP + '": { "date": { "start": $now.toISO() } } } } }}',
             "options": {}},
          "id": nid(), "name": "Notion：標記已發佈",
          "type": "n8n-nodes-base.httpRequest", "typeVersion": 4.2, "position": [140, 220],
@@ -1324,7 +1343,7 @@ def build_publish_callback_workflow(code):
             # Status 一併轉成 Existing：內容已經上線，不再是 Content Approved
             # 的待上稿狀態（Fay 2026-08-11）。Status 是 status 型，不是 select。
             "jsonBody": '={{ { "properties": { '
-                        '"上稿狀態": { "select": { "name": "已發佈" } }, '
+                        '"' + STATUS_PROP + '": { "select": { "name": "已發佈" } }, '
                         '"Status": { "status": { "name": "Existing" } } } } }}',
             "options": {}},
          "id": nid(), "name": "Notion：子列也標記已發佈",
