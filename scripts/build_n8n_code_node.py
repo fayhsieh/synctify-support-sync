@@ -71,7 +71,12 @@ TARGET = "prod"
 
 TARGETS = {
     "prod": {
-        "wp_base": "https://support.synctify.net",
+        # 內網位址（2026-08-25 維運打通）。n8n 走這條，不經過公網與 WAF。
+        # 實測不會 canonical redirect 回 .net——那是切內網前最大的疑慮。
+        # ⚠️ 是 http 不是 https；憑證在內網明文傳輸，已與維運確認。
+        # 翻譯流程（Workflow 3）抓已發佈頁面的 HTML 仍須走 https://support.synctify.net，
+        # 因為 TranslatePress 比對譯文是逐字的，必須取訪客看到的同一份渲染結果。
+        "wp_base": "http://prod.support.synctify.pri",
         # 兩站的 Application Password 各自獨立，所以 n8n 也是兩組憑證
         "wp_cred_id": "7yIBiKpBdDB40C4I",
         "wp_cred_name": "WordPress Credential (Production)",

@@ -11,6 +11,7 @@
 """
 import builtins
 import json
+import re
 import pathlib
 import sys
 import textwrap
@@ -162,9 +163,17 @@ def main():
              "href": "https://app.notion.com/p/3272f2ede27d808db5d4d7f4a6796142"},
         ]}},
     ]
+    # n8n/code-node.py 依 target 而不同（兩站的 Post ID 欄位名不一樣），所以
+    # fixture 不能寫死欄位名——直接從產物裡讀出它實際會去讀哪一個，
+    # 這樣既不會因為最後跑的是哪個 target 而誤報，也仍然驗得到接線是對的。
+    # 必須錨定在**呼叫端**（_link_map = …）——只寫 build_link_map( 會先命中
+    # 函式定義的 post_id_prop 預設值，永遠讀回 "WP Post ID"，偵測形同虛設。
+    m = re.search(r'_link_map = build_link_map\([^)]*?"([^"]+)"\s*\)', source, re.S)
+    post_id_prop = m.group(1) if m else "WP Post ID"
+    print(f"\n（產物讀取的 Post ID 欄位：{post_id_prop}）")
     hub_rows = [{"id": "3272f2ed-e27d-808d-b5d4-d7f4a6796142",
                  "properties": {
-                     "WP Post ID": {"rich_text": [{"plain_text": "6118"}]},
+                     post_id_prop: {"rich_text": [{"plain_text": "6118"}]},
                      "Doc name": {"title": [{"plain_text": "7-1 Reports Center"}]},
                      "Parent item": {"relation": []}}}]
     wp_docs = [{"id": 6118,
