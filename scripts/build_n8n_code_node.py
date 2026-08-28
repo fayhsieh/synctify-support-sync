@@ -71,12 +71,23 @@ TARGET = "prod"
 
 TARGETS = {
     "prod": {
-        # 內網位址（2026-08-25 維運打通）。n8n 走這條，不經過公網與 WAF。
-        # 實測不會 canonical redirect 回 .net——那是切內網前最大的疑慮。
-        # ⚠️ 是 http 不是 https；憑證在內網明文傳輸，已與維運確認。
+        # 內網位址 http://prod.support.synctify.pri（2026-08-25 維運打通，
+        # 路由與 Host 都正常、不會 canonical redirect 回 .net）。
+        #
+        # ⚠️ 但**目前不能用**：它是 http，而 WordPress 的
+        # wp_is_application_passwords_available() 預設為
+        # `is_ssl() || 'local' === wp_get_environment_type()`——走純 HTTP 時
+        # Application Password 認證會被**直接跳過**（不是回 401，而是把請求
+        # 當成匿名繼續處理）。匿名請求打 ?status=publish,draft 會撞到參數驗證，
+        # 回 400 rest_invalid_param「Invalid parameter(s): status」，
+        # 看起來完全不像認證問題（2026-08-25 實際踩到）。
+        #
+        # 內網位址補上 https 之後就能切回來。
         # 翻譯流程（Workflow 3）抓已發佈頁面的 HTML 仍須走 https://support.synctify.net，
         # 因為 TranslatePress 比對譯文是逐字的，必須取訪客看到的同一份渲染結果。
-        "wp_base": "http://prod.support.synctify.pri",
+        # ⚠️ 內網位址暫時停用，見下方說明。要切回來就把這兩行對調。
+        # "wp_base": "http://prod.support.synctify.pri",
+        "wp_base": "https://support.synctify.net",
         # 兩站的 Application Password 各自獨立，所以 n8n 也是兩組憑證
         "wp_cred_id": "7yIBiKpBdDB40C4I",
         "wp_cred_name": "WordPress Credential (Production)",
