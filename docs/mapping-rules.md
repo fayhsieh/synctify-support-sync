@@ -69,6 +69,11 @@ Callout 首行若為粗體獨立行 → alert_title，其餘內容 → alert_des
 
 轉換器拆成 caption（可見圖說）與 alt（alt text），分別寫入 WP 的 Caption 與 Alt text。
 **無標記時兩者同值**，舊文章行為不變（向下相容）。
+
+**圖說取純文字，不帶行內格式**：Notion 圖說上的粗體／斜體／inline code／連結一律
+脫掉標記只留文字。Caption（`post_excerpt`）與 Alt text（post meta）都是純文字欄位、
+不解析 markdown——走行內 markdown 的話，粗體圖說會在站上顯示成字面的 `**粗體**`
+（2026-08-25 正式站 5601 實際踩到）。同理適用 **FAQ 題目**，它最終是 WP 的文章標題。
 中介 markdown 用 title 欄位攜帶 alt：`![可見圖說](url "alt text")`。
 
 **WP 媒體庫三個文字欄位的儲存位置不同**（很容易寫錯）：

@@ -104,6 +104,23 @@ def rich_text(items):
     return "".join(out)
 
 
+def plain_text(items):
+    """Notion rich_text 陣列 → **純文字**，不帶任何行內標記。
+
+    給「最終會進純文字欄位」的東西用：圖片的 caption／alt 會寫進 WP 媒體庫的
+    Caption（post_excerpt）與 Alt text（post meta），那兩個欄位不解析 markdown。
+    走 rich_text() 的話，Notion 上的粗體圖說會在站上顯示成字面的 `**粗體**`
+    （2026-08-25 正式站 5601 實際踩到）。
+    """
+    out = []
+    for t in items or []:
+        try:
+            out.append(t.get("plain_text") or (t.get("text") or {}).get("content") or "")
+        except AttributeError:
+            out.append(str(t))
+    return "".join(out)
+
+
 def _mention_href(item):
     """頁面提及 → Notion 網址。
 
@@ -328,7 +345,9 @@ def _render(blocks, lines, report, indent):
 
         elif btype == "image":
             url = (data.get("file") or {}).get("url") or (data.get("external") or {}).get("url", "")
-            caption, alt = split_caption_alt(rich_text(data.get("caption")))
+            # 圖說走 plain_text 而非 rich_text：它最終進的是純文字欄位，
+            # 帶 markdown 的話粗體會在站上顯示成字面的 **粗體**。
+            caption, alt = split_caption_alt(plain_text(data.get("caption")))
             # 用 markdown 的 title 欄位（引號那格）帶 alt text：![可見圖說](url "alt")
             # 兩者相同時省略，維持與舊輸出一致
             suffix = f' "{alt}"' if alt and alt != caption else ""
@@ -788,6 +807,27 @@ def strip_notion_artifacts(text):
     text = re.sub(r"<!--\s*notionvc:.*?-->", "", text, flags=re.S)
     return text
 
+_INLINE_MD = [
+    (re.compile(r"\[([^\]]*)\]\([^)]*\)"), r"\1"),   # [文字](網址) → 文字
+    (re.compile(r"\*\*(.+?)\*\*", re.S), r"\1"),      # **粗體**
+    (re.compile(r"(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)", re.S), r"\1"),  # *斜體*
+    (re.compile(r"`([^`]*)`"), r"\1"),               # `code`
+]
+
+
+def strip_inline_md(text):
+    """去掉行內 markdown 標記，保留文字。
+
+    給「已經是 markdown 字串、但要送進純文字欄位」的東西用（例如 FAQ 題目最終
+    是 WP 的文章標題）。只脫成對的標記——單獨的 * 或 ` 原樣保留，避免把
+    「What is 2*3?」這種內容改壞。
+    """
+    s = text or ""
+    for pat, rep in _INLINE_MD:
+        s = pat.sub(rep, s)
+    return s
+
+
 def inline_md_to_html(text):
     """行內 Markdown → HTML。
     規則順序很重要：先處理 inline code（→ [direction]），再處理連結、粗體、斜體。
@@ -1051,7 +1091,9 @@ def convert(md, article_title, faq_group_slug, sync_date=None, link_map=None):
             # 問題標題接受 h3 與 h4：Style Guide 寫 h3，但實際文章多用 h4。
             # 若只認 h3，h4 的問答會既不進 faq_items 也不進頁面——整段靜默消失。
             if b["t"] == "heading" and b["level"] in (3, 4):
-                current_q = {"question": b["text"], "answer_html": ""}
+                # FAQ 題目最終是 WP 的文章標題（純文字），b["text"] 卻已經是
+                # markdown——粗體題目會變成字面的 **粗體**。
+                current_q = {"question": strip_inline_md(b["text"]), "answer_html": ""}
                 section["items"].append(current_q)
             elif current_q is not None:
                 if b["t"] == "para":
@@ -1457,7 +1499,7 @@ def _run(blocks, meta):
     # 行為與加這個功能之前一致。
     _link_map = build_link_map(meta["hub_rows"] if "hub_rows" in meta else [],
                                meta["wp_docs"] if "wp_docs" in meta else [],
-                               "WP Post ID")
+                               "WP Post ID (Test)")
     template, faq_items, report = convert(markdown, title, faq_group,
                                           sync_date=sync_date, link_map=_link_map)
     report["blocks"] = blocks_report

@@ -92,6 +92,23 @@ def rich_text(items):
     return "".join(out)
 
 
+def plain_text(items):
+    """Notion rich_text 陣列 → **純文字**，不帶任何行內標記。
+
+    給「最終會進純文字欄位」的東西用：圖片的 caption／alt 會寫進 WP 媒體庫的
+    Caption（post_excerpt）與 Alt text（post meta），那兩個欄位不解析 markdown。
+    走 rich_text() 的話，Notion 上的粗體圖說會在站上顯示成字面的 `**粗體**`
+    （2026-08-25 正式站 5601 實際踩到）。
+    """
+    out = []
+    for t in items or []:
+        try:
+            out.append(t.get("plain_text") or (t.get("text") or {}).get("content") or "")
+        except AttributeError:
+            out.append(str(t))
+    return "".join(out)
+
+
 def _mention_href(item):
     """頁面提及 → Notion 網址。
 
@@ -316,7 +333,9 @@ def _render(blocks, lines, report, indent):
 
         elif btype == "image":
             url = (data.get("file") or {}).get("url") or (data.get("external") or {}).get("url", "")
-            caption, alt = split_caption_alt(rich_text(data.get("caption")))
+            # 圖說走 plain_text 而非 rich_text：它最終進的是純文字欄位，
+            # 帶 markdown 的話粗體會在站上顯示成字面的 **粗體**。
+            caption, alt = split_caption_alt(plain_text(data.get("caption")))
             # 用 markdown 的 title 欄位（引號那格）帶 alt text：![可見圖說](url "alt")
             # 兩者相同時省略，維持與舊輸出一致
             suffix = f' "{alt}"' if alt and alt != caption else ""

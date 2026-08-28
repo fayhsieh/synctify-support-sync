@@ -182,6 +182,27 @@ def strip_notion_artifacts(text):
     text = re.sub(r"<!--\s*notionvc:.*?-->", "", text, flags=re.S)
     return text
 
+_INLINE_MD = [
+    (re.compile(r"\[([^\]]*)\]\([^)]*\)"), r"\1"),   # [文字](網址) → 文字
+    (re.compile(r"\*\*(.+?)\*\*", re.S), r"\1"),      # **粗體**
+    (re.compile(r"(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)", re.S), r"\1"),  # *斜體*
+    (re.compile(r"`([^`]*)`"), r"\1"),               # `code`
+]
+
+
+def strip_inline_md(text):
+    """去掉行內 markdown 標記，保留文字。
+
+    給「已經是 markdown 字串、但要送進純文字欄位」的東西用（例如 FAQ 題目最終
+    是 WP 的文章標題）。只脫成對的標記——單獨的 * 或 ` 原樣保留，避免把
+    「What is 2*3?」這種內容改壞。
+    """
+    s = text or ""
+    for pat, rep in _INLINE_MD:
+        s = pat.sub(rep, s)
+    return s
+
+
 def inline_md_to_html(text):
     """行內 Markdown → HTML。
     規則順序很重要：先處理 inline code（→ [direction]），再處理連結、粗體、斜體。
@@ -445,7 +466,9 @@ def convert(md, article_title, faq_group_slug, sync_date=None, link_map=None):
             # 問題標題接受 h3 與 h4：Style Guide 寫 h3，但實際文章多用 h4。
             # 若只認 h3，h4 的問答會既不進 faq_items 也不進頁面——整段靜默消失。
             if b["t"] == "heading" and b["level"] in (3, 4):
-                current_q = {"question": b["text"], "answer_html": ""}
+                # FAQ 題目最終是 WP 的文章標題（純文字），b["text"] 卻已經是
+                # markdown——粗體題目會變成字面的 **粗體**。
+                current_q = {"question": strip_inline_md(b["text"]), "answer_html": ""}
                 section["items"].append(current_q)
             elif current_q is not None:
                 if b["t"] == "para":
