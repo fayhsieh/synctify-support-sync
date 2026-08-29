@@ -139,7 +139,16 @@ webhook 的 path 不入庫，進版控的 JSON 是佔位字串。跑
   - [x] Workflow 1（`n8n/notion-sync-to-wp.workflow.json`）：按鈕觸發、圖片上傳、站方欄位、SEO meta、狀態回寫，端到端實測通過
   - [x] 失敗處理（併入主 workflow，非獨立 Error Workflow：需要文章的 Notion page id，而 n8n 的 Error Trigger 拿不到）
   - [ ] Workflow 2 confirm-publish、Workflow 3 translate
-- [ ] 圖片上傳邏輯（Notion S3 → WP 媒體庫，含 alt/caption）
+- [x] 圖片上傳邏輯（Notion S3 → WP 媒體庫，含 alt/caption）：`/media/sideload`
+  下載預簽章圖並寫入 title/alt/caption；alt 由圖說的 `[alt: …]` 標記拆出
+  （Notion API 讀不到 image block 的 alt 欄位）
+- [x] **搬遷到正式站**（2026-08-25 完成，`5601 Configure Warehouse` 端到端實測通過）：
+  - 前置檢查 26/26（`scripts/verify_site_ready.py`，需連 VPN——正式站 API 有 IP 白名單）
+  - 兩站並行：測試站改用 `WP Post ID (Test)` 等獨立欄位，Notion 兩顆按鈕分別觸發
+  - ⚠️ 走 `https://support.synctify.net`。維運提供的內網位址 `.pri` 是 http，
+    而 WordPress 的 Application Password 要求 HTTPS——走 http 認證會被**直接跳過**、
+    請求變匿名，回的是 400 `rest_invalid_param`，看起來完全不像認證問題。
+    `.pri` 是內網 TLD，申請不到公開 CA 憑證，所以維運改以 WAF IP 白名單收斂公網那條
 - [x] **TranslatePress 字串切分顆粒度驗證**（2026-08-13，測試站實測）：TP **不存 HTML
   標籤**，而是**以行內元素的邊界切分**——粗體、inline code、連結、我們的 shortcode
   都是切點，兩個行內元素之間的一段純文字就是字典的一列。所以
