@@ -1499,7 +1499,7 @@ def _run(blocks, meta):
     # 行為與加這個功能之前一致。
     _link_map = build_link_map(meta["hub_rows"] if "hub_rows" in meta else [],
                                meta["wp_docs"] if "wp_docs" in meta else [],
-                               "WP Post ID (Test)")
+                               "WP Post ID")
     template, faq_items, report = convert(markdown, title, faq_group,
                                           sync_date=sync_date, link_map=_link_map)
     report["blocks"] = blocks_report
