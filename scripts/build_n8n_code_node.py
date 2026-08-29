@@ -39,6 +39,49 @@ def wf_paths(target, base_dir=None):
     sfx = TARGETS[target]["suffix"]
     return (d / f"notion-sync-to-wp{sfx}.workflow.json",
             d / f"wp-publish-callback{sfx}.workflow.json")
+_UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+_ID_NS = uuid.UUID("6f9619ff-8b86-d011-b42d-00c04fc964ff")   # 任意固定命名空間
+
+
+def stabilize_ids(wf):
+    """把 workflow 裡所有隨機 UUID 換成由「workflow 名＋節點名＋路徑」推導的固定值。
+
+    為什麼要做：節點 ID 原本用 uuid4() 產生，於是**邏輯完全沒改、重新產生一次
+    就是上百行差異**。真正的改動會被埋在假差異裡，`--check` 也失去意義。
+
+    為什麼是後處理而不是改五十幾個 nid() 呼叫點：呼叫點散在兩個大函式裡，
+    有些 id 根本沒有名字可依附（Set 欄位、IF 條件）。走一遍成品結構依所在位置
+    推導，比逐一改呼叫點安全得多。
+
+    為什麼依「路徑」而不是流水號：流水號的話，中間插入一個節點會讓後面全部位移，
+    又變成一大片假差異。依路徑則**插入節點只影響那個節點自己**。
+
+    只替換**長得像 UUID 的值**——n8n 的憑證 ID（如 7yIBiKpBdDB40C4I）格式不同，
+    不會被誤動。連線是用節點名稱串的，換 ID 不影響。
+    """
+    def det(*parts):
+        return str(uuid.uuid5(_ID_NS, "|".join(str(x) for x in parts)))
+
+    def walk(obj, path):
+        if isinstance(obj, dict):
+            for k, v in obj.items():
+                if k in ("id", "webhookId") and isinstance(v, str) and _UUID_RE.match(v):
+                    obj[k] = det(*path, k)
+                else:
+                    walk(v, path + [k])
+        elif isinstance(obj, list):
+            for i, v in enumerate(obj):
+                walk(v, path + [i])
+
+    for node in wf.get("nodes", []):
+        base = [wf.get("name", ""), node.get("name", "")]
+        for k in ("id", "webhookId"):
+            if isinstance(node.get(k), str) and _UUID_RE.match(node[k]):
+                node[k] = det(*base, k)
+        walk(node.get("parameters", {}), base + ["parameters"])
+    return wf
+
+
 # 舊檔名（曾經含輪詢）。輪詢移除後名稱誤導，改名並主動刪除舊檔——
 # 殘留的過期 workflow 被誤匯入過一次，代價很高。
 # 已被取代的產物。建置時主動刪除——殘留的過期 workflow 被誤匯入過一次，
@@ -1253,7 +1296,7 @@ def build_polling_workflow(code):
             "standby": f"Synctify — Notion → WP 草稿（{site}；按鈕觸發，輪詢待命）",
             "removed": f"Synctify — Notion → WP 草稿（{site}；按鈕觸發）"}[POLLING]
 
-    return {
+    return stabilize_ids({
         "name": name,
         "nodes": nodes, "connections": conns, "active": False,
         "settings": {"executionOrder": "v1"},
@@ -1262,7 +1305,7 @@ def build_polling_workflow(code):
                  "一次處理所有勾選的列（迴圈逐篇），每篇開頭先取消勾選以避免重複。"
                  "不去重、不更新既有文章。"},
         "tags": [],
-    }
+    })
 
 
 def build_publish_callback_workflow(code):
@@ -1505,12 +1548,12 @@ def build_publish_callback_workflow(code):
         "拆出要改寫的區塊": {"main": [
             [{"node": "Notion：改寫母列區塊", "type": "main", "index": 0}]]},
     }
-    return {
+    return stabilize_ids({
         "name": f"Synctify — WP 發佈回呼 → Notion 標記已發佈"
                 f"（{ {'prod': '正式站', 'test': '測試站'}.get(TARGET, TARGET) }）",
         "nodes": nodes, "connections": conns, "active": False,
         "settings": {"executionOrder": "v1"},
-    }
+    })
 
 
 def read_env():
