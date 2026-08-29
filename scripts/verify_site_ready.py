@@ -15,10 +15,17 @@
 ⚠️ 全部是 GET 與唯讀的 POST（帶空 body 的端點只回報差異、不寫入），
 可以安全地對正式站執行。
 
-已知環境限制（2026-08-13 更新）：正式站裝了 miniOrange 的 REST API
-Authentication 外掛，免費版把 `/wp-json/` 索引與所有自訂命名空間擋成 403
-Restricted、內建端點回 401，所以這支腳本會停在檢查 1。那不是站台或憑證的
-問題，`diagnose()` 會據回應特徵指出來。AWS WAF 那層已於同日從 n8n 實測排除。
+⚠️ **這支腳本對正式站已經不能用了**（2026-08-25 起）。維運移除 miniOrange 的
+同時，在 WAF 加了 IP 白名單，只放行 n8n 與 Notion 的來源 IP——本機（連 VPN
+也一樣）會被 challenge 擋在外面，停在檢查 1。
+
+那不是站台壞了，流程本身照常運作。要看正式站的真實狀態，從 n8n 跑
+`n8n/diagnose-prod-access.workflow.json`（唯讀）。測試站不受影響，
+`--target test` 仍然可用。
+
+歷史：2026-08-13 之前擋住的是 miniOrange 的 REST API Authentication 外掛
+（免費版把自訂命名空間一律擋成 403），已移除；`diagnose()` 仍保留辨識邏輯，
+因為那類安全外掛的回應格式與 WordPress 原生不同，認得出來才不會誤判成帳密錯。
 """
 import argparse
 import html
@@ -145,10 +152,10 @@ def diagnose(code, payload):
     if waf:
         return (f"AWS WAF 的 {waf} 動作（HTTP {code}）。"
                 f"它期待瀏覽器執行 JS 驗證，API client 一律通不過。\n"
-                f"       這是**你這台機器的來源 IP** 沒被放行，跟站台狀態無關"
-                f"（連著 Sam 的 VPN 時就不會出現）。\n"
-                f"       n8n 的來源 IP 則不受影響——2026-08-13 從 n8n 實測四個路由"
-                f"全部直達 Apache，沒有任何 x-amzn-waf-action。\n"
+                f"       這是**你這台機器的來源 IP** 沒被放行，跟站台狀態無關。\n"
+                f"       2026-08-25 起正式站的 API 只放行 n8n 與 Notion 的 IP，\n"
+                f"       所以這支腳本**對正式站已經不能用了**（連 VPN 也一樣）。\n"
+                f"       n8n 不受影響，流程照常運作——受影響的只有從本機做的檢查。\n"
                 f"       要看正式站現在的真實狀態，從 n8n 跑 "
                 f"n8n/diagnose-prod-access.workflow.json（唯讀）。")
     if payload.get("_error"):
