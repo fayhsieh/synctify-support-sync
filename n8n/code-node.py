@@ -799,6 +799,35 @@ def _unwrap_span(text, marker):
         text = text[:m.start()] + text[m.end():close[0]] + text[close[1]:]
 
 
+def esc_attr(text):
+    r"""把文字轉成可安全放進 HTML 屬性的形式。
+
+    **`>` 一定要編碼**，原因不是我們自己的程式，是 WordPress 核心：
+    `img_caption_shortcode()` 用 `#((?:<a [^>]+>\s*)?<img [^>]+>(?:\s*</a>)?)(.*)#is`
+    抓圖片與圖說，而 `<img [^>]+>` 的 `[^>]+` **在第一個 `>` 就停住**。alt 裡只要
+    有一個 `>`（UI 路徑很常見，例如「Settings > Organization > Members」），
+    img 標籤就會被從中切斷，後半段變成圖說文字印在畫面上。
+    2026-09-01 在正式站 5620 實際發生。
+
+    只用 str.replace——這份要打包進 n8n 的 Code node，那裡只允許 import re。
+    `&` 必須第一個處理，否則會把後面產生的實體再次編碼。
+    """
+    return (str(text or "")
+            .replace("&", "&amp;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;")
+            .replace('"', "&quot;"))
+
+
+def unesc_attr(text):
+    """esc_attr 的反向，給要顯示給人看的報告用（順序與 esc_attr 相反）。"""
+    return (str(text or "")
+            .replace("&quot;", '"')
+            .replace("&gt;", ">")
+            .replace("&lt;", "<")
+            .replace("&amp;", "&"))
+
+
 def strip_notion_artifacts(text):
     """剔除 Notion 留言標記與雜訊"""
     for marker in _NOTION_SPAN_MARKERS:
@@ -1177,7 +1206,7 @@ def convert(md, article_title, faq_group_slug, sync_date=None, link_map=None):
                         # （size-large class＋width/height）。對齊實站 7915 與站方統一規範。
                         html += (f'[caption align="alignnone" width="1024"]'
                                  f'<a href="{iurl}"><img class="size-large" src="{iurl}" '
-                                 f'alt="{alt}" width="1024" height="576" /></a> {cap}[/caption]')
+                                 f'alt="{esc_attr(alt)}" width="1024" height="576" /></a> {cap}[/caption]')
                     else:
                         # 巢狀 bullet／接續說明 → 內嵌縮排段落（非 <li>，不被編號 counter 計入）
                         html += f'<p style="padding-left: 40px;">{inline_md_to_html(sub[1])}</p>'
@@ -1358,7 +1387,7 @@ def apply_placeholder_images(template, report, placeholder_url=PLACEHOLDER_PATH)
                             alt = ""
                             m = re.search(r'alt="([^"]*)"', it["text"])
                             if m:
-                                alt = m.group(1)
+                                alt = unesc_attr(m.group(1))
                             todo.append({"index": len(todo) + 1, "alt": alt})
                             it["text"] = it["text"].replace(src, placeholder_url)
                             it["text"] = it["text"].replace(
