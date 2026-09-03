@@ -44,10 +44,12 @@ FEATURED_SLUG = "opengraph"
 AUTHOR_NAME = "The Synctify Team"
 
 # Notion Category → 分類頁標題（去掉序號前綴）。見 docs/mapping-rules.md §六之二。
-# 「9. Automation」站上尚無對應分類頁，屬已知缺口，不列為失敗。
+# Automation 與 Observability 於 2026-09-01 建立（id 8007／8006），原本的
+# 「Automation 尚無分類頁」缺口已補上，故不再需要 KNOWN_MISSING_CATEGORY 例外。
 CATEGORIES = ["Getting Started", "Settings", "Products", "Integrations", "Orders",
-              "Inventory", "Reports", "Overview", "Finance", "Troubleshooting"]
-KNOWN_MISSING_CATEGORY = "Automation"
+              "Inventory", "Reports", "Overview", "Finance", "Automation",
+              "Observability", "Troubleshooting"]
+KNOWN_MISSING_CATEGORY = None
 
 # Notion 母列記著的 WP Post ID → 該篇標題（2026-08-12 由 Notion 取得；
 # Fay 已逐列與正式站對齊過，所以這是「正式站應有的樣子」，不是測試站的快照）。
@@ -268,11 +270,12 @@ def main():
         have = {strip_html((k.get("title") or {}).get("rendered")) for k in kids} \
             if code == 200 and isinstance(kids, list) else set()
         missing = [x for x in CATEGORIES if x not in have]
-        c.check(f"10 個分類頁齊全（{len(CATEGORIES) - len(missing)}/{len(CATEGORIES)}）",
+        # 標題別寫死數字——分類頁會增加（2026-09-01 從 10 個變成 12 個），
+        # 寫死的話標題會跟括號裡的實際數字對不上。
+        c.check(f"分類頁齊全（{len(CATEGORIES) - len(missing)}/{len(CATEGORIES)}）",
                 not missing, ("缺：" + "、".join(missing)) if missing else "")
-        if KNOWN_MISSING_CATEGORY not in have:
-            print(f"       ℹ️ {KNOWN_MISSING_CATEGORY} 分類頁不存在（已知缺口）——"
-                  f"有文章用 9. Automation 時才需要補")
+        if KNOWN_MISSING_CATEGORY and KNOWN_MISSING_CATEGORY not in have:
+            print(f"       ℹ️ {KNOWN_MISSING_CATEGORY} 分類頁不存在（已知缺口）")
 
     # ── 4. Arconix FAQ ──
     print("\n【4】Arconix FAQ")
