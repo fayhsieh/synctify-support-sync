@@ -508,7 +508,7 @@
               "id": "1c0bcf46-ad83-5bdd-bbbe-6ca894f19440",
               "name": "fail_reason",
               "type": "string",
-              "value": "這是最上層母列，沒有內容區塊。請改按版本子列（帶 - vN 的那列）。"
+              "value": "[A3] 按到的是最上層母列，它沒有內容區塊。\n→ 請改按底下帶 - vN 的版本子列。"
             }
           ]
         },
@@ -563,7 +563,7 @@
               "id": "c77475f8-26bb-5f53-b6ca-0bbe8571d52c",
               "name": "fail_reason",
               "type": "string",
-              "value": "這是 (Draft) 草稿層（深度 3），不會同步到站上。請改按正式的版本子列。"
+              "value": "[A4] 按到的是 (Draft) 草稿層（第三層），這一層不會同步到站上。\n→ 請改按正式的版本子列。"
             }
           ]
         },
@@ -592,7 +592,7 @@
               "id": "3805a414-966b-5cd7-b037-0aef3846faa3",
               "name": "fail_reason",
               "type": "string",
-              "value": "={{ '同步失敗：' + ((function(m){ var s = String(m).replace(/\\\\/g, ''); var inner = s.match(/\"message\"\\s*:\\s*\"([^\"]+)\"/); var code = s.match(/\"code\"\\s*:\\s*\"([^\"]+)\"/); var st = s.match(/^(\\d{3})\\b/); return inner ? ((st ? st[1] + ' ' : '') + inner[1] + (code ? '（' + code[1] + '）' : '')) : s.slice(0, 300);})(typeof $json.error === 'string' ? $json.error : ($json.error && $json.error.message ? $json.error.message : JSON.stringify($json).slice(0, 400)))) }}"
+              "value": "={{ (function(m){ var raw = String(m); var c = (function(raw){ var s = String(raw || []).toLowerCase(); var T = [[\"A1\", [\"category_not_found\", \"no category page titled\"], \"站上找不到 Notion Category 欄位對應的分類頁。\", \"請確認該列的 Category 填對了；若那個分類確實還沒在站上建立，請通知 Fay。訊息裡的「可用分類」是站上目前真的有的分類頁。\"], [\"A2\", [\"rest_post_invalid_id\", \"invalid post id\"], \"這一列的 WP Post ID 指向一篇不存在的文章。\", \"請檢查該列的 WP Post ID 欄位。如果這篇是要**新建**的文章，把欄位清空再按一次；同步完成後會自動填回正確的 ID。\"], [\"A3\", [\"__mother_row__\"], \"按到的是最上層母列，它沒有內容區塊。\", \"請改按底下帶 - vN 的版本子列。\"], [\"A4\", [\"__draft_layer__\"], \"按到的是 (Draft) 草稿層（第三層），這一層不會同步到站上。\", \"請改按正式的版本子列。\"], [\"B1\", [\"request has expired\", \"accessdenied\", \"<code>expired\"], \"Notion 的圖片網址已過期（Notion 給的暫存網址只有一小時有效）。\", \"直接再按一次同步就會重新取得網址。不用改任何東西。\"], [\"B2\", [\"etimedout\", \"econnreset\", \"socket hang up\", \"esockettimedout\", \"enotfound\", \"eai_again\"], \"連線逾時或中斷，跟文章內容無關。\", \"等一分鐘再按一次。連續三次都這樣的話再找 Fay。\"], [\"C1\", [\"rest_forbidden\", \"incorrect_password\", \"rest_cannot_edit\", \"rest_not_logged_in\"], \"WordPress 拒絕了這次請求（認證或權限）。\", \"請找 Fay。這是 n8n 的憑證問題，重按不會好。\"], [\"C2\", [\"x-amzn-waf\", \"awswaf\", \"challenge\"], \"請求被站台前面的防火牆（WAF）攔住了。\", \"請找 Fay 確認 n8n 的來源 IP 是否還在白名單內。重按不會好。\"], [\"C3\", [\"rest_invalid_param\"], \"WordPress 說參數不合法——這通常代表認證被跳過了，不是參數真的寫錯。\", \"請找 Fay 檢查 n8n 裡的站台位址設定（走 http 會讓認證失效）。\"], [\"C4\", [\"no_elementor\", \"no_document\", \"autosave_failed\", \"not_autosave\"], \"Elementor 那一端出問題，版面寫不進去。\", \"請找 Fay。可能是 Elementor 版本或文章狀態的問題。\"], [\"C5\", [\"no_arconix\", \"no_aioseo\", \"no_trp\"], \"站上有個必要的外掛沒啟用（FAQ／SEO／翻譯其中之一）。\", \"請找 Fay 到 WordPress 後台把外掛啟用。\"], [\"C6\", [\"root_not_found\", \"featured_not_found\", \"author_not_found\"], \"站方預設缺件：文件根節點、預設封面照或作者其中之一找不到。\", \"請找 Fay。這是站台設定問題，跟這篇文章無關。\"], [\"C7\", [\"rest_no_route\"], \"找不到這個 API 端點——輔助外掛沒安裝，或版本太舊。\", \"請找 Fay 確認 Synctify Sync Helper 外掛的版本。\"]]; for (var i = 0; i < T.length; i++) { for (var j = 0; j < T[i][1].length; j++) { if (s.indexOf(T[i][1][j]) >= 0) { return [T[i][0], T[i][2], T[i][3]]; } } } return [\"C0\", \"發生了還沒被歸類的錯誤。\", \"請把這則留言整段複製給 Fay。她會把它補進錯誤代碼表。\"]; })(raw); var im = raw.match(/\"message\"\\s*:\\s*\"((?:[^\"\\\\]|\\\\.)*)\"/); var msg = im ? im[1].replace(/\\\\\"/g, '\"').replace(/\\\\\\\\/g, '\\\\') : ''; var cm = raw.match(/\"code\"\\s*:\\s*\"([^\"]+)\"/); var st = raw.match(/(\\d{3})/); var pretty = msg ? ((st ? st[1] + ' ' : '') + msg + (cm ? '（' + cm[1] + '）' : '')) : raw.replace(/\\\\\\\\/g, '').slice(0, 300); var av = raw.match(/\"available\"\\s*:\\s*\\[([^\\]]*)\\]/); var extra = av ? ('\\n可用分類：' + av[1].replace(/\\\\?\"/g, '').replace(/,/g, '、')) : ''; return '[' + c[0] + '] ' + c[1] + '\\n→ ' + c[2] + '\\n（原始訊息：' + pretty + '）' + extra;})(typeof $json.error === 'string' ? $json.error : ($json.error && $json.error.message ? $json.error.message : JSON.stringify($json).slice(0, 800))) }}"
             }
           ]
         },

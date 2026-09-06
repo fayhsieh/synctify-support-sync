@@ -29,6 +29,8 @@ import re
 import sys
 import uuid
 
+import error_codes as ec
+
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 CONVERTER = ROOT / "converter"
 OUT = ROOT / "n8n" / "code-node.py"
@@ -890,7 +892,9 @@ def build_polling_workflow(code):
 
         {"parameters": {"assignments": {"assignments": [
             {"id": nid(), "name": "fail_reason", "type": "string",
-             "value": "這是最上層母列，沒有內容區塊。請改按版本子列（帶 - vN 的那列）。"},
+             # 防呆訊息也走 error_codes 的表，代碼與格式跟其他錯誤一致——
+             # 小編看到的東西長得一樣，不用學兩套。
+             "value": ec.format_reason("__mother_row__")},
         ]}, "options": {}},
          "id": nid(), "name": "原因：按到母列", "type": "n8n-nodes-base.set",
          "typeVersion": 3.4, "position": [1300, 560]},
@@ -912,8 +916,7 @@ def build_polling_workflow(code):
 
         {"parameters": {"assignments": {"assignments": [
             {"id": nid(), "name": "fail_reason", "type": "string",
-             "value": "這是 (Draft) 草稿層（深度 3），不會同步到站上。"
-                      "請改按正式的版本子列。"},
+             "value": ec.format_reason("__draft_layer__")},
         ]}, "options": {}},
          "id": nid(), "name": "原因：按到草稿層", "type": "n8n-nodes-base.set",
          "typeVersion": 3.4, "position": [2840, 660]},
@@ -932,19 +935,15 @@ def build_polling_workflow(code):
             #   404 - "{\\"code\\":\\"rest_no_route\\",\\"message\\":\\"No route was found…\\"}"
             # 全是跳脫符號，小編根本讀不了。先去掉反斜線，再把 WP／Notion 回應裡的
             # message 與 code 抽出來；抽不到就退回原文（截 300 字）。
+            # 訊息格式：[代碼] 發生什麼事 / → 該做什麼 / （原始訊息：…）／可用分類
+            # 整段 JS 由 scripts/error_codes.py 的 to_reason_js() 產生。
+            # 不要在這裡拼字串——那要疊四層跳脫（Python → JSON → 運算式 → regex），
+            # 而且沒辦法測。產生端有 node 逐筆驗證。
             {"id": nid(), "name": "fail_reason", "type": "string",
-             "value": "={{ '同步失敗：' + ("
-                      "(function(m){"
-                      " var s = String(m).replace(/\\\\/g, '');"
-                      " var inner = s.match(/\"message\"\\s*:\\s*\"([^\"]+)\"/);"
-                      " var code = s.match(/\"code\"\\s*:\\s*\"([^\"]+)\"/);"
-                      " var st = s.match(/^(\\d{3})\\b/);"
-                      " return inner ? ((st ? st[1] + ' ' : '') + inner[1]"
-                      " + (code ? '（' + code[1] + '）' : '')) : s.slice(0, 300);"
-                      "})("
+             "value": "={{ " + ec.to_reason_js() + "("
                       "typeof $json.error === 'string' ? $json.error"
                       " : ($json.error && $json.error.message ? $json.error.message"
-                      " : JSON.stringify($json).slice(0, 400)))) }}"},
+                      " : JSON.stringify($json).slice(0, 800))) }}"},
         ]}, "options": {}},
          "id": nid(), "name": "原因：節點失敗", "type": "n8n-nodes-base.set",
          "typeVersion": 3.4, "position": [2840, 780],
