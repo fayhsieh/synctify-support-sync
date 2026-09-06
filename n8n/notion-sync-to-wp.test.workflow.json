@@ -1137,6 +1137,99 @@
         }
       },
       "notes": "同樣的狀態也寫回「被按下的那一列」。\n理由是一致性：失敗時本來就寫在按下的那列，成功卻只寫母列的話，\n使用者在自己按的地方看不到任何回應（2026-08-11 Fay 回報）。\n\n兩邊各有用途：母列是整篇文章的彙總與下次同步的依據；\n子列是「這個版本何時被同步過」的紀錄，舊版本保留舊時間是正確的。"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "dad40d3c-3a0e-572a-ac47-2b391c6b1e11",
+              "name": "warn_text",
+              "type": "string",
+              "value": "={{ (function(d){ var W = [[\"W1\", \"有段落標記可能打錯了，那幾段會落回預設行為（該折疊的沒折疊）。\", \"請檢查這些 h2 標題結尾的括號標記。正確寫法只有 (Accordion) 與 (Plain) 兩種。\", [\"marker\", \"heading\"]], [\"W2\", \"有圖片沒有成功上傳，站上那幾張目前是灰色的佔位圖。\", \"多半是 Notion 圖片網址過期。直接再按一次同步通常就會好；連續兩次都這樣請找 Fay。\", [\"alt\"]], [\"W3\", \"有 Notion 連結沒有換成站上的網址。\", \"讀者點下去會被導到 Notion（他們打不開）。請確認被連到的那篇文章在 Content Hub 裡填了 WP Post ID；沒有的話要先同步那一篇。\", []]]; var out = []; for (var i = 0; i < W.length; i++) { var items = (d || {})[W[i][0]] || []; if (!items.length) continue; var labels = []; for (var j = 0; j < Math.min(items.length, 5); j++) { var it = items[j]; if (it && typeof it === 'object') { var parts = []; for (var k = 0; k < W[i][3].length; k++) { var v = it[W[i][3][k]]; if (v !== undefined && v !== null && String(v) !== '') parts.push(String(v)); } labels.push(parts.length ? parts.join(' ') : JSON.stringify(it)); } else { labels.push(String(it)); } } out.push('[' + W[i][0] + '] ' + W[i][1] + '\\n→ ' + W[i][2] + '\\n（' + items.length + ' 處：' + labels.join('、') + (items.length > 5 ? ' …' : '') + '）'); } return out.join('\\n\\n'); })({ W1: $('轉換：blocks → Elementor JSON').first().json.unrecognized_section_markers || [], W2: $('回填媒體網址').first().json.still_placeholder || [], W3: $('轉換：blocks → Elementor JSON').first().json.unresolved_notion_links || [] }) }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "b42110b0-6096-5486-b788-5c14e2d473b2",
+      "name": "彙整警告",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        4380,
+        300
+      ],
+      "notes": "W2 取自回填節點的 still_placeholder（上傳「之後」仍是佔位圖的），\n不是轉換階段的 images_pending_upload——後者是上傳前的數字，\n拿它回報會把「上傳成功的圖」也算成失敗。"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "04f48288-a256-5797-b91f-a84354cdac7f",
+              "leftValue": "={{ $json.warn_text }}",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty",
+                "singleValue": true
+              },
+              "rightValue": ""
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "d943aee1-3149-5cab-84f5-4639a93de97d",
+      "name": "有警告？",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        4600,
+        300
+      ],
+      "notes": "沒有警告就不留言。永遠留一則說「沒有警告」的話，\n留言區會被噪音塞滿，真正要看的那則反而被淹掉。"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.notion.com/v1/comments",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "notionApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Notion-Version",
+              "value": "2022-06-28"
+            }
+          ]
+        },
+        "options": {},
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { \"parent\": { \"page_id\": $('取出本列資訊').first().json.page_id }, \"rich_text\": [ { \"text\": { \"content\": \"⚠️ 同步完成，但有幾個地方要看一下：\\n\\n\" + $json.warn_text } } ] } }}"
+      },
+      "id": "887e1dd0-59e0-54f3-be94-1c95274ec1e0",
+      "name": "Notion：留言警告",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        4820,
+        220
+      ],
+      "credentials": {
+        "notionApi": {
+          "id": "xfGHH7Wx4EucMC0X",
+          "name": "Support Center Sync"
+        }
+      },
+      "notes": "文章**已經同步上去了**，狀態仍是成功——這是提醒不是失敗。\n訊息開頭講清楚這點，否則小編會以為要重按。"
     }
   ],
   "connections": {
@@ -1646,6 +1739,46 @@
       ]
     },
     "Notion：回寫子列": {
+      "main": [
+        [
+          {
+            "node": "彙整警告",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "彙整警告": {
+      "main": [
+        [
+          {
+            "node": "有警告？",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "有警告？": {
+      "main": [
+        [
+          {
+            "node": "Notion：留言警告",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "逐篇處理",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Notion：留言警告": {
       "main": [
         [
           {

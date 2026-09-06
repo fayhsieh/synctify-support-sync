@@ -104,6 +104,34 @@ FALLBACK = ("C0",
             "發生了還沒被歸類的錯誤。",
             "請把這則留言整段複製給 Fay。她會把它補進錯誤代碼表。")
 
+# ── W：同步「成功了」，但結果有問題 ─────────────────────────────────────
+#
+# 跟 A／B／C 是不同的東西，所以用不同的前綴：A／B／C 是「沒成功，要重來」，
+# W 是「成功了，但你最好看一下」。混在一起小編會分不清要不要重按。
+#
+# 這三項轉換器**本來就在算**，也確實輸出了，但 2026-09-05 之前下游沒有任何
+# 節點去讀——算完就丟掉。所以這不是新增偵測，是把既有的偵測接出來。
+#
+# (代碼, 來源欄位, 說明, 該做什麼, 明細要顯示哪些鍵（空＝值本身就是字串）)
+WARNINGS = [
+    ("W1", "unrecognized_section_markers",
+     "有段落標記可能打錯了，那幾段會落回預設行為（該折疊的沒折疊）。",
+     "請檢查這些 h2 標題結尾的括號標記。正確寫法只有 (Accordion) 與 (Plain) 兩種。",
+     ["marker", "heading"]),
+
+    ("W2", "still_placeholder",
+     "有圖片沒有成功上傳，站上那幾張目前是灰色的佔位圖。",
+     "多半是 Notion 圖片網址過期。直接再按一次同步通常就會好；"
+     "連續兩次都這樣請找 Fay。",
+     ["alt"]),
+
+    ("W3", "unresolved_notion_links",
+     "有 Notion 連結沒有換成站上的網址。",
+     "讀者點下去會被導到 Notion（他們打不開）。請確認被連到的那篇文章在"
+     " Content Hub 裡填了 WP Post ID；沒有的話要先同步那一篇。",
+     []),
+]
+
 BUCKETS = {
     "A": ("Notion 上的內容或欄位有問題", "改完再按一次同步"),
     "B": ("暫時性失敗，跟內容無關", "直接再按一次"),
@@ -134,7 +162,20 @@ def _check_table():
                         f"永遠輪不到 {code}。請調整順序或改關鍵字。")
 
 
+def _check_warnings():
+    """W 的表也要檢查——同樣的失誤在這裡一樣會靜默壞掉。"""
+    seen = set()
+    for code, key, why, todo, keys in WARNINGS:
+        assert code not in seen, f"警告代碼重複：{code}"
+        seen.add(code)
+        assert code.startswith("W"), f"{code} 不是 W 開頭"
+        assert key, f"{code} 沒有來源欄位"
+        for text in (why, todo):
+            assert "'" not in text, f"{code} 的文字含單引號，會破壞產生的 JS"
+
+
 _check_table()
+_check_warnings()
 
 
 def classify(raw):
@@ -218,6 +259,66 @@ def to_reason_js():
     )
 
 
+def format_warnings(data, limit=5):
+    """把警告資料組成訊息。data 是 {代碼: [明細, ...]}。沒有警告回空字串。
+
+    與 JS 版必須一致（有測試比對）。
+    """
+    out = []
+    for code, _key, why, todo, label_keys in WARNINGS:
+        items = data.get(code) or []
+        if not items:
+            continue
+        labels = []
+        for it in items[:limit]:
+            if isinstance(it, dict):
+                parts = [str(it.get(k, "")) for k in label_keys]
+                # 退路要與 JS 的 JSON.stringify 一模一樣。用 str(dict) 會得到
+                # Python 的 repr（單引號、逗號後有空格），JS 那邊是 JSON——
+                # 兩邊就不一致了。parity 測試 2026-09-05 抓到過。
+                labels.append(" ".join(p for p in parts if p)
+                              or json.dumps(it, ensure_ascii=False,
+                                            separators=(",", ":")))
+            else:
+                labels.append(str(it))
+        more = " …" if len(items) > limit else ""
+        out.append(f"[{code}] {why}\n→ {todo}\n"
+                   f"（{len(items)} 處：{'、'.join(labels)}{more}）")
+    return "\n\n".join(out)
+
+
+def to_warning_js(limit=5):
+    """產生 n8n 用的警告組裝函式。吃 {代碼: [明細]}，回字串（沒警告＝空字串）。
+
+    回空字串是刻意的：下游用「非空」當作要不要留言的條件，
+    這樣「沒有警告」就不會在 Notion 上留下一則說「沒有警告」的噪音。
+    """
+    table = [[c, w, t, keys] for c, _k, w, t, keys in WARNINGS]
+    return (
+        "(function(d){"
+        " var W = " + json.dumps(table, ensure_ascii=False) + ";"
+        " var out = [];"
+        " for (var i = 0; i < W.length; i++) {"
+        " var items = (d || {})[W[i][0]] || [];"
+        " if (!items.length) continue;"
+        " var labels = [];"
+        " for (var j = 0; j < Math.min(items.length, " + str(limit) + "); j++) {"
+        " var it = items[j];"
+        " if (it && typeof it === 'object') {"
+        " var parts = [];"
+        " for (var k = 0; k < W[i][3].length; k++) {"
+        " var v = it[W[i][3][k]];"
+        " if (v !== undefined && v !== null && String(v) !== '') parts.push(String(v)); }"
+        " labels.push(parts.length ? parts.join(' ') : JSON.stringify(it));"
+        " } else { labels.push(String(it)); } }"
+        " out.push('[' + W[i][0] + '] ' + W[i][1] + '\\n→ ' + W[i][2]"
+        " + '\\n（' + items.length + ' 處：' + labels.join('、')"
+        " + (items.length > " + str(limit) + " ? ' …' : '') + '）');"
+        " }"
+        " return out.join('\\n\\n'); })"
+    )
+
+
 def to_markdown():
     """產生給 Notion 用的對照表。"""
     lines = ["# Synctify 上稿：同步失敗代碼表", "",
@@ -232,6 +333,13 @@ def to_markdown():
             pass   # 防呆訊息也走同一套代碼，一併列出
         lines.append(f"| **{code}** | {why} | {todo} |")
     lines.append(f"| **{FALLBACK[0]}** | {FALLBACK[1]} | {FALLBACK[2]} |")
+    lines += ["", "---", "",
+              "## W —— 同步成功了，但結果有問題", "",
+              "看到 W 開頭的留言，**文章已經同步上去了**，不用重按。",
+              "但站上那篇有下面的狀況，請看一下要不要處理。", "",
+              "| 代碼 | 發生什麼事 | 你該做的事 |", "| --- | --- | --- |"]
+    for code, _key, why, todo, _keys in WARNINGS:
+        lines.append(f"| **{code}** | {why} | {todo} |")
     lines += ["", "---", "",
               "這份表由 `scripts/error_codes.py` 產生，不要手動編輯——",
               "程式那邊改了，這裡沒跟著改，就會開始誤導人。"]

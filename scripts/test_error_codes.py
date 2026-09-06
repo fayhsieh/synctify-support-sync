@@ -185,5 +185,79 @@ def test_markdown_列出所有代碼():
     assert f"**{ec.FALLBACK[0]}**" in md
 
 
+
+# ─────────────────────────────────────────────────────────────────────────
+#  W：同步成功但有問題
+# ─────────────────────────────────────────────────────────────────────────
+
+# 三個來源欄位的**實際**形狀（從 converter 的產出反推，不是想像的）：
+#   unrecognized_section_markers  [{"heading":…, "marker":…}]
+#   still_placeholder             [{"index":…, "alt":…}]
+#   unresolved_notion_links       [url, …]  ← 純字串
+警告樣本 = {
+    "W1": [{"heading": "Troubleshooting", "marker": "(Accordian)"}],
+    "W2": [{"index": 1, "alt": "Order list view"}],
+    "W3": ["https://www.notion.so/abc", "https://www.notion.so/def"],
+}
+
+
+def test_沒有警告時回空字串():
+    """空字串是「不要留言」的訊號。回一句「沒有警告」會把留言區塞滿噪音。"""
+    assert ec.format_warnings({}) == ""
+    assert ec.format_warnings({"W1": [], "W2": [], "W3": []}) == ""
+
+
+def test_警告訊息含代碼說明與動作():
+    msg = ec.format_warnings(警告樣本)
+    for code in ("W1", "W2", "W3"):
+        assert f"[{code}]" in msg
+    assert msg.count("→") == 3
+
+
+def test_明細顯示可辨識的內容而不是原始物件():
+    """小編要看得出是哪一段、哪張圖，不是 {index: 1, alt: ...}。"""
+    msg = ec.format_warnings(警告樣本)
+    assert "(Accordian) Troubleshooting" in msg
+    assert "Order list view" in msg
+    assert "{" not in msg and "index" not in msg
+
+
+def test_明細超過五筆會截斷():
+    msg = ec.format_warnings({"W3": [f"u{i}" for i in range(9)]})
+    assert "9 處" in msg          # 總數要講實話
+    assert "…" in msg
+    assert "u5" not in msg
+
+
+def test_W_與_ABC_前綴不重疊():
+    """W 是「成功了但要看一下」，A／B／C 是「沒成功」。混用小編會分不清。"""
+    abc = {c for c, _, _, _ in ec.CODES} | {ec.FALLBACK[0]}
+    w = {c for c, _, _, _, _ in ec.WARNINGS}
+    assert not (abc & w)
+    assert all(c[0] in "ABC" for c in abc)
+
+
+@需要node
+def test_警告的_js_與_python_一致():
+    """同一份表產生兩種語言，兩邊必須給出完全相同的字串。"""
+    cases = [警告樣本, {}, {"W1": [], "W2": [], "W3": []},
+             {"W3": [f"u{i}" for i in range(9)]},
+             {"W2": [{"index": 1}]},              # alt 缺失 → 退回整個物件
+             {"W1": [{"heading": "", "marker": "(Plian)"}]}]
+    js = (f"const f = {ec.to_warning_js()};\n"
+          f"const cs = {json.dumps(cases, ensure_ascii=False)};\n"
+          "console.log(JSON.stringify(cs.map(c => f(c))));\n")
+    out = subprocess.run([shutil.which("node"), "-e", js],
+                         capture_output=True, text=True, timeout=30)
+    assert out.returncode == 0, out.stderr
+    assert json.loads(out.stdout) == [ec.format_warnings(c) for c in cases]
+
+
+def test_markdown_也列出_W():
+    md = ec.to_markdown()
+    for code, _, _, _, _ in ec.WARNINGS:
+        assert f"**{code}**" in md
+    assert "不用重按" in md      # W 的關鍵訊息：文章已經上去了
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-q"]))

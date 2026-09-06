@@ -588,6 +588,7 @@ def build_polling_workflow(code):
     LOOP, PICK = "逐篇處理", "取出本列資訊"
     CONV, PARAMS = "轉換：blocks → Elementor JSON", "組裝參數"
     MOTHER = "Notion：取得母列"
+    MEDIA = "回填媒體網址"        # W2 的來源：上傳「之後」仍是佔位圖的那些
 
     def notion_http(method, url, body=None):
         p = {"method": method, "url": url,
@@ -1160,6 +1161,52 @@ def build_polling_workflow(code):
                   "\n"
                   "兩邊各有用途：母列是整篇文章的彙總與下次同步的依據；\n"
                   "子列是「這個版本何時被同步過」的紀錄，舊版本保留舊時間是正確的。"},
+
+        # ── 同步成功但有警告 ──────────────────────────────────────────
+        # 這三項轉換器本來就在算，也確實輸出了，但在此之前下游沒有任何節點
+        # 去讀——算完就丟掉。所以這不是新增偵測，是把既有的偵測接出來。
+        #
+        # 尤其 W3：換不掉的 Notion 連結會出現在**公開頁面**上，讀者點下去
+        # 會被導到他們打不開的 Notion。那個不該只存在於 report 裡。
+        {"parameters": {"assignments": {"assignments": [
+            {"id": nid(), "name": "warn_text", "type": "string",
+             "value": "={{ " + ec.to_warning_js() + "({"
+                      " W1: $('" + CONV + "').first().json"
+                      ".unrecognized_section_markers || [],"
+                      " W2: $('" + MEDIA + "').first().json.still_placeholder || [],"
+                      " W3: $('" + CONV + "').first().json"
+                      ".unresolved_notion_links || [] }) }}"},
+        ]}, "options": {}},
+         "id": nid(), "name": "彙整警告", "type": "n8n-nodes-base.set",
+         "typeVersion": 3.4, "position": [4380, 300],
+         "notes": "W2 取自回填節點的 still_placeholder（上傳「之後」仍是佔位圖的），\n"
+                  "不是轉換階段的 images_pending_upload——後者是上傳前的數字，\n"
+                  "拿它回報會把「上傳成功的圖」也算成失敗。"},
+
+        {"parameters": {"conditions": {
+            "options": {"caseSensitive": True, "typeValidation": "loose", "version": 2},
+            "conditions": [{"id": nid(),
+                            "leftValue": "={{ $json.warn_text }}",
+                            "operator": {"type": "string", "operation": "notEmpty",
+                                         "singleValue": True},
+                            "rightValue": ""}],
+            "combinator": "and"}},
+         "id": nid(), "name": "有警告？", "type": "n8n-nodes-base.if",
+         "typeVersion": 2.2, "position": [4600, 300],
+         "notes": "沒有警告就不留言。永遠留一則說「沒有警告」的話，\n"
+                  "留言區會被噪音塞滿，真正要看的那則反而被淹掉。"},
+
+        {"parameters": notion_http(
+            "POST", "https://api.notion.com/v1/comments",
+            '={{ { "parent": { "page_id": ' + f"$('{PICK}').first().json.page_id" + ' }, '
+            '"rich_text": [ { "text": { "content": '
+            '"⚠️ 同步完成，但有幾個地方要看一下：\\n\\n" + $json.warn_text } } ] } }}'),
+         "id": nid(), "name": "Notion：留言警告",
+         "type": "n8n-nodes-base.httpRequest", "typeVersion": 4.2,
+         "position": [4820, 220],
+         "credentials": {"notionApi": {"id": NOTION_CRED_ID, "name": NOTION_CRED_NAME}},
+         "notes": "文章**已經同步上去了**，狀態仍是成功——這是提醒不是失敗。\n"
+                  "訊息開頭講清楚這點，否則小編會以為要重按。"},
     ]
 
     conns = {
@@ -1241,7 +1288,14 @@ def build_polling_workflow(code):
     conns["WP：寫入 SEO meta"] = {"main": [[
         {"node": "Notion：回寫母列", "type": "main", "index": 0},
         {"node": "組出 FAQ 清單", "type": "main", "index": 0}]]}
-    conns["Notion：回寫子列"] = {"main": [[{"node": LOOP, "type": "main", "index": 0}]]}
+    # 成功路徑尾端插入警告分支。兩條分支都回到迴圈——有沒有警告都要繼續跑
+    # 下一篇，警告不是中止條件。
+    conns["Notion：回寫子列"] = {"main": [[{"node": "彙整警告", "type": "main", "index": 0}]]}
+    conns["彙整警告"] = {"main": [[{"node": "有警告？", "type": "main", "index": 0}]]}
+    conns["有警告？"] = {"main": [
+        [{"node": "Notion：留言警告", "type": "main", "index": 0}],   # true
+        [{"node": LOOP, "type": "main", "index": 0}]]}                # false
+    conns["Notion：留言警告"] = {"main": [[{"node": LOOP, "type": "main", "index": 0}]]}
 
     # 統一補上 WP 憑證引用：漏掉的話每個 WP 節點匯入後都有紅色三角形，
     # 要逐一雙擊才會自動補上，且未清乾淨前無法 Publish（Fay 2026-08-11 回報）。
