@@ -268,7 +268,8 @@ blocks.push(para([
 ]));
 blocks.push(para([
   txt('只看中文讀起來自然不自然、術語用得對不對。', true),
-  txt('HTML 標籤有沒有被保留已由程式檢查，結果在右欄，不用你費神。')
+  txt('在最右欄填上記號即可（打勾、○ 都可以）。'
+      + 'HTML 標籤有沒有被保留是硬性要求，已由程式另外檢查，不用你費神。')
 ]));
 
 const decode = [];   // 給 Fay 的對照表，不寫進 Notion
@@ -285,13 +286,14 @@ for (const c of keys) {
   blocks.push(h3('第 ' + (c + 1) + ' 句'));
   blocks.push(para([txt('原文　', true)].concat(richFrom(r.en))));
 
-  const trs = [row([[txt('版本', true)], [txt('譯文', true)], [txt('標籤', true)]])];
+  // 第三欄留空給心柔勾選。標籤檢查移到 report（給 Fay）——那是客觀事實，
+  // 不需要她判斷，擺在她眼前只會分散注意力（Fay 2026-09-08）。
+  const trs = [row([[txt('版本', true)], [txt('譯文', true)],
+                    [txt('我選這個', true)]])];
   const line = [];
   cands.forEach((cd, idx) => {
     const mk = MARKS[idx] || String(idx + 1);
-    const ok = tagSig(cd.text) === tagSig(r.en);
-    trs.push(row([[txt(mk, true)], richFrom(cd.text),
-                  [txt(ok ? '✅' : '❌ 結構不符')]]));
+    trs.push(row([[txt(mk, true)], richFrom(cd.text), [txt('')]]));
     line.push(mk + '=' + cd.src);
   });
   blocks.push(table(3, trs));
@@ -299,9 +301,7 @@ for (const c of keys) {
 }
 
 blocks.push({ object: 'block', type: 'divider', divider: {} });
-blocks.push(h3('標籤結構檢查（程式判定）'));
-blocks.push(para([txt('這一欄是客觀事實，不用你判斷；列在這裡只是讓你知道'
-                      + '有些版本會改動 HTML 結構，那會讓站上的版面跑掉。')]));
+blocks.push(para([txt('選好之後把這頁給 Fay 就可以了。')]));
 
 // ── 給 Fay 的終端版本（含標籤原文，方便除錯）──
 const lines = [];
@@ -325,6 +325,19 @@ for (const c of keys) {
   labels.forEach(k => lines.push('  ' + k + ' ｜' + (r.out[k] || '（無）')));
   lines.push('');
 }
+lines.push('='.repeat(70));
+lines.push('標籤結構檢查（程式判定，心柔看不到這段）：');
+for (const k of labels) {
+  let ok = 0, tot = 0;
+  for (const c of keys) {
+    const v = rows[c].out[k];
+    if (!v) continue;
+    tot++; if (tagSig(v) === tagSig(rows[c].en)) ok++;
+  }
+  lines.push('  ' + models[k] + '　' + ok + ' / ' + tot
+             + (ok === tot ? '　標籤全部原樣保留' : '　有幾句改動了標籤結構'));
+}
+lines.push('');
 lines.push('='.repeat(70));
 lines.push('對照表（給 Fay，**不要給評估的人看**）');
 lines.push('每一句的順序都不同，心柔的版本也在裡面當匿名選項：');

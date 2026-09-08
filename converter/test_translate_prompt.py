@@ -220,5 +220,17 @@ def test_system_保留圖示控制項的寫法():
     sysmsg, _ = tp.build_prompt("Anything", 詞彙表, 樣本)
     assert "✏️(Edit)" in sysmsg
 
+
+def test_system_要求巢狀標籤之間不留空白():
+    """英文原文的 span 邊界都有空白（英文的詞距），中文不需要。
+
+    2026-09-08 從樣本統計得出：英文原文 36 處標籤間有空白、0 處沒有；
+    心柔的譯文 2 處有、34 處沒有——人工翻譯時會清掉。模型不知道要清，
+    因為 prompt 只說「標籤原樣保留」，它們連空白一起保留了。
+    """
+    sysmsg, _ = tp.build_prompt("Anything", 詞彙表, 樣本)
+    assert "巢狀標籤之間不要留空白" in sysmsg
+    assert "词距" in sysmsg or "詞距" in sysmsg
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-q"]))

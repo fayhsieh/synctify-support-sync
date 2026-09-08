@@ -123,7 +123,11 @@ def build_prompt(block_html, glossary, samples, target_name="簡體中文"):
         "3. 只輸出譯文本身，不要加說明、不要加引號、不要重複原文。\n"
         "4. 原文沒有的內容不要自己補；原文有的不要省略。\n"
         "5. **非散文內容原樣輸出、不要翻譯**：iframe、script、錨點連結"
-        "（如 #31-etsy）、URL、程式碼。\n\n"
+        "（如 #31-etsy）、URL、程式碼。\n"
+        "6. **巢狀標籤之間不要留空白**。英文原文寫成 "
+        "`<span A> <span B>Create</span> </span>`，那些空白是英文的詞距；"
+        "中文不需要字距，留著會變成「点击 创建 按钮」。譯文請寫成 "
+        "`<span A><span B>创建</span></span>`。標籤本身仍然一字不改。\n\n"
         # 以下規則來自 skill/SKILL.md（Support Article Writer），是已在實際
         # 寫作與翻譯中累積驗證過的房規。移植過來而不是重新發明，
         # 才不會讓自動翻譯跟人工翻譯長出兩種風格。
