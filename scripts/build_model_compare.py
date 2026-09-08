@@ -101,8 +101,16 @@ def code_body(models, n, named):
 COLLECT = '''# 把三個模型的回應併成並排表。
 _rows = {}
 _models = {}
+_errs = []
 for _it in _items:
     _j = _it['json']
+    # 呼叫失敗時 n8n 會把 json 換成錯誤物件，原本的 case／model 都不見了。
+    # 2026-09-08 實測：憑證沒綁時 24 筆全變成這樣，而報告只印出一行標題、
+    # cases=0——看不出發生什麼事。失敗要說得出話。
+    _e = _j.get('error')
+    if isinstance(_e, dict) and _e.get('message'):
+        _errs.append(str(_e.get('message')))
+        continue
     _c = _j.get('case')
     if _c is None:
         continue
@@ -119,6 +127,28 @@ for _it in _items:
     _models[_j.get('label', '?')] = _j.get('model', '?')
 
 _lines = []
+
+if _errs:
+    _uniq = []
+    for _m in _errs:
+        if _m not in _uniq:
+            _uniq.append(_m)
+    _lines.append('=' * 70)
+    _lines.append('⚠️ 有 %d 次呼叫失敗，錯誤訊息：' % len(_errs))
+    for _m in _uniq[:5]:
+        _lines.append('   ' + _m)
+    if 'Credentials not found' in ' '.join(_uniq):
+        _lines.append('')
+        _lines.append('   → 「呼叫模型」節點還沒選 OpenAI 憑證。')
+        _lines.append('     打開該節點，在 Credential 下拉選單挑既有的 OpenAI 憑證，')
+        _lines.append('     存檔後重跑即可。（匯入的工作流不會自動綁憑證）')
+    _lines.append('')
+
+if not _rows:
+    _lines.append('沒有任何成功的回應，無法產生比較表。')
+    return [{'json': {'report': chr(10).join(_lines), 'cases': 0,
+                      'failed': len(_errs), 'mapping': {}}}]
+
 for _c in sorted(_rows):
     _r = _rows[_c]
     _lines.append('=' * 70)
@@ -134,12 +164,12 @@ _lines.append('對照表（給 Fay，不要給評估的人看）：')
 for _k in sorted(_models):
     _lines.append('  %s = %s' % (_k, _models[_k]))
 
-return [{'json': {'report': '\\n'.join(_lines), 'cases': len(_rows),
-                  'mapping': _models}}]
+return [{'json': {'report': chr(10).join(_lines), 'cases': len(_rows),
+                  'failed': len(_errs), 'mapping': _models}}]
 '''
 
 
-def build(models, n, named):
+def build(models, n, named, cred=None):
     nid = lambda *p: det("model-compare", *p)
     nodes = [
         {"parameters": {}, "id": nid("trigger"), "name": "手動執行",
@@ -167,6 +197,7 @@ def build(models, n, named):
                         "{ \"role\": \"system\", \"content\": $json.system }, "
                         "{ \"role\": \"user\", \"content\": $json.user } ] } }}",
             "options": {}},
+         "credentials": ({"openAiApi": {"name": cred}} if cred else {}),
          "id": nid("call"), "name": "呼叫模型",
          "type": "n8n-nodes-base.httpRequest", "typeVersion": 4.2,
          "position": [680, 300],
@@ -205,6 +236,9 @@ def main():
                     help="候選模型，逗號分隔（例：gpt-5.6-sol,gpt-5.4,gpt-5-mini）")
     ap.add_argument("--n", type=int, default=DEFAULT_N,
                     help=f"比較幾句（預設 {DEFAULT_N}）")
+    ap.add_argument("--cred",
+                    help="n8n 裡 OpenAI 憑證的名稱。不給的話匯入後要手動在"
+                         "「呼叫模型」節點選一次（否則回 Credentials not found）")
     ap.add_argument("--named", action="store_true",
                     help="直接顯示型號，不做盲測")
     args = ap.parse_args()
@@ -220,12 +254,17 @@ def main():
     out_dir = ROOT / "n8n" / "local"
     out_dir.mkdir(parents=True, exist_ok=True)
     out = out_dir / "translate-model-compare.workflow.json"
-    out.write_text(json.dumps(build(models, args.n, args.named),
+    out.write_text(json.dumps(build(models, args.n, args.named, args.cred),
                               ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"✓ 已產生 {out}")
     print(f"  模型：{'、'.join(models)}")
     print(f"  句數：{args.n}（每句每個模型各一次，共 {args.n * len(models)} 次呼叫）")
     print(f"  標示：{'直接顯示型號' if args.named else '盲測（A／B／C，對照表印在報告最後）'}")
+    if args.cred:
+        print(f"  憑證：{args.cred}")
+    else:
+        print("  憑證：**未指定** —— 匯入後要在「呼叫模型」節點手選一次，"
+              "否則會回 Credentials not found")
 
 
 if __name__ == "__main__":
