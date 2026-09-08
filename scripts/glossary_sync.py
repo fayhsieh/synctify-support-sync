@@ -176,6 +176,11 @@ def classify(oms_cn, doc_cn):
     return "待比對"
 
 
+def is_confirmed(props):
+    """該列是否已被人工確認過。已確認＝人做過決定，腳本不得覆蓋。"""
+    return bool((props.get("已確認") or {}).get("checkbox"))
+
+
 def current(props, name):
     """讀出 Notion 現值，用來判斷有沒有變動（沒變就不送 request）。"""
     p = props.get(name) or {}
@@ -215,7 +220,7 @@ def main():
     glossary = fetch_glossary(token)
     print(f"  {len(glossary)} 筆\n")
 
-    changed, unchanged, missing = [], 0, []
+    changed, unchanged, missing, locked = [], 0, [], []
     for row in glossary:
         key = row["english"].lower()
         o, d = oms.get(key), docs.get(key)
@@ -238,12 +243,37 @@ def main():
             "OMS 使用處數": len(o["keys"]) if o else 0,
         }
         diff = {k: v for k, v in want.items() if current(row["props"], k) != v}
+
+        # 已確認的列：**回報差異但不寫入**。
+        #
+        # 起因（2026-09-08）：Cartons 一列底下混了三個語意不同的 i18n key
+        # （carton_quantity=箱数、cartons_count=纸箱数 兩個是「數量」，
+        # shipment_unit_carton=纸箱 是「物件」），Fay 決定拆成兩列。
+        # 但這支腳本是用 English 當 key 去對 OMS 的——拆完之後兩列的 English
+        # 都是 Cartons，會拿到同一份合併資料，**把拆分直接蓋回去**。
+        #
+        # 更一般地說：老闆已經審過這張表了，人工決定過的列不該被腳本重算。
+        # 但也不能完全不看——OMS 之後改了字串，我們要知道。所以折衷成
+        # 「照樣比對、照樣回報，就是不寫」。看得到漂移，也不會被覆蓋。
+        if diff and is_confirmed(row["props"]):
+            locked.append((row, diff))
+            continue
+
         if diff:
             changed.append((row, diff))
         else:
             unchanged += 1
 
     print(f"需要更新 {len(changed)} 筆，已是最新 {unchanged} 筆")
+    if locked:
+        print(f"\n🔒 有 {len(locked)} 筆已確認、但與 OMS 現況不同——**只回報，不寫入**：")
+        for row, d in locked[:10]:
+            欄 = "、".join(f"{k}：{current(row['props'], k)!r} → {v!r}"
+                           for k, v in list(d.items())[:2])
+            print(f"   {row['english']}｜{欄}")
+        if len(locked) > 10:
+            print(f"   …另外 {len(locked) - 10} 筆")
+        print("   （要重新採用 OMS 的值，把該列的「已確認」取消勾選再跑一次）")
     if missing:
         print(f"ℹ️ 有 {len(missing)} 筆兩邊都比對不到，**整筆跳過、原值保留**")
         print("   （多是只出現在句子裡、不是獨立詞條的詞，腳本無從驗證）：")
