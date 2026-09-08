@@ -188,5 +188,37 @@ def test_真實樣本逐筆自我檢查沒有洩漏():
         head = user.split("請翻譯以下內容：")[0]
         assert s["zh_cn"] not in head, f"答案洩漏到範例區：{s['en'][:60]}"
 
+
+# ── 承自 Skill 的房規 ──────────────────────────────────────────────────
+#
+# 這些規則來自 skill/SKILL.md（Support Article Writer），是已在實際寫作與翻譯
+# 中累積驗證過的。移植而不是重新發明——否則自動翻譯會跟人工翻譯長出兩種風格。
+# 每一條都用測試釘住，免得日後改 prompt 時被無聲刪掉。
+
+def test_system_含簡中在地化規則():
+    sysmsg, _ = tp.build_prompt("Anything", 詞彙表, 樣本)
+    assert "避免繁體中文句法與台灣用語" in sysmsg
+    assert "不要臆測產品行為" in sysmsg
+
+
+def test_system_禁止改寫可見的_UI_label():
+    sysmsg, _ = tp.build_prompt("Anything", 詞彙表, 樣本)
+    assert "不可改寫" in sysmsg
+
+
+def test_system_要求非散文內容原樣輸出():
+    """字典裡混有 GTM 的 iframe（id 3020）與錨點 href（#31-etsy）。
+
+    翻到那些東西會直接壞掉站上的功能。
+    """
+    sysmsg, _ = tp.build_prompt("Anything", 詞彙表, 樣本)
+    assert "iframe" in sysmsg
+    assert "錨點" in sysmsg
+
+
+def test_system_保留圖示控制項的寫法():
+    sysmsg, _ = tp.build_prompt("Anything", 詞彙表, 樣本)
+    assert "✏️(Edit)" in sysmsg
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-q"]))
