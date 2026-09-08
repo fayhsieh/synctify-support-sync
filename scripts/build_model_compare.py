@@ -8,10 +8,10 @@ OpenAI 的 key 綁在 n8n 的憑證裡，不在 .env（刻意的：多一個地�
 
 ## 這支流程做什麼
 
-拿 samples/tp-style-samples.json 裡老闆校對過的整句樣本，對每個候選模型各翻一次，
+拿 samples/tp-style-samples.json 裡心柔校對過的整句樣本，對每個候選模型各翻一次，
 最後輸出一張並排表：
 
-    原文 ／ 老闆的版本 ／ 模型 A ／ 模型 B ／ 模型 C
+    原文 ／ 心柔的版本 ／ 模型 A ／ 模型 B ／ 模型 C
 
 **待譯的那一句會被排除在 few-shot 範例之外**（translate_prompt.pick_samples
 負責），否則模型直接抄答案，比較就沒有意義。
@@ -124,7 +124,7 @@ for _c in sorted(_rows):
     _lines.append('=' * 70)
     _lines.append('【第 %d 句】' % (_c + 1))
     _lines.append('原文｜' + _r['en'])
-    _lines.append('老闆｜' + _r['boss'])
+    _lines.append('心柔｜' + _r['boss'])
     for _k in sorted(_r['out']):
         _lines.append('  %s ｜%s' % (_k, _r['out'][_k]))
     _lines.append('')
