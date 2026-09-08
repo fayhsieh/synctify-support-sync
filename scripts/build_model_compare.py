@@ -106,75 +106,91 @@ def code_body(models, n, named):
     return header + "\n" + src.rstrip() + adapter
 
 
-COLLECT = '''# 把三個模型的回應併成並排表。
-_rows = {}
-_models = {}
-_errs = []
-for _it in _items:
-    _j = _it['json']
-    # 呼叫失敗時 n8n 會把 json 換成錯誤物件，原本的 case／model 都不見了。
-    # 2026-09-08 實測：憑證沒綁時 24 筆全變成這樣，而報告只印出一行標題、
-    # cases=0——看不出發生什麼事。失敗要說得出話。
-    _e = _j.get('error')
-    if isinstance(_e, dict) and _e.get('message'):
-        _errs.append(str(_e.get('message')))
-        continue
-    _c = _j.get('case')
-    if _c is None:
-        continue
-    _r = _rows.setdefault(_c, {'en': _j.get('en', ''), 'boss': _j.get('boss', ''),
-                               'out': {}})
-    # OpenAI 回應的位置依節點設定而異，逐一嘗試，取不到就留下原始物件方便除錯
-    _txt = ''
-    _ch = _j.get('choices')
-    if isinstance(_ch, list) and _ch:
-        _txt = (_ch[0].get('message') or {}).get('content', '')
-    if not _txt:
-        _txt = _j.get('content') or _j.get('text') or ''
-    _r['out'][_j.get('label', '?')] = (_txt or '').strip()
-    _models[_j.get('label', '?')] = _j.get('model', '?')
+PREP_NODE = "組 prompt（每句 × 每個模型）"
 
-_lines = []
+# 併表節點用 **JavaScript**，不是 Python。
+#
+# 2026-09-08 實測踩到：HTTP 節點會把 item 的 json **整個換成 OpenAI 的回應**，
+# 上游放的 case／label／en／boss 全部不見，於是併表一筆都認不得，
+# 印出「沒有任何成功的回應」——但呼叫其實成功了。
+#
+# n8n 的 Python Code node **讀不到其他節點**（節點畫面自己寫著：
+# "The Python option does not support _ syntax and helpers, except for _items"），
+# 所以沒辦法回頭去拿上游欄位。JS 模式可以用 $('節點名').all()，故改寫成 JS。
+#
+# 配對靠**位置**：HTTP 節點逐筆處理、輸出順序與輸入一致，失敗的項也會佔一個位置
+# （onError=continueRegularOutput）。若兩邊筆數對不上就直接報錯而不是硬配——
+# 配錯的表看起來完全正常，那比報錯危險得多。
+COLLECT_JS = """
+const calls = $input.all();
+const prep  = $('""" + PREP_NODE + r"""').all();
 
-if _errs:
-    _uniq = []
-    for _m in _errs:
-        if _m not in _uniq:
-            _uniq.append(_m)
-    _lines.append('=' * 70)
-    _lines.append('⚠️ 有 %d 次呼叫失敗，錯誤訊息：' % len(_errs))
-    for _m in _uniq[:5]:
-        _lines.append('   ' + _m)
-    if 'Credentials not found' in ' '.join(_uniq):
-        _lines.append('')
-        _lines.append('   → 「呼叫模型」節點還沒選 OpenAI 憑證。')
-        _lines.append('     打開該節點，在 Credential 下拉選單挑既有的 OpenAI 憑證，')
-        _lines.append('     存檔後重跑即可。（匯入的工作流不會自動綁憑證）')
-    _lines.append('')
+if (calls.length !== prep.length) {
+  return [{ json: {
+    report: '⚠️ 呼叫結果 ' + calls.length + ' 筆，但上游送出 ' + prep.length +
+            ' 筆，數量對不上，無法安全配對。\n' +
+            '（併表是靠位置配對的，硬配會產生一張看起來正常但內容錯亂的表。）',
+    cases: 0, failed: 0, mapping: {} } }];
+}
 
-if not _rows:
-    _lines.append('沒有任何成功的回應，無法產生比較表。')
-    return [{'json': {'report': chr(10).join(_lines), 'cases': 0,
-                      'failed': len(_errs), 'mapping': {}}}]
+const rows = {}, models = {}, errs = [];
 
-for _c in sorted(_rows):
-    _r = _rows[_c]
-    _lines.append('=' * 70)
-    _lines.append('【第 %d 句】' % (_c + 1))
-    _lines.append('原文｜' + _r['en'])
-    _lines.append('心柔｜' + _r['boss'])
-    for _k in sorted(_r['out']):
-        _lines.append('  %s ｜%s' % (_k, _r['out'][_k]))
-    _lines.append('')
+for (let i = 0; i < calls.length; i++) {
+  const meta = prep[i].json;
+  const res  = calls[i].json;
 
-_lines.append('=' * 70)
-_lines.append('對照表（給 Fay，不要給評估的人看）：')
-for _k in sorted(_models):
-    _lines.append('  %s = %s' % (_k, _models[_k]))
+  const err = res && res.error;
+  if (err && err.message) { errs.push(String(err.message)); continue; }
 
-return [{'json': {'report': chr(10).join(_lines), 'cases': len(_rows),
-                  'failed': len(_errs), 'mapping': _models}}]
-'''
+  let txt = '';
+  if (res && Array.isArray(res.choices) && res.choices.length) {
+    txt = (res.choices[0].message || {}).content || '';
+  }
+  if (!txt) txt = res.content || res.text || '';
+
+  const c = meta.case;
+  if (!rows[c]) rows[c] = { en: meta.en || '', boss: meta.boss || '', out: {} };
+  rows[c].out[meta.label] = String(txt || '').trim();
+  models[meta.label] = res.model || meta.model || '?';
+}
+
+const lines = [];
+if (errs.length) {
+  const uniq = [...new Set(errs)];
+  lines.push('='.repeat(70));
+  lines.push('⚠️ 有 ' + errs.length + ' 次呼叫失敗：');
+  uniq.slice(0, 5).forEach(m => lines.push('   ' + m));
+  if (uniq.join(' ').includes('Credentials not found')) {
+    lines.push('');
+    lines.push('   → 「呼叫模型」節點的憑證沒綁上，打開節點選一次即可。');
+  }
+  lines.push('');
+}
+
+const keys = Object.keys(rows).map(Number).sort((a, b) => a - b);
+if (!keys.length) {
+  lines.push('沒有任何成功的回應，無法產生比較表。');
+  return [{ json: { report: lines.join('\n'), cases: 0,
+                    failed: errs.length, mapping: {} } }];
+}
+
+for (const c of keys) {
+  const r = rows[c];
+  lines.push('='.repeat(70));
+  lines.push('【第 ' + (c + 1) + ' 句】');
+  lines.push('原文｜' + r.en);
+  lines.push('心柔｜' + r.boss);
+  Object.keys(r.out).sort().forEach(k => lines.push('  ' + k + ' ｜' + r.out[k]));
+  lines.push('');
+}
+
+lines.push('='.repeat(70));
+lines.push('對照表（給 Fay，不要給評估的人看）：');
+Object.keys(models).sort().forEach(k => lines.push('  ' + k + ' = ' + models[k]));
+
+return [{ json: { report: lines.join('\n'), cases: keys.length,
+                  failed: errs.length, mapping: models } }];
+"""
 
 
 def build(models, n, named, cred=None):
@@ -187,7 +203,7 @@ def build(models, n, named, cred=None):
 
         {"parameters": {"language": "pythonNative",
                         "pythonCode": code_body(models, n, named)},
-         "id": nid("prep"), "name": "組 prompt（每句 × 每個模型）",
+         "id": nid("prep"), "name": PREP_NODE,
          "type": "n8n-nodes-base.code", "typeVersion": 2,
          "position": [460, 300],
          "notes": "自動產生，請勿直接編輯。\n"
@@ -217,7 +233,7 @@ def build(models, n, named, cred=None):
                   "不該讓整批比較失敗——其他模型的結果仍然有價值。\n"
                   "那一格會是空的，看報告時就知道是哪個模型有問題。"},
 
-        {"parameters": {"language": "pythonNative", "pythonCode": COLLECT},
+        {"parameters": {"jsCode": COLLECT_JS},
          "id": nid("collect"), "name": "併成並排表",
          "type": "n8n-nodes-base.code", "typeVersion": 2,
          "position": [900, 300],
@@ -229,9 +245,8 @@ def build(models, n, named, cred=None):
                    "看到型號會被名字影響（傾向選聽起來比較新的那個）。")},
     ]
     conns = {
-        "手動執行": {"main": [[{"node": "組 prompt（每句 × 每個模型）",
-                                 "type": "main", "index": 0}]]},
-        "組 prompt（每句 × 每個模型）":
+        "手動執行": {"main": [[{"node": PREP_NODE, "type": "main", "index": 0}]]},
+        PREP_NODE:
             {"main": [[{"node": "呼叫模型", "type": "main", "index": 0}]]},
         "呼叫模型": {"main": [[{"node": "併成並排表", "type": "main", "index": 0}]]},
     }
