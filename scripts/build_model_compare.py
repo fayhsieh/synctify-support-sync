@@ -239,47 +239,69 @@ function table(w, rows) {
                     has_row_header: false, children: rows } };
 }
 
+// ── 盲測：心柔的版本也當成匿名選項之一 ──
+//
+// Fay 2026-09-08：「如果要給老闆選，就不要把老闆的答案印在 Notion 上，
+// 這樣的測驗才有意義。」對——原本把心柔的譯文標好名字放在最上面，
+// 她只會挑「跟我一樣的那個」，那不是在評翻譯品質，是在認自己的字跡。
+//
+// 改成四個匿名選項（①②③④），其中一個是她自己的：
+//   選到自己的 → 模型還沒到她的水準
+//   選到模型的 → 那個模型在她不知情下被認可了
+//
+// 每一句的順序獨立打亂，否則她的版本固定在某個位置，兩三句就被看穿。
+// 打亂用內容雜湊而不是隨機數：同一份資料重跑會得到同一個順序，
+// Fay 手上的對照表才不會跟頁面對不起來。
+function hashStr(sv) {
+  let x = 0;
+  const t = String(sv || '');
+  for (let i = 0; i < t.length; i++) { x = (x * 31 + t.charCodeAt(i)) >>> 0; }
+  return x;
+}
+const MARKS = ['①', '②', '③', '④', '⑤', '⑥'];
+
 const blocks = [];
 blocks.push(para([
-  txt('請比較每一句底下 ' + labels.join('、') + ' 三個版本，挑出語氣與句式最接近「心柔」那一列的。'),
-  txt('只看中文讀起來自然不自然', true),
-  txt('——標籤結構已由程式檢查，不用你費神。')
+  txt('每一句底下有幾個譯文版本，請挑出'),
+  txt('你認為最好的那一個', true),
+  txt('。版本順序每句都不一樣，沒有規律。')
 ]));
+blocks.push(para([
+  txt('只看中文讀起來自然不自然、術語用得對不對。', true),
+  txt('HTML 標籤有沒有被保留已由程式檢查，結果在右欄，不用你費神。')
+]));
+
+const decode = [];   // 給 Fay 的對照表，不寫進 Notion
 
 for (const c of keys) {
   const r = rows[c];
+  const cands = [];
+  for (const k of labels) {
+    if (r.out[k]) cands.push({ src: models[k], text: r.out[k] });
+  }
+  if (r.boss) cands.push({ src: '心柔（人工）', text: r.boss });
+  cands.sort((a, b) => hashStr(c + '|' + a.text) - hashStr(c + '|' + b.text));
+
   blocks.push(h3('第 ' + (c + 1) + ' 句'));
   blocks.push(para([txt('原文　', true)].concat(richFrom(r.en))));
-  blocks.push(para([txt('心柔　', true)].concat(richFrom(r.boss))));
+
   const trs = [row([[txt('版本', true)], [txt('譯文', true)], [txt('標籤', true)]])];
-  for (const k of labels) {
-    const v = r.out[k] || '';
-    const ok = tagSig(v) === tagSig(r.en);
-    trs.push(row([
-      [txt(k, true)],
-      v ? richFrom(v) : [txt('（沒有回應）')],
-      [txt(v ? (ok ? '✅' : '❌ 結構不符') : '—')]
-    ]));
-  }
+  const line = [];
+  cands.forEach((cd, idx) => {
+    const mk = MARKS[idx] || String(idx + 1);
+    const ok = tagSig(cd.text) === tagSig(r.en);
+    trs.push(row([[txt(mk, true)], richFrom(cd.text),
+                  [txt(ok ? '✅' : '❌ 結構不符')]]));
+    line.push(mk + '=' + cd.src);
+  });
   blocks.push(table(3, trs));
+  decode.push('第 ' + (c + 1) + ' 句　' + line.join('　'));
 }
 
 blocks.push({ object: 'block', type: 'divider', divider: {} });
-blocks.push(h3('標籤結構檢查（程式判定，供參考）'));
-const chk = [row([[txt('版本', true)], [txt('通過', true)], [txt('說明', true)]])];
-for (const k of labels) {
-  let ok = 0, tot = 0;
-  for (const c of keys) {
-    const v = rows[c].out[k];
-    if (!v) continue;
-    tot++; if (tagSig(v) === tagSig(rows[c].en)) ok++;
-  }
-  chk.push(row([
-    [txt(k, true)], [txt(ok + ' / ' + tot)],
-    [txt(ok === tot ? '標籤全部原樣保留' : '有幾句改動了標籤結構，會影響站上版面')]
-  ]));
-}
-blocks.push(table(3, chk));
+blocks.push(h3('標籤結構檢查（程式判定）'));
+blocks.push(para([txt('這一欄是客觀事實，不用你判斷；列在這裡只是讓你知道'
+                      + '有些版本會改動 HTML 結構，那會讓站上的版面跑掉。')]));
 
 // ── 給 Fay 的終端版本（含標籤原文，方便除錯）──
 const lines = [];
@@ -303,11 +325,14 @@ for (const c of keys) {
   labels.forEach(k => lines.push('  ' + k + ' ｜' + (r.out[k] || '（無）')));
   lines.push('');
 }
-lines.push('對照表（給 Fay，不要給評估的人看）：');
-labels.forEach(k => lines.push('  ' + k + ' = ' + models[k]));
+lines.push('='.repeat(70));
+lines.push('對照表（給 Fay，**不要給評估的人看**）');
+lines.push('每一句的順序都不同，心柔的版本也在裡面當匿名選項：');
+decode.forEach(d => lines.push('  ' + d));
 
 return [{ json: { report: lines.join('\\n'), notion_blocks: blocks,
-                  cases: keys.length, failed: errs.length, mapping: models } }];
+                  cases: keys.length, failed: errs.length,
+                  mapping: models, decode: decode } }];
 """.replace("PREP_NODE_NAME", PREP_NODE)
 
 
