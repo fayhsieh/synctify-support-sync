@@ -48,6 +48,13 @@ _ID_NS = uuid.UUID("6f9619ff-8b86-d011-b42d-00c04fc964ff")
 OPENAI_CRED_ID = "UEtEu6Jad1QJoQvz"
 OPENAI_CRED_NAME = "OpenAi account 2"
 
+# 比較結果的落點：Marketing Wiki 底下的「翻譯模型評選」頁，每跑一次多一個子頁。
+# 建成子頁而不是覆蓋同一頁——換模型、改 prompt 之後還會再跑，
+# 留著歷次結果才看得出「改了 prompt 之後真的有變好嗎」。
+NOTION_CRED_ID = "xfGHH7Wx4EucMC0X"
+NOTION_CRED_NAME = "Support Center Sync"
+COMPARE_PARENT = "3d52f2ede27d8158aa71f8e9d874662d"
+
 # 比較用的樣本數。全部 29 筆會讓一次執行叫三十幾次 API、輸出也讀不完；
 # 挑前幾筆足以看出語氣差異，不夠再調。
 DEFAULT_N = 8
@@ -122,75 +129,120 @@ PREP_NODE = "組 prompt（每句 × 每個模型）"
 # （onError=continueRegularOutput）。若兩邊筆數對不上就直接報錯而不是硬配——
 # 配錯的表看起來完全正常，那比報錯危險得多。
 COLLECT_JS = """
+// 標籤指紋：依序列出所有標籤，用來檢查譯文有沒有破壞結構。
+// 這是硬性要求（標籤是站上樣式的一部分），但**人不該用眼睛檢查**——
+// 心柔要判斷的是語氣，被 HTML 淹沒只會看不到重點。機器查標籤、人看文字。
+function tagSig(html) {
+  const m = String(html || '').match(/<[^>]+>/g) || [];
+  return m.map(t => t.replace(/\\s+/g, ' ').trim()).join('');
+}
+function stripTags(html) {
+  return String(html || '').replace(/<[^>]+>/g, '')
+    .replace(/&gt;/g, '>').replace(/&lt;/g, '<').replace(/&amp;/g, '&')
+    .replace(/\\s+/g, ' ').trim();
+}
+
 const calls = $input.all();
-const prep  = $('""" + PREP_NODE + r"""').all();
+const prep  = $('PREP_NODE_NAME').all();
 
 if (calls.length !== prep.length) {
   return [{ json: {
     report: '⚠️ 呼叫結果 ' + calls.length + ' 筆，但上游送出 ' + prep.length +
-            ' 筆，數量對不上，無法安全配對。\n' +
-            '（併表是靠位置配對的，硬配會產生一張看起來正常但內容錯亂的表。）',
-    cases: 0, failed: 0, mapping: {} } }];
+            ' 筆，數量對不上，無法安全配對。\\n' +
+            '（併表靠位置配對，硬配會產生一張看起來正常但內容錯亂的表。）',
+    notion: '', cases: 0, failed: 0, mapping: {} } }];
 }
 
 const rows = {}, models = {}, errs = [];
-
 for (let i = 0; i < calls.length; i++) {
-  const meta = prep[i].json;
-  const res  = calls[i].json;
-
+  const meta = prep[i].json, res = calls[i].json;
   const err = res && res.error;
   if (err && err.message) { errs.push(String(err.message)); continue; }
-
   let txt = '';
   if (res && Array.isArray(res.choices) && res.choices.length) {
     txt = (res.choices[0].message || {}).content || '';
   }
   if (!txt) txt = res.content || res.text || '';
-
   const c = meta.case;
   if (!rows[c]) rows[c] = { en: meta.en || '', boss: meta.boss || '', out: {} };
   rows[c].out[meta.label] = String(txt || '').trim();
   models[meta.label] = res.model || meta.model || '?';
 }
 
+const keys = Object.keys(rows).map(Number).sort((a, b) => a - b);
+const labels = Object.keys(models).sort();
+
+// ── 給 Notion 的版本：文字乾淨，標籤另外用符號回報 ──
+const nd = [];
+nd.push('請比較每一句底下 ' + labels.join('、') + ' 三個版本，挑出語氣與句式最接近'
+        + '「心柔」那一列的。**只看中文讀起來自然不自然**——標籤結構已由程式檢查，'
+        + '不用你費神。');
+nd.push('');
+for (const c of keys) {
+  const r = rows[c];
+  nd.push('### 第 ' + (c + 1) + ' 句');
+  nd.push('');
+  nd.push('**原文**　' + stripTags(r.en));
+  nd.push('');
+  nd.push('**心柔**　' + stripTags(r.boss));
+  nd.push('');
+  nd.push('| | 譯文 | 標籤 |');
+  nd.push('| --- | --- | --- |');
+  for (const k of labels) {
+    const v = r.out[k] || '';
+    const ok = tagSig(v) === tagSig(r.en);
+    nd.push('| **' + k + '** | ' + (stripTags(v) || '（沒有回應）') + ' | '
+            + (v ? (ok ? '✅' : '❌ 結構不符') : '—') + ' |');
+  }
+  nd.push('');
+}
+
+nd.push('---');
+nd.push('');
+nd.push('### 標籤結構檢查（程式判定，供參考）');
+nd.push('');
+nd.push('| 版本 | 通過 | 說明 |');
+nd.push('| --- | --- | --- |');
+for (const k of labels) {
+  let ok = 0, tot = 0;
+  for (const c of keys) {
+    const v = rows[c].out[k];
+    if (!v) continue;
+    tot++; if (tagSig(v) === tagSig(rows[c].en)) ok++;
+  }
+  nd.push('| **' + k + '** | ' + ok + ' / ' + tot + ' | '
+          + (ok === tot ? '標籤全部原樣保留'
+                        : '有幾句改動了標籤結構，會影響站上版面') + ' |');
+}
+
+// ── 給 Fay 的終端版本（含標籤原文，方便除錯）──
 const lines = [];
 if (errs.length) {
   const uniq = [...new Set(errs)];
-  lines.push('='.repeat(70));
   lines.push('⚠️ 有 ' + errs.length + ' 次呼叫失敗：');
   uniq.slice(0, 5).forEach(m => lines.push('   ' + m));
-  if (uniq.join(' ').includes('Credentials not found')) {
-    lines.push('');
-    lines.push('   → 「呼叫模型」節點的憑證沒綁上，打開節點選一次即可。');
-  }
   lines.push('');
 }
-
-const keys = Object.keys(rows).map(Number).sort((a, b) => a - b);
 if (!keys.length) {
   lines.push('沒有任何成功的回應，無法產生比較表。');
-  return [{ json: { report: lines.join('\n'), cases: 0,
+  return [{ json: { report: lines.join('\\n'), notion: '', cases: 0,
                     failed: errs.length, mapping: {} } }];
 }
-
 for (const c of keys) {
   const r = rows[c];
   lines.push('='.repeat(70));
   lines.push('【第 ' + (c + 1) + ' 句】');
   lines.push('原文｜' + r.en);
   lines.push('心柔｜' + r.boss);
-  Object.keys(r.out).sort().forEach(k => lines.push('  ' + k + ' ｜' + r.out[k]));
+  labels.forEach(k => lines.push('  ' + k + ' ｜' + (r.out[k] || '（無）')));
   lines.push('');
 }
-
-lines.push('='.repeat(70));
 lines.push('對照表（給 Fay，不要給評估的人看）：');
-Object.keys(models).sort().forEach(k => lines.push('  ' + k + ' = ' + models[k]));
+labels.forEach(k => lines.push('  ' + k + ' = ' + models[k]));
 
-return [{ json: { report: lines.join('\n'), cases: keys.length,
-                  failed: errs.length, mapping: models } }];
-"""
+return [{ json: { report: lines.join('\\n'), notion: nd.join('\\n'),
+                  cases: keys.length, failed: errs.length, mapping: models } }];
+""".replace("PREP_NODE_NAME", PREP_NODE)
 
 
 def build(models, n, named, cred=None):
@@ -243,12 +295,45 @@ def build(models, n, named, cred=None):
                    if named else
                    "評估的人看 A／B／C 即可，\n"
                    "看到型號會被名字影響（傾向選聽起來比較新的那個）。")},
+
+        {"parameters": {
+            "method": "POST",
+            "url": "https://api.notion.com/v1/pages",
+            "authentication": "predefinedCredentialType",
+            "nodeCredentialType": "notionApi",
+            "sendHeaders": True,
+            "headerParameters": {"parameters": [
+                {"name": "Notion-Version", "value": "2022-06-28"}]},
+            "sendBody": True, "specifyBody": "json",
+            # Notion 的 rich_text 單段上限 2000 字，整份報告一定超過，
+            # 所以切成多個 paragraph block 送。切點取換行，不會切在句中。
+            "jsonBody": "={{ { \"parent\": { \"page_id\": \"" + COMPARE_PARENT + "\" }, "
+                        "\"icon\": { \"emoji\": \"\\u2696\\ufe0f\" }, "
+                        "\"properties\": { \"title\": [ { \"text\": { \"content\": "
+                        "\"模型比較 \" + $now.toFormat('yyyy-MM-dd HH:mm') } } ] }, "
+                        "\"children\": $json.notion.split('\\n\\n')"
+                        ".filter(b => b.trim()).slice(0, 95).map(b => ({ "
+                        "object: 'block', type: 'paragraph', paragraph: { rich_text: [ "
+                        "{ type: 'text', text: { content: b.slice(0, 1900) } } ] } })) } }}",
+            "options": {}},
+         "credentials": {"notionApi": {"id": NOTION_CRED_ID,
+                                       "name": NOTION_CRED_NAME}},
+         "id": nid("notion"), "name": "Notion：建立比較頁",
+         "type": "n8n-nodes-base.httpRequest", "typeVersion": 4.2,
+         "position": [1120, 300],
+         "notes": "把可讀版寫成「翻譯模型評選」底下的子頁，給心柔看。\n\n"
+                  "送的是 notion 欄位（標籤已剝除、只留中文），不是 report——\n"
+                  "report 帶著 HTML 給 Fay 除錯用，心柔看那個只會被淹沒。\n\n"
+                  "切成多個 paragraph block：Notion 單段 rich_text 上限 2000 字，\n"
+                  "整份報告必定超過。切點取空行，不會切在句子中間。"},
     ]
     conns = {
         "手動執行": {"main": [[{"node": PREP_NODE, "type": "main", "index": 0}]]},
         PREP_NODE:
             {"main": [[{"node": "呼叫模型", "type": "main", "index": 0}]]},
         "呼叫模型": {"main": [[{"node": "併成並排表", "type": "main", "index": 0}]]},
+        "併成並排表": {"main": [[{"node": "Notion：建立比較頁",
+                                   "type": "main", "index": 0}]]},
     }
     return {"name": "Synctify — 翻譯模型比較", "nodes": nodes,
             "connections": conns, "settings": {"executionOrder": "v1"}}
