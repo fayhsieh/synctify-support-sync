@@ -1683,6 +1683,54 @@ def read_env():
     return out
 
 
+def warn_stale_local(just_written):
+    """沒帶 --local 時，若 n8n/local/ 比剛產出的檔案舊，大聲提醒。
+
+    2026-09-08 實際踩到，繞了四五輪才找到：我連續三次只跑不帶 --local 的產生
+    （只更新進版控的 n8n/，那份的 webhook path 是佔位字串），卻跟 Fay 說
+    「檔案都產好了」。她照著既有流程匯入 n8n/local/——那裡還是一週前的版本，
+    所以新加的審核防呆完全沒進到 n8n，同步照樣通過。
+
+    症狀極具誤導性：**改動看起來就是沒生效**，於是我們去查 IF 的語意、查
+    Publish、查匯入方式，全都不是原因。真正的原因是「產出的檔案不是要匯入的
+    那一份」，而這件事沒有任何訊號。
+
+    所以這裡補一個訊號。
+
+    **比對的是內容而不是 mtime**：兩份檔案唯一的差別就是 webhook path，其餘
+    完全相同，所以比「節點名稱清單 + 內嵌的 Python」就足以判斷 local 是不是
+    落後了。用 mtime 會有假警報——`--local` 是先寫 n8n/ 再寫 local/，
+    下一次不帶 --local 執行時 local 又變成「舊一秒」，每次都跳警告，
+    跳久了就沒人看了，那比不警告更糟。
+    """
+    local_copy = ROOT / "n8n" / "local" / just_written.name
+    if not local_copy.exists():
+        return
+
+    def fingerprint(path):
+        wf = json.loads(path.read_text(encoding="utf-8"))
+        code = [n["parameters"]["pythonCode"] for n in wf["nodes"]
+                if n["type"] == "n8n-nodes-base.code"]
+        return sorted(n["name"] for n in wf["nodes"]), code
+
+    if fingerprint(local_copy) == fingerprint(just_written):
+        return
+    print()
+    print("⚠️  n8n/local/ 的內容落後了——**要匯入 n8n 的是 local/ 那一份**。")
+    print(f"    {local_copy.name}：{_mtime(local_copy)}")
+    print(f"    剛產出的       ：{_mtime(just_written)}")
+    print()
+    print("    這次的改動不會進到 n8n，除非再跑一次：")
+    print(f"      ./.venv/bin/python scripts/build_n8n_code_node.py --target {TARGET} --local")
+    print()
+    print("    （n8n/ 那份的 webhook path 是佔位字串，匯入它按鈕會直接失效）")
+
+
+def _mtime(p):
+    import datetime
+    return datetime.datetime.fromtimestamp(p.stat().st_mtime).strftime("%Y-%m-%d %H:%M")
+
+
 def build_local(body):
     """把真實 webhook path 注入後產出到 n8n/local/。
 
@@ -1779,6 +1827,9 @@ def main():
 
     if args.local and not build_local(body):
         sys.exit(1)
+
+    if not args.local:
+        warn_stale_local(sync_out)
 
 
 if __name__ == "__main__":
