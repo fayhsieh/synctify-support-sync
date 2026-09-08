@@ -157,9 +157,30 @@ function tagSig(html) {
   const m = String(html || '').match(/<[^>]+>/g) || [];
   return m.map(t => t.replace(/\\s+/g, ' ').trim()).join('');
 }
+// HTML 實體解碼。
+//
+// 2026-09-08 實測：第 5、8 題在 Notion 上印出 &nbsp;——原本只解 &gt;／&lt;／&amp;，
+// 樣本裡卻有 3 處 &nbsp;。**只解常見的那幾個是不夠的**，漏掉的會原樣印在
+// 受測者眼前，看起來像系統壞掉，還會干擾她判斷譯文品質。
+//
+// 迴圈最多三輪：處理雙重編碼（&amp;gt; 解一次只會變成 &gt;）。
+// &amp; 一定要放在每一輪的最後解，否則 &amp;lt; 會被提前拆成 &lt; 再變成 <。
+function decodeEntities(sv) {
+  let t = String(sv == null ? '' : sv);
+  for (let i = 0; i < 3; i++) {
+    const before = t;
+    t = t.replace(/&nbsp;/gi, ' ')
+         .replace(/&lt;/gi, '<').replace(/&gt;/gi, '>')
+         .replace(/&quot;/gi, '\"').replace(/&apos;/gi, "'")
+         .replace(/&#x27;/gi, "'").replace(/&#0*39;/g, "'")
+         .replace(/&#0*34;/g, '\"')
+         .replace(/&amp;/gi, '&');
+    if (t === before) break;
+  }
+  return t;
+}
 function stripTags(html) {
-  return String(html || '').replace(/<[^>]+>/g, '')
-    .replace(/&gt;/g, '>').replace(/&lt;/g, '<').replace(/&amp;/g, '&')
+  return decodeEntities(String(html || '').replace(/<[^>]+>/g, ''))
     .replace(/\\s+/g, ' ').trim();
 }
 
