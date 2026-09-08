@@ -540,10 +540,10 @@
           "conditions": [
             {
               "id": "52c5eb1d-ff13-5f83-80bc-b8adf49fd815",
-              "leftValue": "={{ [\"Content Approved\", \"Existing\"].includes($('取出本列資訊').first().json.doc_status) }}",
+              "leftValue": "={{ ![\"Content Approved\", \"Existing\"].includes($('取出本列資訊').first().json.doc_status) }}",
               "operator": {
                 "type": "boolean",
-                "operation": "false",
+                "operation": "true",
                 "singleValue": true
               },
               "rightValue": ""

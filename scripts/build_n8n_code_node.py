@@ -915,11 +915,19 @@ def build_polling_workflow(code):
         {"parameters": {"conditions": {
             "options": {"caseSensitive": True, "typeValidation": "loose", "version": 2},
             "conditions": [{"id": nid(),
-                            "leftValue": "={{ " + _json.dumps(ec.SYNCABLE_STATUS,
-                                                              ensure_ascii=False)
+                            # ⚠️ 否定寫在**運算式裡**，operation 用 "true"——
+                            # 跟「是母列？」完全同一種寫法。
+                            # 2026-09-08 踩到：原本寫成 operation "false" 搭配
+                            # 未否定的運算式，結果整道防呆靜默失效（11-1 的
+                            # Status=Planned 照樣同步成功）。n8n 對認不得的
+                            # operation 不會報錯，只會當成條件不成立而放行——
+                            # 防呆失效卻沒有任何訊號，是最糟的失敗方式。
+                            # 只用這個專案裡已經證實能動的寫法，不要自己發明。
+                            "leftValue": "={{ !" + _json.dumps(ec.SYNCABLE_STATUS,
+                                                               ensure_ascii=False)
                                          + ".includes($('" + PICK
                                          + "').first().json.doc_status) }}",
-                            "operator": {"type": "boolean", "operation": "false",
+                            "operator": {"type": "boolean", "operation": "true",
                                          "singleValue": True}, "rightValue": ""}],
             "combinator": "and"}},
          "id": nid(), "name": "內容還沒審核？（審核防呆）", "type": "n8n-nodes-base.if",
