@@ -1,0 +1,190 @@
+{
+  "_說明": "老闆（Miles）人工校對過的簡中譯文，取自正式站 TranslatePress（status=2、block_type=1）。",
+  "_用途": "翻譯節點的**語氣**校準與回歸測試。學句式、語序、專有名詞處理。",
+  "_不可當作術語依據": "⚠️ 這些譯文的校對時間**早於產品術語表定案**（2026-09-08），術語與詞彙表不一致：例如 Products 這兩篇一律譯成「商品」，而詞彙表定案為「产品」。Fay 2026-09-08 決定：**術語一律以詞彙表為準，不學樣本**；這兩篇上線中的譯文之後會回填修正（12 處「商品」）。",
+  "_注意": "英文原文含 direction_steps 的 HTML span（可點擊的 UI 路徑）。譯文必須原樣保留這些標籤與其結構——那是站上樣式的一部分，不是可以改寫的內容。",
+  "_來源": {
+    "站台": "support.synctify.net",
+    "擷取日": "2026-09-08",
+    "文章": [
+      "5-5 Shipment Routing（post 7068）",
+      "10-1 Remittance Reconciliation（post 7150）"
+    ]
+  },
+  "samples": [
+    {
+      "post_id": 7068,
+      "doc": "5-5 Shipment Routing",
+      "en": "Click <span class=\"direction_steps\"> <span class=\"direction_step\">Create</span> </span> in the top-right corner",
+      "zh_cn": "点击右上角的 <span class=\"direction_steps\"><span class=\"direction_step\">创建</span></span>"
+    },
+    {
+      "post_id": 7068,
+      "doc": "5-5 Shipment Routing",
+      "en": "Go to the <span class=\"direction_steps\"> <span class=\"direction_step\">Order &gt; Shipment Routing Requests</span> </span> page",
+      "zh_cn": "前往 <span class=\"direction_steps\"><span class=\"direction_step\">销售订单 &gt; 发货指派请求</span></span>"
+    },
+    {
+      "post_id": 7068,
+      "doc": "5-5 Shipment Routing",
+      "en": "Select a <span class=\"direction_steps\"> <span class=\"direction_step\">Channel</span> </span>",
+      "zh_cn": "选择 <span class=\"direction_steps\"><span class=\"direction_step\">渠道</span></span>"
+    },
+    {
+      "post_id": 7068,
+      "doc": "5-5 Shipment Routing",
+      "en": "Select a <span class=\"direction_steps\"> <span class=\"direction_step\">Ship From Warehouse</span> </span>",
+      "zh_cn": "选择 <span class=\"direction_steps\"><span class=\"direction_step\">发货仓库</span></span>"
+    },
+    {
+      "post_id": 7068,
+      "doc": "5-5 Shipment Routing",
+      "en": "Choose one anchor PO under <span class=\"direction_steps\"> <span class=\"direction_step\">Ship-To Address</span> </span>",
+      "zh_cn": "在 <span class=\"direction_steps\"><span class=\"direction_step\">收货地址</span></span> 中选择一个主采购订单（Anchor PO）"
+    },
+    {
+      "post_id": 7068,
+      "doc": "5-5 Shipment Routing",
+      "en": "Enter <span class=\"direction_steps\"> <span class=\"direction_step\">Earliest Time</span> </span>",
+      "zh_cn": "<span class=\"direction_steps\"><span class=\"direction_step\">最早时间</span></span>"
+    },
+    {
+      "post_id": 7068,
+      "doc": "5-5 Shipment Routing",
+      "en": "Enter <span class=\"direction_steps\"> <span class=\"direction_step\">Latest Time</span> </span>",
+      "zh_cn": "<span class=\"direction_steps\"><span class=\"direction_step\">最晚时间</span></span>"
+    },
+    {
+      "post_id": 7068,
+      "doc": "5-5 Shipment Routing",
+      "en": "Select the correct <span class=\"direction_steps\"> <span class=\"direction_step\">Timezone</span> </span>",
+      "zh_cn": "选择正确的 <span class=\"direction_steps\"><span class=\"direction_step\">时区</span></span>"
+    },
+    {
+      "post_id": 7068,
+      "doc": "5-5 Shipment Routing",
+      "en": "Draft requests will not enter the routing process until you click <span class=\"direction_steps\"> <span class=\"direction_step\">Submit</span> </span> .",
+      "zh_cn": "保存为草稿的申请不会进入指派规划流程，直到您点击 <span class=\"direction_steps\"><span class=\"direction_step\">提交</span></span> 。"
+    },
+    {
+      "post_id": 7068,
+      "doc": "5-5 Shipment Routing",
+      "en": "Once you click <span class=\"direction_steps\"> <span class=\"direction_step\">Submit</span> </span> , the request follows a standard process:",
+      "zh_cn": "点击 <span class=\"direction_steps\"><span class=\"direction_step\">提交</span></span> 后，系统会按照以下流程处理："
+    },
+    {
+      "post_id": 7068,
+      "doc": "5-5 Shipment Routing",
+      "en": "The request enters <strong>Pending</strong> status while waiting for carrier assignment",
+      "zh_cn": "申请进入<strong>处理中</strong>状态，等待分配承运商"
+    },
+    {
+      "post_id": 7068,
+      "doc": "5-5 Shipment Routing",
+      "en": "The request reaches <strong>Completed</strong> status",
+      "zh_cn": "申请进入<strong>已完成</strong>状态"
+    },
+    {
+      "post_id": 7068,
+      "doc": "5-5 Shipment Routing",
+      "en": "After a request reaches the <strong>Completed</strong> status, labels become available through the <span class=\"direction_steps\"> <span class=\"direction_step\">Labels</span> </span> action.",
+      "zh_cn": "当申请状态变为<strong>已完成</strong>后，即可通过 <span class=\"direction_steps\"><span class=\"direction_step\">标签</span></span> 操作下载标签。"
+    },
+    {
+      "post_id": 7068,
+      "doc": "5-5 Shipment Routing",
+      "en": "Locate a request with <strong>Completed</strong> status",
+      "zh_cn": "找到状态为<strong>已完成</strong>的申请"
+    },
+    {
+      "post_id": 7068,
+      "doc": "5-5 Shipment Routing",
+      "en": "Click <span class=\"direction_steps\"> <span class=\"direction_step\">Labels</span> </span> under the Action column",
+      "zh_cn": "在操作栏点击 <span class=\"direction_steps\"><span class=\"direction_step\">标签</span></span>"
+    },
+    {
+      "post_id": 7068,
+      "doc": "5-5 Shipment Routing",
+      "en": "Your shipment routing request is now complete. You can download shipment and SSCC labels from the <code>Labels</code> action.",
+      "zh_cn": "您的发货路径申请已完成。现在可以通过 <code>标签</code> 下载发货标签和 SSCC 标签。"
+    },
+    {
+      "post_id": 7068,
+      "doc": "5-5 Shipment Routing",
+      "en": "When the request reaches <strong>Carrier Assigned</strong>, review the tracking numbers provided by channel, assign them to the corresponding shipment units, then click <span class=\"direction_steps\"> <span class=\"direction_step\">Confirm</span> </span>",
+      "zh_cn": "当状态变为<strong>已分配承运商</strong>时，请查看平台提供的追踪号，并将其分配给对应的发货单元，然后点击 <span class=\"direction_steps\"><span class=\"direction_step\">确认</span></span>"
+    },
+    {
+      "post_id": 7068,
+      "doc": "5-5 Shipment Routing",
+      "en": "Your shipment routing request is now complete. You can download shipment, SSCC, ASIN, and UPC labels from the <code>Labels</code> action.",
+      "zh_cn": "您的发货指派申请已完成。现在可以通过 <code>标签</code> 下载发货、SSCC、ASIN 和 UPC 标签。"
+    },
+    {
+      "post_id": 7150,
+      "doc": "10-1 Remittance Reconciliation",
+      "en": "Review the payment summary, <a href=\"#reference\" target=\"_self\">line items</a>, adjustments, references, and attachments.",
+      "zh_cn": "查看付款摘要、<a href=\"#reference\" target=\"_self\">明细项</a>、调整、参考和附件。"
+    },
+    {
+      "post_id": 7150,
+      "doc": "10-1 Remittance Reconciliation",
+      "en": "Go to the <span class=\"direction_steps\"> <span class=\"direction_step\">Finance &gt; Remittance Reconciliation</span> </span> page.",
+      "zh_cn": "前往 <span class=\"direction_steps\"><span class=\"direction_step\">财务 &gt; 付款对帐</span></span> 页面。"
+    },
+    {
+      "post_id": 7150,
+      "doc": "10-1 Remittance Reconciliation",
+      "en": "If a line item is unmatched, you can manually handle it in one of the following ways by clicking <span class=\"direction_steps\"> <span class=\"direction_step\">Link</span> </span> or <span class=\"direction_steps\"> <span class=\"direction_step\">Discard</span> </span> .",
+      "zh_cn": "如果明细项未匹配，你可以点击 <span class=\"direction_steps\"><span class=\"direction_step\">关联</span></span> 或 <span class=\"direction_steps\"><span class=\"direction_step\">丢弃</span></span>，通过以下方式之一手动处理。"
+    },
+    {
+      "post_id": 7150,
+      "doc": "10-1 Remittance Reconciliation",
+      "en": "Use <strong>Link Invoice</strong>&nbsp;when the line item should be matched to an existing OMS invoice.",
+      "zh_cn": "当明细项应匹配到现有 OMS 发票时，使用<strong>关联发票</strong>。"
+    },
+    {
+      "post_id": 7150,
+      "doc": "10-1 Remittance Reconciliation",
+      "en": "Use <strong>Link Order Adjustment</strong> when the payment line corresponds to an order-level adjustment instead of an invoice.",
+      "zh_cn": "当付款明细对应的是订单级调整，而不是发票时，使用<strong>关联订单调整项</strong>。"
+    },
+    {
+      "post_id": 7150,
+      "doc": "10-1 Remittance Reconciliation",
+      "en": "Use <strong>Record Deduction</strong>&nbsp;when the payer deducted an amount from the payment and the deduction should be recorded.",
+      "zh_cn": "当付款方从付款中扣除了金额，且该扣款需要被记录时，使用<strong>记录为备忘录 / 扣款 </strong>。"
+    },
+    {
+      "post_id": 7150,
+      "doc": "10-1 Remittance Reconciliation",
+      "en": "Use <strong>Discard</strong>&nbsp;when the line item should not be included in the current reconciliation.",
+      "zh_cn": "当某个明细项不应纳入当前对帐时，使用<strong>丢弃</strong> 。"
+    },
+    {
+      "post_id": 7150,
+      "doc": "10-1 Remittance Reconciliation",
+      "en": "Discarded items are excluded from pending exception handling. If needed, you can use <strong>Resume</strong> to bring a discarded item back into the review process.",
+      "zh_cn": "已丢弃的项目不会被视为待处理异常。如有需要，你可以使用<strong>恢复</strong>将已丢弃的项目恢复到审核流程中。"
+    },
+    {
+      "post_id": 7150,
+      "doc": "10-1 Remittance Reconciliation",
+      "en": "You can export remittance data from the <span class=\"direction_steps\"> <span class=\"direction_step\">Reports</span> </span> page for reporting or offline review.",
+      "zh_cn": "你可以从 <span class=\"direction_steps\"><span class=\"direction_step\">报告</span></span> 页面导出付款通知数据，用于报告或离线审核。"
+    },
+    {
+      "post_id": 7150,
+      "doc": "10-1 Remittance Reconciliation",
+      "en": "In <strong>Available Reports</strong>, find <strong>Remittance Advice</strong>.",
+      "zh_cn": "在<strong>可用报告</strong>中找到<strong>付款通知</strong>。"
+    },
+    {
+      "post_id": 7150,
+      "doc": "10-1 Remittance Reconciliation",
+      "en": "Click <span class=\"direction_steps\"> <span class=\"direction_step\">Request Report</span> </span> .",
+      "zh_cn": "点击 <span class=\"direction_steps\"> <span class=\"direction_step\">请求报告</span> </span>。"
+    }
+  ]
+}
