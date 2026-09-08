@@ -150,7 +150,7 @@ if (calls.length !== prep.length) {
     report: '⚠️ 呼叫結果 ' + calls.length + ' 筆，但上游送出 ' + prep.length +
             ' 筆，數量對不上，無法安全配對。\\n' +
             '（併表靠位置配對，硬配會產生一張看起來正常但內容錯亂的表。）',
-    notion: '', cases: 0, failed: 0, mapping: {} } }];
+    notion_blocks: [], cases: 0, failed: 0, mapping: {} } }];
 }
 
 const rows = {}, models = {}, errs = [];
@@ -172,37 +172,54 @@ for (let i = 0; i < calls.length; i++) {
 const keys = Object.keys(rows).map(Number).sort((a, b) => a - b);
 const labels = Object.keys(models).sort();
 
-// ── 給 Notion 的版本：文字乾淨，標籤另外用符號回報 ──
-const nd = [];
-nd.push('請比較每一句底下 ' + labels.join('、') + ' 三個版本，挑出語氣與句式最接近'
-        + '「心柔」那一列的。**只看中文讀起來自然不自然**——標籤結構已由程式檢查，'
-        + '不用你費神。');
-nd.push('');
+// ── 給 Notion 的版本：組成**真正的 Notion 區塊**，不是 markdown 字串 ──
+// 2026-09-08 實測踩到：把 markdown 當純文字段落送過去，Notion API 不解析，
+// 頁面上就原樣印出 ### 和 | --- |。要表格就得送 table 區塊物件。
+//
+// 區塊在這裡組好、HTTP 節點只負責送——在 n8n 的運算式裡拼這種巢狀 JSON
+// 既難讀也沒辦法測。
+function txt(s, bold) {
+  const o = { type: 'text', text: { content: String(s == null ? '' : s).slice(0, 1900) } };
+  if (bold) o.annotations = { bold: true };
+  return o;
+}
+function para(rich)  { return { object: 'block', type: 'paragraph', paragraph: { rich_text: rich } }; }
+function h3(s)       { return { object: 'block', type: 'heading_3', heading_3: { rich_text: [txt(s)] } }; }
+function row(cells)  { return { object: 'block', type: 'table_row', table_row: { cells: cells } }; }
+function table(w, rows) {
+  return { object: 'block', type: 'table',
+           table: { table_width: w, has_column_header: true,
+                    has_row_header: false, children: rows } };
+}
+
+const blocks = [];
+blocks.push(para([
+  txt('請比較每一句底下 ' + labels.join('、') + ' 三個版本，挑出語氣與句式最接近「心柔」那一列的。'),
+  txt('只看中文讀起來自然不自然', true),
+  txt('——標籤結構已由程式檢查，不用你費神。')
+]));
+
 for (const c of keys) {
   const r = rows[c];
-  nd.push('### 第 ' + (c + 1) + ' 句');
-  nd.push('');
-  nd.push('**原文**　' + stripTags(r.en));
-  nd.push('');
-  nd.push('**心柔**　' + stripTags(r.boss));
-  nd.push('');
-  nd.push('| | 譯文 | 標籤 |');
-  nd.push('| --- | --- | --- |');
+  blocks.push(h3('第 ' + (c + 1) + ' 句'));
+  blocks.push(para([txt('原文　', true), txt(stripTags(r.en))]));
+  blocks.push(para([txt('心柔　', true), txt(stripTags(r.boss))]));
+  const trs = [row([[txt('版本', true)], [txt('譯文', true)], [txt('標籤', true)]])];
   for (const k of labels) {
     const v = r.out[k] || '';
     const ok = tagSig(v) === tagSig(r.en);
-    nd.push('| **' + k + '** | ' + (stripTags(v) || '（沒有回應）') + ' | '
-            + (v ? (ok ? '✅' : '❌ 結構不符') : '—') + ' |');
+    trs.push(row([
+      [txt(k, true)],
+      [txt(stripTags(v) || '（沒有回應）')],
+      [txt(v ? (ok ? '✅' : '❌ 結構不符') : '—')]
+    ]));
   }
-  nd.push('');
+  blocks.push(table(3, trs));
 }
 
-nd.push('---');
-nd.push('');
-nd.push('### 標籤結構檢查（程式判定，供參考）');
-nd.push('');
-nd.push('| 版本 | 通過 | 說明 |');
-nd.push('| --- | --- | --- |');
+blocks.push({ object: 'block', type: 'divider', divider: {} });
+blocks.push(h3('標籤結構檢查（程式判定，供參考）'));
+const chk = [row([[txt('版本', true)], [txt('通過', true)], [txt('說明', true)]])];
 for (const k of labels) {
   let ok = 0, tot = 0;
   for (const c of keys) {
@@ -210,10 +227,12 @@ for (const k of labels) {
     if (!v) continue;
     tot++; if (tagSig(v) === tagSig(rows[c].en)) ok++;
   }
-  nd.push('| **' + k + '** | ' + ok + ' / ' + tot + ' | '
-          + (ok === tot ? '標籤全部原樣保留'
-                        : '有幾句改動了標籤結構，會影響站上版面') + ' |');
+  chk.push(row([
+    [txt(k, true)], [txt(ok + ' / ' + tot)],
+    [txt(ok === tot ? '標籤全部原樣保留' : '有幾句改動了標籤結構，會影響站上版面')]
+  ]));
 }
+blocks.push(table(3, chk));
 
 // ── 給 Fay 的終端版本（含標籤原文，方便除錯）──
 const lines = [];
@@ -225,7 +244,7 @@ if (errs.length) {
 }
 if (!keys.length) {
   lines.push('沒有任何成功的回應，無法產生比較表。');
-  return [{ json: { report: lines.join('\\n'), notion: '', cases: 0,
+  return [{ json: { report: lines.join('\\n'), notion_blocks: [], cases: 0,
                     failed: errs.length, mapping: {} } }];
 }
 for (const c of keys) {
@@ -240,7 +259,7 @@ for (const c of keys) {
 lines.push('對照表（給 Fay，不要給評估的人看）：');
 labels.forEach(k => lines.push('  ' + k + ' = ' + models[k]));
 
-return [{ json: { report: lines.join('\\n'), notion: nd.join('\\n'),
+return [{ json: { report: lines.join('\\n'), notion_blocks: blocks,
                   cases: keys.length, failed: errs.length, mapping: models } }];
 """.replace("PREP_NODE_NAME", PREP_NODE)
 
@@ -311,10 +330,7 @@ def build(models, n, named, cred=None):
                         "\"icon\": { \"emoji\": \"\\u2696\\ufe0f\" }, "
                         "\"properties\": { \"title\": [ { \"text\": { \"content\": "
                         "\"模型比較 \" + $now.toFormat('yyyy-MM-dd HH:mm') } } ] }, "
-                        "\"children\": $json.notion.split('\\n\\n')"
-                        ".filter(b => b.trim()).slice(0, 95).map(b => ({ "
-                        "object: 'block', type: 'paragraph', paragraph: { rich_text: [ "
-                        "{ type: 'text', text: { content: b.slice(0, 1900) } } ] } })) } }}",
+                        "\"children\": $json.notion_blocks.slice(0, 95) } }}",
             "options": {}},
          "credentials": {"notionApi": {"id": NOTION_CRED_ID,
                                        "name": NOTION_CRED_NAME}},
