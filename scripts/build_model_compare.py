@@ -40,6 +40,14 @@ CONVERTER = ROOT / "converter"
 SAMPLES = ROOT / "samples" / "tp-style-samples.json"
 _ID_NS = uuid.UUID("6f9619ff-8b86-d011-b42d-00c04fc964ff")
 
+# n8n 裡的 OpenAI 憑證。**id 不是密鑰**——它只是 n8n 內部的參照編號，
+# 實際的 API key 留在 n8n 的憑證庫裡，所以進版控是安全的
+# （NOTION_CRED_ID 在 build_n8n_code_node.py 已經這樣做了一個月）。
+#
+# 只給名稱不夠：n8n 是靠 id 綁定的，2026-09-08 實測匯入後節點仍是紅色驚嘆號。
+OPENAI_CRED_ID = "UEtEu6Jad1QJoQvz"
+OPENAI_CRED_NAME = "OpenAi account 2"
+
 # 比較用的樣本數。全部 29 筆會讓一次執行叫三十幾次 API、輸出也讀不完；
 # 挑前幾筆足以看出語氣差異，不夠再調。
 DEFAULT_N = 8
@@ -197,7 +205,8 @@ def build(models, n, named, cred=None):
                         "{ \"role\": \"system\", \"content\": $json.system }, "
                         "{ \"role\": \"user\", \"content\": $json.user } ] } }}",
             "options": {}},
-         "credentials": ({"openAiApi": {"name": cred}} if cred else {}),
+         "credentials": {"openAiApi": {"id": OPENAI_CRED_ID,
+                                        "name": cred or OPENAI_CRED_NAME}},
          "id": nid("call"), "name": "呼叫模型",
          "type": "n8n-nodes-base.httpRequest", "typeVersion": 4.2,
          "position": [680, 300],
@@ -237,8 +246,8 @@ def main():
     ap.add_argument("--n", type=int, default=DEFAULT_N,
                     help=f"比較幾句（預設 {DEFAULT_N}）")
     ap.add_argument("--cred",
-                    help="n8n 裡 OpenAI 憑證的名稱。不給的話匯入後要手動在"
-                         "「呼叫模型」節點選一次（否則回 Credentials not found）")
+                    help=f"覆寫 OpenAI 憑證顯示名稱（預設 {OPENAI_CRED_NAME}，"
+                         f"id 已內建）")
     ap.add_argument("--named", action="store_true",
                     help="直接顯示型號，不做盲測")
     args = ap.parse_args()
@@ -260,11 +269,7 @@ def main():
     print(f"  模型：{'、'.join(models)}")
     print(f"  句數：{args.n}（每句每個模型各一次，共 {args.n * len(models)} 次呼叫）")
     print(f"  標示：{'直接顯示型號' if args.named else '盲測（A／B／C，對照表印在報告最後）'}")
-    if args.cred:
-        print(f"  憑證：{args.cred}")
-    else:
-        print("  憑證：**未指定** —— 匯入後要在「呼叫模型」節點手選一次，"
-              "否則會回 Credentials not found")
+    print(f"  憑證：{args.cred or OPENAI_CRED_NAME}（id 已內建，匯入即可用）")
 
 
 if __name__ == "__main__":
