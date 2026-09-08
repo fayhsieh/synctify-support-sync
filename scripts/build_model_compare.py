@@ -68,7 +68,7 @@ def det(*parts):
     return str(uuid.uuid5(_ID_NS, "|".join(str(p) for p in parts)))
 
 
-def code_body(models, n, named):
+def code_body(models, n, named, pool):
     """組出 Code node 的程式：載入樣本、組 prompt、準備每個模型的請求。"""
     src = (CONVERTER / "translate_prompt.py").read_text(encoding="utf-8")
     src = re.split(r'^if __name__ == "__main__":', src, flags=re.M)[0]
@@ -93,7 +93,7 @@ def code_body(models, n, named):
     adapter = (
         "\n\n# ─── n8n 轉接層 ───\n"
         "_SAMPLES = " + json.dumps(samples, ensure_ascii=False) + "\n"
-        "_CASES = " + json.dumps(ranked[:n], ensure_ascii=False) + "\n"
+        "_CASES = " + json.dumps(ranked[:pool], ensure_ascii=False) + "\n"
         "_MODELS = " + json.dumps(models, ensure_ascii=False) + "\n"
         "_N = " + str(n) + "\n"
         "_NAMED = " + ("True" if named else "False") + "\n"
@@ -149,7 +149,7 @@ PREP_NODE = "組 prompt（每句 × 每個模型）"
 # 配對靠**位置**：HTTP 節點逐筆處理、輸出順序與輸入一致，失敗的項也會佔一個位置
 # （onError=continueRegularOutput）。若兩邊筆數對不上就直接報錯而不是硬配——
 # 配錯的表看起來完全正常，那比報錯危險得多。
-COLLECT_JS = """
+COLLECT_JS = ("""
 // 標籤指紋：依序列出所有標籤，用來檢查譯文有沒有破壞結構。
 // 這是硬性要求（標籤是站上樣式的一部分），但**人不該用眼睛檢查**——
 // 心柔要判斷的是語氣，被 HTML 淹沒只會看不到重點。機器查標籤、人看文字。
@@ -274,16 +274,46 @@ blocks.push(para([
 
 const decode = [];   // 給 Fay 的對照表，不寫進 Notion
 
+// 先把每一題的選項算出來：**顯示文字相同的合併成一個**。
+//
+// Fay 2026-09-08：「三個模型翻出來一樣的話，心柔要怎麼選？」
+// 合併而不是剔除——三個模型有共識、心柔不同，那反而是最有價值的一題：
+// 「模型的共識」對上「人的版本」。她只該看到兩個選項，不是四個一樣的。
+//
+// 比對用**她實際看到的文字**（剝掉標籤）：兩個版本若只差在標籤空白，
+// 在她眼裡就是同一個答案，分成兩欄只會讓她困惑。
+//
+// 只有連心柔的版本都相同時才是真的沒得選，那題剔除。
+const built = [];
 for (const c of keys) {
   const r = rows[c];
+  const seen = {};
   const cands = [];
-  for (const k of labels) {
-    if (r.out[k]) cands.push({ src: models[k], text: r.out[k] });
-  }
-  if (r.boss) cands.push({ src: '心柔（人工）', text: r.boss });
+  const add = (src, text) => {
+    if (!text) return;
+    const key = stripTags(text);
+    if (!key) return;
+    if (seen[key]) { seen[key].srcs.push(src); return; }
+    const cd = { srcs: [src], text: text };
+    seen[key] = cd; cands.push(cd);
+  };
+  for (const k of labels) add(models[k], r.out[k]);
+  add('心柔（人工）', r.boss);
+  if (cands.length >= 2) built.push({ c: c, r: r, cands: cands });
+}
+
+// 選項越多＝模型之間差異越大＝越有鑑別度，優先出這些題
+built.sort((a, b) => b.cands.length - a.cands.length || a.c - b.c);
+const chosen = built.slice(0, __N_SHOW__).sort((a, b) => a.c - b.c);
+const dropped = keys.length - built.length;
+
+let qn = 0;
+for (const it of chosen) {
+  const c = it.c, r = it.r, cands = it.cands;
+  qn++;
   cands.sort((a, b) => hashStr(c + '|' + a.text) - hashStr(c + '|' + b.text));
 
-  blocks.push(h3('第 ' + (c + 1) + ' 句'));
+  blocks.push(h3('第 ' + qn + ' 題'));
   blocks.push(para([txt('原文　', true)].concat(richFrom(r.en))));
 
   // 第三欄留空給心柔勾選。標籤檢查移到 report（給 Fay）——那是客觀事實，
@@ -294,14 +324,24 @@ for (const c of keys) {
   cands.forEach((cd, idx) => {
     const mk = MARKS[idx] || String(idx + 1);
     trs.push(row([[txt(mk, true)], richFrom(cd.text), [txt('')]]));
-    line.push(mk + '=' + cd.src);
+    line.push(mk + '=' + cd.srcs.join('／'));
   });
   blocks.push(table(3, trs));
-  decode.push('第 ' + (c + 1) + ' 句　' + line.join('　'));
+  decode.push('第 ' + qn + ' 題（原第 ' + (c + 1) + ' 句）　' + line.join('　'));
 }
 
 blocks.push({ object: 'block', type: 'divider', divider: {} });
-blocks.push(para([txt('選好之後把這頁給 Fay 就可以了。')]));
+if (!chosen.length) {
+  // 全部題目都被剔除＝每一句所有版本都相同。頁面留白會讓人以為壞了，
+  // 但這其實是個結論：模型的產出已經跟人工一致，沒有東西好選。
+  blocks.push(para([
+    txt('這批句子裡，所有版本（含人工譯文）都完全相同，沒有需要選擇的題目。', true)
+  ]));
+  blocks.push(para([txt('這代表模型的產出已經跟既有譯文一致——'
+                        + '不是出錯，是沒有差異可比。請告訴 Fay。')]));
+} else {
+  blocks.push(para([txt('選好之後把這頁給 Fay 就可以了。')]));
+}
 
 // ── 給 Fay 的終端版本（含標籤原文，方便除錯）──
 const lines = [];
@@ -326,6 +366,10 @@ for (const c of keys) {
   lines.push('');
 }
 lines.push('='.repeat(70));
+lines.push('出題：' + chosen.length + ' 題'
+           + (dropped ? '（另有 ' + dropped + ' 句所有版本完全相同，已剔除）' : '')
+           + '；題庫共 ' + keys.length + ' 句');
+lines.push('');
 lines.push('標籤結構檢查（程式判定，心柔看不到這段）：');
 for (const k of labels) {
   let ok = 0, tot = 0;
@@ -344,12 +388,14 @@ lines.push('每一句的順序都不同，心柔的版本也在裡面當匿名�
 decode.forEach(d => lines.push('  ' + d));
 
 return [{ json: { report: lines.join('\\n'), notion_blocks: blocks,
-                  cases: keys.length, failed: errs.length,
+                  cases: chosen.length, pool: keys.length,
+                  dropped: dropped, failed: errs.length,
                   mapping: models, decode: decode } }];
-""".replace("PREP_NODE_NAME", PREP_NODE)
+""".replace("PREP_NODE_NAME", PREP_NODE))
 
 
-def build(models, n, named, cred=None):
+def build(models, n, named, cred=None, pool=None):
+    pool = pool or n * 2
     nid = lambda *p: det("model-compare", *p)
     nodes = [
         {"parameters": {}, "id": nid("trigger"), "name": "手動執行",
@@ -386,7 +432,7 @@ def build(models, n, named, cred=None):
                   "出現在原文裡，就會變成「有詞彙表卻沒約束到」，比沒有更難察覺。"},
 
         {"parameters": {"language": "pythonNative",
-                        "pythonCode": code_body(models, n, named)},
+                        "pythonCode": code_body(models, n, named, pool)},
          "id": nid("prep"), "name": PREP_NODE,
          "type": "n8n-nodes-base.code", "typeVersion": 2,
          "position": [460, 300],
@@ -417,7 +463,7 @@ def build(models, n, named, cred=None):
                   "不該讓整批比較失敗——其他模型的結果仍然有價值。\n"
                   "那一格會是空的，看報告時就知道是哪個模型有問題。"},
 
-        {"parameters": {"jsCode": COLLECT_JS},
+        {"parameters": {"jsCode": COLLECT_JS.replace("__N_SHOW__", str(n))},
          "id": nid("collect"), "name": "併成並排表",
          "type": "n8n-nodes-base.code", "typeVersion": 2,
          "position": [900, 300],
@@ -477,6 +523,9 @@ def main():
                     help="候選模型，逗號分隔（例：gpt-5.6-sol,gpt-5.4,gpt-5-mini）")
     ap.add_argument("--n", type=int, default=DEFAULT_N,
                     help=f"比較幾句（預設 {DEFAULT_N}）")
+    ap.add_argument("--pool", type=int,
+                    help="要翻譯的題庫句數（預設 n×2）。多譯一些，"
+                         "才能從中挑出模型差異最大的題目出給心柔")
     ap.add_argument("--cred",
                     help=f"覆寫 OpenAI 憑證顯示名稱（預設 {OPENAI_CRED_NAME}，"
                          f"id 已內建）")
@@ -495,11 +544,14 @@ def main():
     out_dir = ROOT / "n8n" / "local"
     out_dir.mkdir(parents=True, exist_ok=True)
     out = out_dir / "translate-model-compare.workflow.json"
-    out.write_text(json.dumps(build(models, args.n, args.named, args.cred),
+    out.write_text(json.dumps(build(models, args.n, args.named, args.cred, args.pool),
                               ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"✓ 已產生 {out}")
     print(f"  模型：{'、'.join(models)}")
-    print(f"  句數：{args.n}（每句每個模型各一次，共 {args.n * len(models)} 次呼叫）")
+    _pool = args.pool or args.n * 2
+    print(f"  題庫：{_pool} 句（共 {_pool * len(models)} 次呼叫）")
+    print(f"  出題：最多 {args.n} 題——挑選項最多（模型差異最大）的，"
+          f"全部版本相同的題目會剔除")
     print(f"  標示：{'直接顯示型號' if args.named else '盲測（A／B／C，對照表印在報告最後）'}")
     print(f"  憑證：{args.cred or OPENAI_CRED_NAME}（id 已內建，匯入即可用）")
 
