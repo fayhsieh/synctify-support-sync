@@ -29,6 +29,8 @@ import re
 import sys
 import uuid
 
+import json as _json
+
 import error_codes as ec
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -753,6 +755,12 @@ def build_polling_workflow(code):
             {"id": nid(), "name": "category",
              "value": "={{ $json.properties['Category']?.select?.name ?? '' }}",
              "type": "string"},
+            # Status（**status 型**，不是 select——取值路徑是 .status 不是 .select）。
+            # 審核防呆用。取不到時給空字串：空字串不在允許清單裡會被擋下，
+            # 那是對的，讀不到狀態就不該放行。
+            {"id": nid(), "name": "doc_status",
+             "value": "={{ $json.properties['Status']?.status?.name ?? '' }}",
+             "type": "string"},
             # 結構是三層：母列 → 版本子列 → (Draft) 草稿層。只有中間那層可以同步。
             # 沒有 Parent item ＝ 最上層母列（沒有內容區塊，同步會轉出空文章）。
             {"id": nid(), "name": "is_mother",
@@ -900,6 +908,42 @@ def build_polling_workflow(code):
          "id": nid(), "name": "原因：按到母列", "type": "n8n-nodes-base.set",
          "typeVersion": 3.4, "position": [1300, 560]},
 
+        # ── 防呆③：內容還沒審核就按同步（Fay 2026-09-07 要求）
+        # 起因：小編在圖片還沒過審（Status=Planned）時按了同步，草稿建出來後
+        # 有人在 WP 按了 Publish，回呼就把子列的 Status 寫成 Existing——
+        # 整個 Content Approved 關卡被跳過去了。擋在同步這一步最省事。
+        {"parameters": {"conditions": {
+            "options": {"caseSensitive": True, "typeValidation": "loose", "version": 2},
+            "conditions": [{"id": nid(),
+                            "leftValue": "={{ " + _json.dumps(ec.SYNCABLE_STATUS,
+                                                              ensure_ascii=False)
+                                         + ".includes($('" + PICK
+                                         + "').first().json.doc_status) }}",
+                            "operator": {"type": "boolean", "operation": "false",
+                                         "singleValue": True}, "rightValue": ""}],
+            "combinator": "and"}},
+         "id": nid(), "name": "內容還沒審核？（審核防呆）", "type": "n8n-nodes-base.if",
+         "typeVersion": 2.2, "position": [1300, 200],
+         "notes": "用**允許清單**（Content Approved／Existing）而不是封鎖 Planned。\n"
+                  "之後有人在 Notion 新增 Status 選項時，封鎖清單會預設放行——\n"
+                  "那正是這道防呆要擋的事情悄悄溜過去。清單在 scripts/error_codes.py。\n"
+                  "\n"
+                  "Existing 必須放行：文章發佈後回呼會把子列寫成 Existing，\n"
+                  "擋掉它就不能再同步修正（5601、5620 那兩次都會被擋）。\n"
+                  "\n"
+                  "輸出 true＝還沒審核（拒絕）／false＝可以同步。"},
+
+        {"parameters": {"assignments": {"assignments": [
+            # 訊息帶上「目前實際是什麼狀態」——只說「狀態不對」的話，
+            # 看的人還要自己回去查是哪裡不對。
+            {"id": nid(), "name": "fail_reason", "type": "string",
+             "value": "=" + ec.format_reason("__not_approved__")
+                      + "\n（這一列目前的 Status 是「{{ $('" + PICK
+                      + "').first().json.doc_status || '空白' }}」）"},
+        ]}, "options": {}},
+         "id": nid(), "name": "原因：尚未審核", "type": "n8n-nodes-base.set",
+         "typeVersion": 3.4, "position": [1520, 120]},
+
         # ── 防呆②：按到第三層（老闆的 (Draft) 草稿）
         {"parameters": {"conditions": {
             "options": {"caseSensitive": True, "typeValidation": "loose", "version": 2},
@@ -922,7 +966,7 @@ def build_polling_workflow(code):
          "id": nid(), "name": "原因：按到草稿層", "type": "n8n-nodes-base.set",
          "typeVersion": 3.4, "position": [2840, 660]},
 
-        # ── 兩條拒絕路徑共用的回報
+        # ── 各條拒絕路徑共用的回報
         {"parameters": {"assignments": {"assignments": [
             # ⚠️ 絕對不要用 $prevNode：n8n 在錯誤分支不保證注入這個變數，
             # 而「變數本身不存在」會丟 ReferenceError，`?.` 擋不住——整個運算式
@@ -1025,9 +1069,6 @@ def build_polling_workflow(code):
             # 已發佈的文章不直接覆蓋版面，改寫入 Elementor 草稿（/draft），前台不受影響
             {"id": nid(), "name": "write_path",
              "value": "={{ $json.status === 'publish' ? '/draft' : '' }}", "type": "string"},
-            {"id": nid(), "name": "sync_status",
-             "value": "={{ $json.status === 'publish' ? '待確認發佈' : '草稿已建立' }}",
-             "type": "string"},
         ]}, "options": {}},
          "id": nid(), "name": "目標：更新既有", "type": "n8n-nodes-base.set",
          "typeVersion": 3.4, "position": [3060, 180]},
@@ -1042,7 +1083,6 @@ def build_polling_workflow(code):
             {"id": nid(), "name": "target_post_id", "value": "={{ $json.id }}",
              "type": "number"},
             {"id": nid(), "name": "write_path", "value": "", "type": "string"},
-            {"id": nid(), "name": "sync_status", "value": "草稿已建立", "type": "string"},
         ]}, "options": {}},
          "id": nid(), "name": "目標：新建", "type": "n8n-nodes-base.set",
          "typeVersion": 3.4, "position": [3060, 420]},
@@ -1137,6 +1177,10 @@ def build_polling_workflow(code):
             # 同步成功一律「草稿已建立」（Fay 2026-08-11 決定）。原本會依 autosave_id
             # 分寫「待確認發佈」，但實務上兩者對小編是同一件事：看到這個狀態就代表
             # 同步成功、可以去 WP 處理。「已發佈」改由外掛在 WP 端按下發佈時回呼寫入。
+            #
+            # ⚠️ 「待確認發佈」這個選項現在**已經不在 Notion 的 schema 裡了**
+            # （2026-09-07 重讀確認）。不要因為看到上面這段歷史就把它加回來——
+            # 寫一個不存在的 select 值，Notion 會直接回 400。
             '"' + STATUS_PROP + '": { "select": { "name": "草稿已建立" } }, '
             '"' + SYNCED_AT_PROP + '": { "date": { "start": $now.toISO() } } } } }}'),
          "id": nid(), "name": "Notion：回寫母列",
@@ -1243,18 +1287,24 @@ def build_polling_workflow(code):
         conns[a] = {"main": [[{"node": b, "type": "main", "index": 0}]]}
 
     # IF 的輸出 0＝true（命中＝要拒絕）、輸出 1＝false（放行）
+    # 防呆②（審核）插在防呆①（母列）的放行分支上：先確認按對列，再確認內容過審。
+    # 順序有意義——母列本來就沒有審核狀態可言，先擋母列的訊息才會準確。
     conns["是母列？（誤按防呆）"] = {"main": [
         [{"node": "原因：按到母列", "type": "main", "index": 0}],
+        [{"node": "內容還沒審核？（審核防呆）", "type": "main", "index": 0}]]}
+    conns["內容還沒審核？（審核防呆）"] = {"main": [
+        [{"node": "原因：尚未審核", "type": "main", "index": 0}],
         [{"node": chain2[0], "type": "main", "index": 0}]]}
     conns["母列自己還有上層？（草稿層防呆）"] = {"main": [
         [{"node": "原因：按到草稿層", "type": "main", "index": 0}],
         [{"node": "母列有 WP Post ID？", "type": "main", "index": 0}]]}
 
-    # 兩條拒絕路徑匯流 → 回寫失敗 → 留言 → 回到迴圈取下一篇
+    # 三條拒絕路徑匯流 → 回寫失敗 → 留言 → 回到迴圈取下一篇
     # ⚠️ 留言節點必須**直接**接在原因節點後面。$json 指的是「上一個節點的輸出」，
     # 中間若隔著回寫（HTTP 節點），留言看到的會是 Notion PATCH 的回應，
-    # 裡面沒有 fail_reason（2026-08-11 實測踩到，且三條原因路徑都會中）。
-    for n in ("原因：按到母列", "原因：按到草稿層", "原因：節點失敗"):
+    # 裡面沒有 fail_reason（2026-08-11 實測踩到，四條原因路徑都會中）。
+    for n in ("原因：按到母列", "原因：按到草稿層", "原因：尚未審核",
+              "原因：節點失敗"):
         conns[n] = {"main": [[{"node": "Notion：留言說明原因", "type": "main", "index": 0}]]}
     conns["Notion：留言說明原因"] = {"main": [
         [{"node": "回寫：同步失敗", "type": "main", "index": 0}]]}

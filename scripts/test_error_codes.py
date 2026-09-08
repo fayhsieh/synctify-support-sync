@@ -261,3 +261,42 @@ def test_markdown_也列出_W():
 
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-q"]))
+
+
+# ─────────────────────────────────────────────────────────────────────────
+#  A5：審核防呆（Fay 2026-09-07）
+# ─────────────────────────────────────────────────────────────────────────
+
+def test_A5_歸類():
+    assert ec.classify("__not_approved__")[0] == "A5"
+
+
+def test_可同步的狀態是允許清單而非封鎖清單():
+    """新增 Status 選項時要**預設擋下**，不是預設放行。
+
+    封鎖清單（擋 Not started／Planned）的話，之後有人在 Notion 加一個
+    新選項，這道防呆就會安靜地放它過去——那正是它要防的事。
+    """
+    assert "Content Approved" in ec.SYNCABLE_STATUS
+    assert "Existing" in ec.SYNCABLE_STATUS
+    # 這四個是 2026-09-07 重讀 schema 時的實際選項
+    for blocked in ("Not started", "Planned"):
+        assert blocked not in ec.SYNCABLE_STATUS
+    # 假想的新選項預設不在清單裡 ＝ 會被擋
+    assert "Ready for Review" not in ec.SYNCABLE_STATUS
+
+
+def test_Existing_必須放行():
+    """文章發佈後回呼把子列寫成 Existing。擋掉它就不能再同步修正。
+
+    5601（圖說富文本）與 5620（alt 的 >）兩次修正都是對已發佈文章重新同步，
+    若 Existing 被擋，那兩次都做不到。
+    """
+    assert "Existing" in ec.SYNCABLE_STATUS
+
+
+def test_A5_訊息叫人去看兩個勾勾():
+    """只說「狀態不對」沒有用，要講清楚是哪兩個勾勾。"""
+    _, _, todo = ec.classify("__not_approved__")
+    assert "Copy Approved" in todo and "Image Approved" in todo
+    assert "Content Approved" in todo

@@ -181,6 +181,12 @@
             },
             {
               "id": "d0b752f3-a2d8-5859-aa37-e379abf976af",
+              "name": "doc_status",
+              "value": "={{ $json.properties['Status']?.status?.name ?? '' }}",
+              "type": "string"
+            },
+            {
+              "id": "7b2fbfc3-9cf3-53f5-ac75-c76b7787a96c",
               "name": "is_mother",
               "value": "={{ !($json.properties['Parent item']?.relation?.length) }}",
               "type": "boolean"
@@ -533,6 +539,62 @@
           },
           "conditions": [
             {
+              "id": "52c5eb1d-ff13-5f83-80bc-b8adf49fd815",
+              "leftValue": "={{ [\"Content Approved\", \"Existing\"].includes($('取出本列資訊').first().json.doc_status) }}",
+              "operator": {
+                "type": "boolean",
+                "operation": "false",
+                "singleValue": true
+              },
+              "rightValue": ""
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "292efcea-0c76-5c7b-bbb6-1cd5150826de",
+      "name": "內容還沒審核？（審核防呆）",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1300,
+        200
+      ],
+      "notes": "用**允許清單**（Content Approved／Existing）而不是封鎖 Planned。\n之後有人在 Notion 新增 Status 選項時，封鎖清單會預設放行——\n那正是這道防呆要擋的事情悄悄溜過去。清單在 scripts/error_codes.py。\n\nExisting 必須放行：文章發佈後回呼會把子列寫成 Existing，\n擋掉它就不能再同步修正（5601、5620 那兩次都會被擋）。\n\n輸出 true＝還沒審核（拒絕）／false＝可以同步。"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "60624c39-7e21-5959-859c-a7fd32d767e7",
+              "name": "fail_reason",
+              "type": "string",
+              "value": "=[A5] 這一列的 Status 還不是可以同步的狀態，內容可能還沒審核完。\n→ 請先確認 Copy Approved 與 Image Approved 兩個勾勾都打了，再把 Status 改成 Content Approved，然後重新按同步。\n（這一列目前的 Status 是「{{ $('取出本列資訊').first().json.doc_status || '空白' }}」）"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "40c30841-2eab-5fff-992a-b88e3e1c38f6",
+      "name": "原因：尚未審核",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        1520,
+        120
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
               "id": "0f3413cb-93a6-5285-848d-aec75e7b5322",
               "leftValue": "={{ $json.properties['Parent item']?.relation?.length ?? 0 }}",
               "operator": {
@@ -592,7 +654,7 @@
               "id": "3805a414-966b-5cd7-b037-0aef3846faa3",
               "name": "fail_reason",
               "type": "string",
-              "value": "={{ (function(m){ var raw = String(m); var c = (function(raw){ var s = String(raw || []).toLowerCase(); var T = [[\"A1\", [\"category_not_found\", \"no category page titled\"], \"站上找不到 Notion Category 欄位對應的分類頁。\", \"請確認該列的 Category 填對了；若那個分類確實還沒在站上建立，請通知 Fay。訊息裡的「可用分類」是站上目前真的有的分類頁。\"], [\"A2\", [\"rest_post_invalid_id\", \"invalid post id\"], \"這一列的 WP Post ID 指向一篇不存在的文章。\", \"請檢查該列的 WP Post ID 欄位。如果這篇是要**新建**的文章，把欄位清空再按一次；同步完成後會自動填回正確的 ID。\"], [\"A3\", [\"__mother_row__\"], \"按到的是最上層母列，它沒有內容區塊。\", \"請改按底下帶 - vN 的版本子列。\"], [\"A4\", [\"__draft_layer__\"], \"按到的是 (Draft) 草稿層（第三層），這一層不會同步到站上。\", \"請改按正式的版本子列。\"], [\"B1\", [\"request has expired\", \"accessdenied\", \"<code>expired\"], \"Notion 的圖片網址已過期（Notion 給的暫存網址只有一小時有效）。\", \"直接再按一次同步就會重新取得網址。不用改任何東西。\"], [\"B2\", [\"etimedout\", \"econnreset\", \"socket hang up\", \"esockettimedout\", \"enotfound\", \"eai_again\"], \"連線逾時或中斷，跟文章內容無關。\", \"等一分鐘再按一次。連續三次都這樣的話再找 Fay。\"], [\"C1\", [\"rest_forbidden\", \"incorrect_password\", \"rest_cannot_edit\", \"rest_not_logged_in\"], \"WordPress 拒絕了這次請求（認證或權限）。\", \"請找 Fay。這是 n8n 的憑證問題，重按不會好。\"], [\"C2\", [\"x-amzn-waf\", \"awswaf\", \"challenge\"], \"請求被站台前面的防火牆（WAF）攔住了。\", \"請找 Fay 確認 n8n 的來源 IP 是否還在白名單內。重按不會好。\"], [\"C3\", [\"rest_invalid_param\"], \"WordPress 說參數不合法——這通常代表認證被跳過了，不是參數真的寫錯。\", \"請找 Fay 檢查 n8n 裡的站台位址設定（走 http 會讓認證失效）。\"], [\"C4\", [\"no_elementor\", \"no_document\", \"autosave_failed\", \"not_autosave\"], \"Elementor 那一端出問題，版面寫不進去。\", \"請找 Fay。可能是 Elementor 版本或文章狀態的問題。\"], [\"C5\", [\"no_arconix\", \"no_aioseo\", \"no_trp\"], \"站上有個必要的外掛沒啟用（FAQ／SEO／翻譯其中之一）。\", \"請找 Fay 到 WordPress 後台把外掛啟用。\"], [\"C6\", [\"root_not_found\", \"featured_not_found\", \"author_not_found\"], \"站方預設缺件：文件根節點、預設封面照或作者其中之一找不到。\", \"請找 Fay。這是站台設定問題，跟這篇文章無關。\"], [\"C7\", [\"rest_no_route\"], \"找不到這個 API 端點——輔助外掛沒安裝，或版本太舊。\", \"請找 Fay 確認 Synctify Sync Helper 外掛的版本。\"]]; for (var i = 0; i < T.length; i++) { for (var j = 0; j < T[i][1].length; j++) { if (s.indexOf(T[i][1][j]) >= 0) { return [T[i][0], T[i][2], T[i][3]]; } } } return [\"C0\", \"發生了還沒被歸類的錯誤。\", \"請把這則留言整段複製給 Fay。她會把它補進錯誤代碼表。\"]; })(raw); var im = raw.match(/\"message\"\\s*:\\s*\"((?:[^\"\\\\]|\\\\.)*)\"/); var msg = im ? im[1].replace(/\\\\\"/g, '\"').replace(/\\\\\\\\/g, '\\\\') : ''; var cm = raw.match(/\"code\"\\s*:\\s*\"([^\"]+)\"/); var st = raw.match(/(\\d{3})/); var pretty = msg ? ((st ? st[1] + ' ' : '') + msg + (cm ? '（' + cm[1] + '）' : '')) : raw.replace(/\\\\\\\\/g, '').slice(0, 300); var av = raw.match(/\"available\"\\s*:\\s*\\[([^\\]]*)\\]/); var extra = av ? ('\\n可用分類：' + av[1].replace(/\\\\?\"/g, '').replace(/,/g, '、')) : ''; return '[' + c[0] + '] ' + c[1] + '\\n→ ' + c[2] + '\\n（原始訊息：' + pretty + '）' + extra;})(typeof $json.error === 'string' ? $json.error : ($json.error && $json.error.message ? $json.error.message : JSON.stringify($json).slice(0, 800))) }}"
+              "value": "={{ (function(m){ var raw = String(m); var c = (function(raw){ var s = String(raw || []).toLowerCase(); var T = [[\"A1\", [\"category_not_found\", \"no category page titled\"], \"站上找不到 Notion Category 欄位對應的分類頁。\", \"請確認該列的 Category 填對了；若那個分類確實還沒在站上建立，請通知 Fay。訊息裡的「可用分類」是站上目前真的有的分類頁。\"], [\"A2\", [\"rest_post_invalid_id\", \"invalid post id\"], \"這一列的 WP Post ID 指向一篇不存在的文章。\", \"請檢查該列的 WP Post ID 欄位。如果這篇是要**新建**的文章，把欄位清空再按一次；同步完成後會自動填回正確的 ID。\"], [\"A3\", [\"__mother_row__\"], \"按到的是最上層母列，它沒有內容區塊。\", \"請改按底下帶 - vN 的版本子列。\"], [\"A4\", [\"__draft_layer__\"], \"按到的是 (Draft) 草稿層（第三層），這一層不會同步到站上。\", \"請改按正式的版本子列。\"], [\"A5\", [\"__not_approved__\"], \"這一列的 Status 還不是可以同步的狀態，內容可能還沒審核完。\", \"請先確認 Copy Approved 與 Image Approved 兩個勾勾都打了，再把 Status 改成 Content Approved，然後重新按同步。\"], [\"B1\", [\"request has expired\", \"accessdenied\", \"<code>expired\"], \"Notion 的圖片網址已過期（Notion 給的暫存網址只有一小時有效）。\", \"直接再按一次同步就會重新取得網址。不用改任何東西。\"], [\"B2\", [\"etimedout\", \"econnreset\", \"socket hang up\", \"esockettimedout\", \"enotfound\", \"eai_again\"], \"連線逾時或中斷，跟文章內容無關。\", \"等一分鐘再按一次。連續三次都這樣的話再找 Fay。\"], [\"C1\", [\"rest_forbidden\", \"incorrect_password\", \"rest_cannot_edit\", \"rest_not_logged_in\"], \"WordPress 拒絕了這次請求（認證或權限）。\", \"請找 Fay。這是 n8n 的憑證問題，重按不會好。\"], [\"C2\", [\"x-amzn-waf\", \"awswaf\", \"challenge\"], \"請求被站台前面的防火牆（WAF）攔住了。\", \"請找 Fay 確認 n8n 的來源 IP 是否還在白名單內。重按不會好。\"], [\"C3\", [\"rest_invalid_param\"], \"WordPress 說參數不合法——這通常代表認證被跳過了，不是參數真的寫錯。\", \"請找 Fay 檢查 n8n 裡的站台位址設定（走 http 會讓認證失效）。\"], [\"C4\", [\"no_elementor\", \"no_document\", \"autosave_failed\", \"not_autosave\"], \"Elementor 那一端出問題，版面寫不進去。\", \"請找 Fay。可能是 Elementor 版本或文章狀態的問題。\"], [\"C5\", [\"no_arconix\", \"no_aioseo\", \"no_trp\"], \"站上有個必要的外掛沒啟用（FAQ／SEO／翻譯其中之一）。\", \"請找 Fay 到 WordPress 後台把外掛啟用。\"], [\"C6\", [\"root_not_found\", \"featured_not_found\", \"author_not_found\"], \"站方預設缺件：文件根節點、預設封面照或作者其中之一找不到。\", \"請找 Fay。這是站台設定問題，跟這篇文章無關。\"], [\"C7\", [\"rest_no_route\"], \"找不到這個 API 端點——輔助外掛沒安裝，或版本太舊。\", \"請找 Fay 確認 Synctify Sync Helper 外掛的版本。\"]]; for (var i = 0; i < T.length; i++) { for (var j = 0; j < T[i][1].length; j++) { if (s.indexOf(T[i][1][j]) >= 0) { return [T[i][0], T[i][2], T[i][3]]; } } } return [\"C0\", \"發生了還沒被歸類的錯誤。\", \"請把這則留言整段複製給 Fay。她會把它補進錯誤代碼表。\"]; })(raw); var im = raw.match(/\"message\"\\s*:\\s*\"((?:[^\"\\\\]|\\\\.)*)\"/); var msg = im ? im[1].replace(/\\\\\"/g, '\"').replace(/\\\\\\\\/g, '\\\\') : ''; var cm = raw.match(/\"code\"\\s*:\\s*\"([^\"]+)\"/); var st = raw.match(/(\\d{3})/); var pretty = msg ? ((st ? st[1] + ' ' : '') + msg + (cm ? '（' + cm[1] + '）' : '')) : raw.replace(/\\\\\\\\/g, '').slice(0, 300); var av = raw.match(/\"available\"\\s*:\\s*\\[([^\\]]*)\\]/); var extra = av ? ('\\n可用分類：' + av[1].replace(/\\\\?\"/g, '').replace(/,/g, '、')) : ''; return '[' + c[0] + '] ' + c[1] + '\\n→ ' + c[2] + '\\n（原始訊息：' + pretty + '）' + extra;})(typeof $json.error === 'string' ? $json.error : ($json.error && $json.error.message ? $json.error.message : JSON.stringify($json).slice(0, 800))) }}"
             }
           ]
         },
@@ -832,12 +894,6 @@
               "name": "write_path",
               "value": "={{ $json.status === 'publish' ? '/draft' : '' }}",
               "type": "string"
-            },
-            {
-              "id": "24e411ed-90cb-5aae-937f-15dafac99e8f",
-              "name": "sync_status",
-              "value": "={{ $json.status === 'publish' ? '待確認發佈' : '草稿已建立' }}",
-              "type": "string"
             }
           ]
         },
@@ -894,12 +950,6 @@
               "id": "62693fef-eea7-51a5-b987-8a2ad8d98430",
               "name": "write_path",
               "value": "",
-              "type": "string"
-            },
-            {
-              "id": "eb35cef7-f013-53e4-a170-28376821d420",
-              "name": "sync_status",
-              "value": "草稿已建立",
               "type": "string"
             }
           ]
@@ -1472,6 +1522,24 @@
         ],
         [
           {
+            "node": "內容還沒審核？（審核防呆）",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "內容還沒審核？（審核防呆）": {
+      "main": [
+        [
+          {
+            "node": "原因：尚未審核",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
             "node": "Notion：取得連結對照",
             "type": "main",
             "index": 0
@@ -1509,6 +1577,17 @@
       ]
     },
     "原因：按到草稿層": {
+      "main": [
+        [
+          {
+            "node": "Notion：留言說明原因",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "原因：尚未審核": {
       "main": [
         [
           {

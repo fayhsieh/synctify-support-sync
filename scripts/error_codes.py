@@ -59,6 +59,11 @@ CODES = [
      "按到的是 (Draft) 草稿層（第三層），這一層不會同步到站上。",
      "請改按正式的版本子列。"),
 
+    ("A5", ["__not_approved__"],
+     "這一列的 Status 還不是可以同步的狀態，內容可能還沒審核完。",
+     "請先確認 Copy Approved 與 Image Approved 兩個勾勾都打了，"
+     "再把 Status 改成 Content Approved，然後重新按同步。",),
+
     # ── B：暫時性失敗，直接再按一次 ────────────────────────────────────
     ("B1", ["request has expired", "accessdenied", "<code>expired"],
      "Notion 的圖片網址已過期（Notion 給的暫存網址只有一小時有效）。",
@@ -131,6 +136,17 @@ WARNINGS = [
      " Content Hub 裡填了 WP Post ID；沒有的話要先同步那一篇。",
      []),
 ]
+
+# 哪些 Status 可以同步（**允許清單**，不是封鎖清單）。
+#
+# 用允許清單是刻意的：之後若有人在 Notion 新增了 Status 選項，封鎖清單會**預設放行**
+# ——那正是這道防呆要擋的事情悄悄溜過去。允許清單則會擋下來、報 A5，
+# 訊息裡帶著實際的 Status，看一眼就知道要把新選項加進來。防呆要往安全方向倒。
+#
+# `Existing` 一定要放行：文章發佈後回呼會把**子列**的 Status 寫成 Existing
+# （wp-publish-callback 的「Notion：子列也標記已發佈」），
+# 擋掉它就等於不能再同步修正——5601、5620 那兩次修正都會被擋住。
+SYNCABLE_STATUS = ["Content Approved", "Existing"]
 
 BUCKETS = {
     "A": ("Notion 上的內容或欄位有問題", "改完再按一次同步"),
