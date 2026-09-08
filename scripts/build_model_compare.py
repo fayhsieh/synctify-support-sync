@@ -305,6 +305,27 @@ const decode = [];   // 給 Fay 的對照表，不寫進 Notion
 // 在她眼裡就是同一個答案，分成兩欄只會讓她困惑。
 //
 // 只有連心柔的版本都相同時才是真的沒得選，那題剔除。
+// 可疑字元檢查：譯文出現了原文沒有的成對符號。
+//
+// 2026-09-08 實測抓到：某個模型把第 1 句譯成「…然后点击`确认`】【。」——
+// 原文結尾沒有任何括號，那個 】【 是模型自己吐的贅字。
+//
+// 標籤結構檢查抓不到這種：】【 不是標籤，span 指紋完全一致，檢查照樣通過。
+// 也就是說模型可以在保持標籤完整的前提下吐出垃圾字元，程式卻看不見。
+//
+// 只看**成對符號**（括號、引號類）而不是所有標點：句號、逗號本來就會隨著
+// 語言轉換而增減，全部列進來會滿螢幕假警報，跳久了就沒人看了。
+const PAIRED = '【】〖〗《》「」『』（）()[]{}';
+function oddChars(src, out) {
+  const bad = [];
+  for (const ch of PAIRED) {
+    const a = (stripTags(src).split(ch).length - 1);
+    const b = (stripTags(out).split(ch).length - 1);
+    if (b > a) bad.push(ch + '×' + (b - a));
+  }
+  return bad;
+}
+
 const built = [];
 for (const c of keys) {
   const r = rows[c];
@@ -391,6 +412,23 @@ lines.push('出題：' + chosen.length + ' 題'
            + (dropped ? '（另有 ' + dropped + ' 句所有版本完全相同，已剔除）' : '')
            + '；題庫共 ' + keys.length + ' 句');
 lines.push('');
+const odd = [];
+for (const c of keys) {
+  for (const k of labels) {
+    const v = rows[c].out[k];
+    if (!v) continue;
+    const bad = oddChars(rows[c].en, v);
+    if (bad.length) {
+      odd.push('  原第 ' + (c + 1) + ' 句　' + models[k] + '　多出：' + bad.join(' ')
+               + '　→ ' + stripTags(v).slice(-40));
+    }
+  }
+}
+if (odd.length) {
+  lines.push('⚠️ 譯文出現原文沒有的成對符號（模型吐出的贅字）：');
+  odd.slice(0, 12).forEach(l => lines.push(l));
+  lines.push('');
+}
 lines.push('標籤結構檢查（程式判定，心柔看不到這段）：');
 for (const k of labels) {
   let ok = 0, tot = 0;
