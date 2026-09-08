@@ -55,6 +55,10 @@ NOTION_CRED_ID = "xfGHH7Wx4EucMC0X"
 NOTION_CRED_NAME = "Support Center Sync"
 COMPARE_PARENT = "3d52f2ede27d8158aa71f8e9d874662d"
 
+# 產品用術語表（查詢用的 database id，不是 collection id——後者查會回 404，
+# 而訊息是誤導性的「請與 integration 分享」）。
+GLOSSARY_DB = "1ab2891d5ddd48db97d1f1c1afeefcf5"
+
 # 比較用的樣本數。全部 29 筆會讓一次執行叫三十幾次 API、輸出也讀不完；
 # 挑前幾筆足以看出語氣差異，不夠再調。
 DEFAULT_N = 8
@@ -69,6 +73,15 @@ def code_body(models, n, named):
     src = (CONVERTER / "translate_prompt.py").read_text(encoding="utf-8")
     src = re.split(r'^if __name__ == "__main__":', src, flags=re.M)[0]
     samples = json.loads(SAMPLES.read_text(encoding="utf-8"))["samples"]
+    # 依「純文字長度」由長到短排序。
+    #
+    # Fay 2026-09-08 觀察：短句沒有鑑別度——「Select a Channel」三個模型
+    # 一定譯得一樣。實測目前前 8 筆是 17–50 字，最長的 8 筆是 98–160 字。
+    # 要看出模型差異，得給它們有語序、有從屬子句、有連接詞的句子。
+    #
+    # 全部樣本仍然當 few-shot 範例，只有「拿來比較的那幾句」挑長的。
+    _plain = lambda h: re.sub(r"<[^>]+>", "", h or "").strip()
+    ranked = sorted(samples, key=lambda x: -len(_plain(x.get("en"))))
 
     header = (
         "# " + "=" * 66 + "\n"
@@ -80,22 +93,30 @@ def code_body(models, n, named):
     adapter = (
         "\n\n# ─── n8n 轉接層 ───\n"
         "_SAMPLES = " + json.dumps(samples, ensure_ascii=False) + "\n"
+        "_CASES = " + json.dumps(ranked[:n], ensure_ascii=False) + "\n"
         "_MODELS = " + json.dumps(models, ensure_ascii=False) + "\n"
         "_N = " + str(n) + "\n"
         "_NAMED = " + ("True" if named else "False") + "\n"
         "\n"
-        "# 詞彙表由上游節點傳入（Notion → 這裡）。取不到就用空表——\n"
-        "# 空表只是少了術語約束，不會讓流程失敗；但會在輸出裡標明，\n"
-        "# 免得看到結果的人以為術語約束有生效。\n"
+        "# 詞彙表直接吃上游 Notion 查詢節點的原始回應。\n"
+        "# 開了分頁時 n8n 會輸出多個 item（每頁一個），所以全部都要掃。\n"
+        "#\n"
+        "# 取不到就用空表——空表不會讓流程失敗，但 prompt 會變成完全沒有術語\n"
+        "# 約束。2026-09-08 就是這樣：沒接詞彙表卻以為有接，比對出來的結果\n"
+        "# 看不出術語問題。所以輸出帶 glossary_terms 計數，讓它無所遁形。\n"
         "_gloss = []\n"
         "for _it in _items:\n"
-        "    _j = _it['json']\n"
-        "    if 'glossary' in _j and isinstance(_j['glossary'], list):\n"
-        "        _gloss = _j['glossary']\n"
-        "        break\n"
+        "    for _pg in (_it['json'].get('results') or []):\n"
+        "        _p = _pg.get('properties') or {}\n"
+        "        _en = ''.join(_x.get('plain_text', '')\n"
+        "                      for _x in ((_p.get('English') or {}).get('title') or []))\n"
+        "        _zh = ''.join(_x.get('plain_text', '')\n"
+        "                      for _x in ((_p.get('\u7b80\u4f53\u4e2d\u6587') or {}).get('rich_text') or []))\n"
+        "        if _en.strip() and _zh.strip():\n"
+        "            _gloss.append({'en': _en.strip(), 'zh': _zh.strip()})\n"
         "\n"
         "_out = []\n"
-        "for _idx, _s in enumerate(_SAMPLES[:_N]):\n"
+        "for _idx, _s in enumerate(_CASES):\n"
         "    _sys, _usr = build_prompt(_s['en'], _gloss, _SAMPLES)\n"
         "    for _mi, _m in enumerate(_MODELS):\n"
         "        _out.append({'json': {\n"
@@ -184,6 +205,32 @@ function txt(s, bold) {
   return o;
 }
 function para(rich)  { return { object: 'block', type: 'paragraph', paragraph: { rich_text: rich } }; }
+function code(sv) {
+  return { type: 'text', text: { content: String(sv || '').slice(0, 1900) },
+           annotations: { code: true } };
+}
+// direction_step 包住的是**可點擊的 UI 路徑**，在 Notion 用 inline code 呈現，
+// 跟站上與 Notion 寫作慣例一致（Fay 2026-09-08）。
+//
+// ⚠️ 用 direction_step(?!s) 而不是 direction_step：外層是 direction_steps
+// （複數），純子字串比對會先命中外層、把整包吃掉，內層就抓不到了。
+const STEP_RE = /<span[^>]*class="[^"]*direction_step(?!s)[^"]*"[^>]*>([\\s\\S]*?)<\\/span>/g;
+function richFrom(html) {
+  const src = String(html == null ? '' : html);
+  const out = [];
+  let last = 0, m;
+  STEP_RE.lastIndex = 0;
+  while ((m = STEP_RE.exec(src)) !== null) {
+    const before = stripTags(src.slice(last, m.index));
+    if (before) out.push(txt(before));
+    const inner = stripTags(m[1]);
+    if (inner) out.push(code(inner));
+    last = m.index + m[0].length;
+  }
+  const tail = stripTags(src.slice(last));
+  if (tail) out.push(txt(tail));
+  return out.length ? out : [txt('')];
+}
 function h3(s)       { return { object: 'block', type: 'heading_3', heading_3: { rich_text: [txt(s)] } }; }
 function row(cells)  { return { object: 'block', type: 'table_row', table_row: { cells: cells } }; }
 function table(w, rows) {
@@ -202,15 +249,15 @@ blocks.push(para([
 for (const c of keys) {
   const r = rows[c];
   blocks.push(h3('第 ' + (c + 1) + ' 句'));
-  blocks.push(para([txt('原文　', true), txt(stripTags(r.en))]));
-  blocks.push(para([txt('心柔　', true), txt(stripTags(r.boss))]));
+  blocks.push(para([txt('原文　', true)].concat(richFrom(r.en))));
+  blocks.push(para([txt('心柔　', true)].concat(richFrom(r.boss))));
   const trs = [row([[txt('版本', true)], [txt('譯文', true)], [txt('標籤', true)]])];
   for (const k of labels) {
     const v = r.out[k] || '';
     const ok = tagSig(v) === tagSig(r.en);
     trs.push(row([
       [txt(k, true)],
-      [txt(stripTags(v) || '（沒有回應）')],
+      v ? richFrom(v) : [txt('（沒有回應）')],
       [txt(v ? (ok ? '✅' : '❌ 結構不符') : '—')]
     ]));
   }
@@ -271,6 +318,34 @@ def build(models, n, named, cred=None):
          "type": "n8n-nodes-base.manualTrigger", "typeVersion": 1,
          "position": [240, 300],
          "notes": "這支流程只在挑模型時跑，不接 webhook。"},
+
+        {"parameters": {
+            "method": "POST",
+            "url": "https://api.notion.com/v1/databases/" + GLOSSARY_DB + "/query",
+            "authentication": "predefinedCredentialType",
+            "nodeCredentialType": "notionApi",
+            "sendHeaders": True,
+            "headerParameters": {"parameters": [
+                {"name": "Notion-Version", "value": "2022-06-28"}]},
+            "sendBody": True, "specifyBody": "json",
+            "jsonBody": '={{ { "page_size": 100 } }}',
+            "options": {"pagination": {"pagination": {
+                "paginationMode": "updateAParameterInEachRequest",
+                "parameters": {"parameters": [
+                    {"type": "body", "name": "start_cursor",
+                     "value": "={{ $response.body.next_cursor }}"}]},
+                "paginationCompleteWhen": "other",
+                "completeExpression": "={{ $response.body.has_more === false }}",
+                "limitPagesFetched": True, "maxRequestsF": 10}}}},
+         "credentials": {"notionApi": {"id": NOTION_CRED_ID,
+                                       "name": NOTION_CRED_NAME}},
+         "id": nid("gloss"), "name": "Notion：取產品術語表",
+         "type": "n8n-nodes-base.httpRequest", "typeVersion": 4.2,
+         "position": [400, 300],
+         "notes": "術語約束的來源。沒有這一步，prompt 裡就完全沒有術語規則——\n"
+                  "2026-09-08 第一次比較就是這樣跑的，模型各自發揮。\n\n"
+                  "**要分頁**：術語表 150+ 筆，單次上限 100。漏掉的那些若剛好\n"
+                  "出現在原文裡，就會變成「有詞彙表卻沒約束到」，比沒有更難察覺。"},
 
         {"parameters": {"language": "pythonNative",
                         "pythonCode": code_body(models, n, named)},
@@ -344,7 +419,10 @@ def build(models, n, named, cred=None):
                   "整份報告必定超過。切點取空行，不會切在句子中間。"},
     ]
     conns = {
-        "手動執行": {"main": [[{"node": PREP_NODE, "type": "main", "index": 0}]]},
+        "手動執行": {"main": [[{"node": "Notion：取產品術語表",
+                                 "type": "main", "index": 0}]]},
+        "Notion：取產品術語表": {"main": [[{"node": PREP_NODE,
+                                            "type": "main", "index": 0}]]},
         PREP_NODE:
             {"main": [[{"node": "呼叫模型", "type": "main", "index": 0}]]},
         "呼叫模型": {"main": [[{"node": "併成並排表", "type": "main", "index": 0}]]},
