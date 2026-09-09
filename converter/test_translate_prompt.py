@@ -258,5 +258,40 @@ def test_複數容忍不會製造誤判():
     assert tp.find_terms("the linkage between records", g) == []
     assert tp.find_terms("an Important Note follows", g) == []
 
+
+def test_單複數兩個方向都要命中():
+    """2026-09-09：只做單數→複數是不夠的。
+
+    詞彙表收 `Integrations`（複數），原文句中寫單數 `integration`，
+    沒命中就讓模型自己猜成「集成」——而同一篇的導覽路徑因為寫複數而命中
+    「平台对接」。同一篇文章裡同一個詞兩種譯法。
+    """
+    g = [{"en": "Integrations", "zh": "平台对接"},
+         {"en": "Tracking Number", "zh": "追踪号"},
+         {"en": "Categories", "zh": "类别"}]
+    assert tp.find_terms("the integration you want", g) == \
+        [("Integrations", "平台对接")]
+    assert tp.find_terms("go to Integrations", g) == \
+        [("Integrations", "平台对接")]
+    assert tp.find_terms("review the tracking numbers", g) == \
+        [("Tracking Number", "追踪号")]
+    assert tp.find_terms("open the category page", g) == [("Categories", "类别")]
+
+
+def test_ss結尾不當成複數剝掉():
+    """Address／Class／Process 結尾是 ss，不是複數。"""
+    g = [{"en": "Address", "zh": "地址"}, {"en": "Process", "zh": "流程"}]
+    assert tp.find_terms("the Address field", g) == [("Address", "地址")]
+    assert tp.find_terms("the Addresses list", g) == [("Address", "地址")]
+
+
+def test_連字號要對上空格():
+    """詞彙表收 On-Hold，原文句中可能寫 on hold。"""
+    g = [{"en": "On-Hold", "zh": "保留"}]
+    assert tp.find_terms("Orders > Exception Orders > On-Hold", g) == \
+        [("On-Hold", "保留")]
+    assert tp.find_terms("lines will remain on hold and continue", g) == \
+        [("On-Hold", "保留")]
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-q"]))

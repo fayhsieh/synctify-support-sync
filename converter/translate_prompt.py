@@ -57,11 +57,34 @@ def _boundary_pattern(term):
     #
     # 中文不受影響：中文沒有複數形，單複數共用同一個譯文。
     if right:
-        if term.endswith("y") and not term.endswith(("ay", "ey", "oy", "uy")):
-            esc = re.escape(term[:-1]) + "(?:y|ies)"
-        else:
-            esc = esc + "(?:e?s)?"
+        esc = _stem_pattern(term)
+
+    # 連字號要能對上空格。2026-09-09 踩到：詞彙表收「On-Hold」，原文句中寫
+    # 「still in the frozen period... remain on hold」，連字號版對不上空格版，
+    # 於是導覽路徑譯成「保留」（命中）、句中卻譯成「暂停状态」（沒命中、
+    # 模型自己發揮）。同一篇文章兩種說法。
+    esc = esc.replace(r"\-", r"[-\s]").replace("\\ ", r"[-\s]")
     return re.compile(left + esc + right, re.IGNORECASE)
+
+
+def _stem_pattern(term):
+    r"""單複數都要能命中，**兩個方向都要**。
+
+    2026-09-09 的教訓：上一輪只做了「單數詞條 → 複數原文」（Tracking Number
+    對上 tracking numbers），當時判斷反向罕見、不值得做。錯了——詞彙表收的是
+    `Integrations`（複數），原文句中寫的是單數 `integration`，於是沒命中，
+    模型自己猜成「集成」，而同一篇的導覽路徑因為寫複數而命中「平台对接」。
+    **同一篇文章裡同一個詞兩種譯法**，比完全沒有術語表更糟。
+
+    `ss` 結尾不剝（Address／Class／Process 不是複數）。
+    """
+    if term.endswith("ies") and len(term) > 4:
+        return re.escape(term[:-3]) + "(?:y|ies)"
+    if term.endswith("s") and not term.endswith("ss") and len(term) > 3:
+        return re.escape(term[:-1]) + "(?:e?s)?"
+    if term.endswith("y") and not term.endswith(("ay", "ey", "oy", "uy")):
+        return re.escape(term[:-1]) + "(?:y|ies)"
+    return re.escape(term) + "(?:e?s)?"
 
 
 def find_terms(text, glossary):
