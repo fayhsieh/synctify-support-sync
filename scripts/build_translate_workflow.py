@@ -228,8 +228,10 @@ def build(target, model):
          "id": n("params"), "name": "參數",
          "type": "n8n-nodes-base.set", "typeVersion": 3.4,
          "position": [200, 300],
-         "notes": "**model 等心柔選完再填。** 骨架先建起來，"
-                  "選型一出來就能跑。\n\n"
+         "notes": "**model 必須真的驅動 OpenAI 節點。**\n"
+                  "那個節點的模型欄若用下拉選單（mode=list）挑，值就寫死在節點裡，\n"
+                  "這裡改了不會有任何效果——一個安靜失效的參數比沒有參數更糟。\n"
+                  "模型欄要用 By ID 模式、填 {{ $('參數').first().json.model }}。\n\n"
                   "dry_run 預設 true：跑完只回報會寫什麼，不真的寫進 WP。\n"
                   "第一次接上正式流程時務必先用 dry_run 看一遍。\n\n"
                   "limit 是每次處理幾條字串，先小量驗證再放大。"},
@@ -256,8 +258,12 @@ def build(target, model):
          "id": n("gloss"), "name": "Notion：取產品術語表",
          "type": "n8n-nodes-base.httpRequest", "typeVersion": 4.2,
          "position": [420, 180],
-         "notes": "**要分頁**：術語表 150+ 筆、單次上限 100。漏掉的詞若剛好出現在\n"
-                  "原文裡，就變成「有詞彙表卻沒約束到」——比沒有更難察覺。\n\n"
+         "notes": "**要分頁**：術語表 161 筆（其中 127 筆有簡中譯文），單次上限 100。\n"
+                  "漏掉的詞若剛好出現在原文裡，就變成「有詞彙表卻沒約束到」\n"
+                  "——比沒有更難察覺。\n\n"
+                  "**怎麼確認分頁真的生效**：看下游「組 prompt」輸出的\n"
+                  "glossary_terms 應該是 127。少於這個數字就是分頁沒作用，\n"
+                  "只拿到第一頁——而流程會照常跑完，不會報錯。\n\n"
                   "── 術語 gate 的插入點 ──\n"
                   "translation-node-migration.md 設計了「翻譯前先確認新術語」：\n"
                   "抽術語 → 比對詞彙表 → 新詞發到 Notion 等人工確認 → 回寫。\n"
