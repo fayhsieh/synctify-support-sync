@@ -27,10 +27,21 @@ post 7251 實測通過），第一版完全沒用到它。
 
     取文章網址 → 抓頁面 HTML ┐
     取該篇字典現況            ├→ 合流 → 抽區塊＋組 prompt → 翻譯
-    取產品術語表              ┘        → 整理 → POST /tp/block（block_type=1）
+    取全站人工譯文            │        → 整理 → POST /tp/block（block_type=1）
+    取產品術語表              ┘
 
 `pending_blocks()` 會扣掉字典裡已經是 status=2 的列——**人工精修過的不重送**。
 status=0/1 的會重送，那是要的：重跑可以修正舊的機器翻譯。
+
+## 為什麼要「全站」人工譯文，不能只看這篇
+
+2026-09-09 實測踩到：post_id 篩選只看得到有掛 post_parent_id 的列。post 7251
+有三段（id 2770／2772／2780）內容明明屬於這篇、也已人工精修，卻沒有那個關聯，
+於是被當成待翻送去翻譯。端點的保護接住了（回 skipped_human），但白花三次
+API 呼叫，而且 pending 數字浮報了 21%。
+
+端點的比對是**全站**的 `WHERE original = ?`，所以我們的過濾基準也必須是全站的，
+兩邊對「這句翻過了沒」的認定才會一致。
 
 ## dry_run 交給端點自己處理
 
@@ -123,7 +134,9 @@ def prep_code(post_id):
         "_SAMPLES = " + json.dumps(samples, ensure_ascii=False) + "\n"
         "_POST_ID = " + str(post_id) + "\n"
         "\n"
-        "# 上游是 Merge（append），三條線：頁面 HTML、該篇字典現況、術語表。\n"
+        "# 上游是 Merge（append），四條線：頁面 HTML、該篇字典現況、\n"
+        "# 全站人工譯文、術語表。字典類的兩條都併進 _existing——\n"
+        "# pending_blocks 只認 status=2，多給不會有副作用。\n"
         "# **依形狀分辨**而不是依順序——Merge 的輸出順序會隨各分支回應速度\n"
         "# 改變，靠順序判斷會間歇性錯亂，而且錯得很安靜。\n"
         "_html = ''\n"
@@ -343,6 +356,39 @@ def build(target, model, post_id):
                   "沒傳，翻到的是 Docly 主題的樣板文字與示範資料。"},
 
         {"parameters": {
+            "url": wp + "/wp-json/synctify/v1/tp/strings",
+            "authentication": "genericCredentialType",
+            "genericAuthType": "httpBasicAuth",
+            "sendQuery": True,
+            "queryParameters": {"parameters": [
+                {"name": "language",
+                 "value": "={{ $('參數').first().json.language }}"},
+                {"name": "status", "value": "2"},
+                {"name": "limit", "value": "500"},
+            ]},
+            "options": {"pagination": {"pagination": {
+                "paginationMode": "updateAParameterInEachRequest",
+                "parameters": {"parameters": [
+                    {"type": "qs", "name": "offset",
+                     "value": "={{ $pageCount * 500 }}"}]},
+                "paginationCompleteWhen": "other",
+                "completeExpression":
+                    "={{ ($response.body.items || []).length < 500 }}",
+                "limitPagesFetched": True, "maxRequestsF": 10}}}},
+         "credentials": {"httpBasicAuth": cred},
+         "id": n("human"), "name": "WP：取全站人工譯文",
+         "type": "n8n-nodes-base.httpRequest", "typeVersion": 4.2,
+         "position": [420, 680],
+         "notes": "2026-09-09 實測發現的缺口：post_id 篩選只看得到有掛\n"
+                  "post_parent_id 的列。測試站 post 7251 有三段（id 2770／2772／\n"
+                  "2780）明明是這篇的內容、已人工精修，卻沒有那個關聯，\n"
+                  "於是被當成待翻送去翻譯——端點的保護接住了（skipped_human），\n"
+                  "但白花了三次 API 呼叫，而且 pending 數字是浮報的。\n\n"
+                  "端點比對是全站的 WHERE original = ?，所以這裡也要拿全站的\n"
+                  "人工譯文當過濾基準，兩邊的認定才會一致。\n\n"
+                  "**要分頁**：全站 status=2 有 1083 筆、單次上限 500。"},
+
+        {"parameters": {
             "method": "POST",
             "url": "https://api.notion.com/v1/databases/" + GLOSSARY_DB + "/query",
             "authentication": "predefinedCredentialType",
@@ -363,7 +409,7 @@ def build(target, model, post_id):
          "credentials": {"notionApi": NOTION_CRED},
          "id": n("gloss"), "name": "Notion：取產品術語表",
          "type": "n8n-nodes-base.httpRequest", "typeVersion": 4.2,
-         "position": [420, 540],
+         "position": [420, 820],
          "notes": "**要分頁**：術語表 161 筆、單次上限 100。\n"
                   "驗證方式：看下游輸出的 glossary_terms——2026-09-09 實測是 161，\n"
                   "掉到 100 以下就是分頁沒生效、只拿到第一頁，\n"
@@ -371,11 +417,11 @@ def build(target, model, post_id):
                   "── 術語 gate 的插入點 ──\n"
                   "「翻譯前先確認新術語」那一段還沒做，要做的話接在這裡之後。"},
 
-        {"parameters": {"mode": "append", "numberInputs": 3},
+        {"parameters": {"mode": "append", "numberInputs": 4},
          "id": n("merge"), "name": "合流",
          "type": "n8n-nodes-base.merge", "typeVersion": 3,
          "position": [880, 400],
-         "notes": "三條線：頁面 HTML、該篇字典現況、術語表。\n"
+         "notes": "四條線：頁面 HTML、該篇字典現況、全站人工譯文、術語表。\n"
                   "下游**依形狀分辨**而不是依順序——Merge 的輸出順序會隨各分支\n"
                   "回應速度改變，靠順序判斷會間歇性錯亂，而且錯得很安靜。"},
 
@@ -447,14 +493,17 @@ def build(target, model, post_id):
         "參數": {"main": [[
             {"node": "WP：取文章網址", "type": "main", "index": 0},
             {"node": "WP：取該篇字典現況", "type": "main", "index": 0},
+            {"node": "WP：取全站人工譯文", "type": "main", "index": 0},
             {"node": "Notion：取產品術語表", "type": "main", "index": 0}]]},
         "WP：取文章網址": {"main": [[
             {"node": "抓頁面 HTML", "type": "main", "index": 0}]]},
         "抓頁面 HTML": {"main": [[{"node": "合流", "type": "main", "index": 0}]]},
         "WP：取該篇字典現況": {"main": [[
             {"node": "合流", "type": "main", "index": 1}]]},
-        "Notion：取產品術語表": {"main": [[
+        "WP：取全站人工譯文": {"main": [[
             {"node": "合流", "type": "main", "index": 2}]]},
+        "Notion：取產品術語表": {"main": [[
+            {"node": "合流", "type": "main", "index": 3}]]},
         "合流": {"main": [[{"node": PREP, "type": "main", "index": 0}]]},
         PREP: {"main": [[{"node": LLM, "type": "main", "index": 0}]]},
         LLM: {"main": [[{"node": "整理譯文", "type": "main", "index": 0}]]},
