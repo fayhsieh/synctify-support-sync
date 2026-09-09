@@ -16,10 +16,17 @@ n8n 的 item 是線性流動的，一個 Code node 只看得到上游一條連�
 所以兩邊各自撈完後用 Merge（append）合流，適配層再依形狀分開：
 帶 `results` 的是 Notion 回應、帶 `original` 的是 WP 字串。
 
-## 模型是參數，不是寫死的
+## 模型
 
-`參數` 節點裡的 `model` 留空白等心柔選完再填。骨架先建起來，
-選型結果一出來就能跑——等待期間不必空轉。
+心柔 2026-09-09 選定 **gpt-5.6-terra**（八題裡拿 4 票，sol 與 luna 各 2）。
+決定性的不是票數而是**它是唯一沒有正確性錯誤的**：sol 把
+「记录为备忘录 / 扣款」截斷、luna 漏掉「in one of the following ways」。
+
+成本沒有進入這個決定：測試站 2,058 條字串全部翻完，luna ≈ $0.49、
+terra ≈ $4.87、sol ≈ $9.34。「貴 10 倍」的實際差額是四塊多美金。
+
+模型仍然放在「參數」節點而不是寫死在 HTTP body 裡——之後要換模型
+或針對特定內容分流時，改一個欄位就好。
 
 ## 術語 gate 的插入點
 
@@ -62,6 +69,14 @@ WP_BASE = {"test": "https://support.synctify.io",
 # 產品用術語表。查詢用的 database id，不是 collection id
 # （後者查會回 404，而訊息是誤導性的「請與 integration 分享」）。
 GLOSSARY_DB = "1ab2891d5ddd48db97d1f1c1afeefcf5"
+
+# 心柔 2026-09-09 選定。八題裡 terra 拿 4 票（sol 2、luna 2），而且是唯一
+# 沒有正確性錯誤的：sol 把「记录为备忘录 / 扣款」截斷成「记录为备忘录」，
+# luna 漏掉「in one of the following ways」。
+#
+# 成本沒有進入決定：把測試站 2,058 條字串全部翻完，luna ≈ $0.49、
+# terra ≈ $4.87——「貴 10 倍」的實際差額是四塊多美金。
+DEFAULT_MODEL = "gpt-5.6-terra"
 
 PREP = "組 prompt（每段一則）"
 LLM = "OpenAI：翻譯"
@@ -369,8 +384,11 @@ def build(target, model):
             [{"node": "dry run：不寫入", "type": "main", "index": 0}]]},
     }
 
-    return {"name": "Synctify｜翻譯 TP 未翻譯字串（" +
-                    ("測試站" if target == "test" else "正式站") + "）",
+    # 命名對齊既有慣例：`Synctify — <描述>（<站台>；<觸發方式>）`。
+    # 用破折號不是全形直線；觸發方式跟著標，因為現在是手動、之後會換成
+    # Notion 按鈕，名稱上看得出來才不會誤以為已經接好了。
+    return {"name": "Synctify — 翻譯 TP 未翻譯字串（" +
+                    ("測試站" if target == "test" else "正式站") + "；手動觸發）",
             "nodes": nodes, "connections": conns,
             "settings": {"executionOrder": "v1"}}
 
@@ -378,8 +396,8 @@ def build(target, model):
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--target", choices=["test", "prod"], default="test")
-    ap.add_argument("--model", default="",
-                    help="模型 id。留空表示還沒決定，匯入後在「參數」節點填")
+    ap.add_argument("--model", default=DEFAULT_MODEL,
+                    help=f"模型 id（預設 {DEFAULT_MODEL}，心柔 2026-09-09 選定）")
     args = ap.parse_args()
 
     wf = build(args.target, args.model)
