@@ -18,7 +18,7 @@ Fay 打開實際畫面才發現按鈕根本不是那幾個字。
 
 **語言檔有值 ≠ 使用者看得到。** 這支就是把這條界線畫出來。
 
-## 四種引用方式都要算
+## 五種引用方式都要算
 
 漏掉任何一種都會產生假的「死字串」報告，而假警報比不檢查更糟——
 它會讓人去改一個沒壞的東西。實測踩過的三種：
@@ -29,6 +29,9 @@ Fay 打開實際畫面才發現按鈕根本不是那幾個字。
                    menu.titles.<lower_snake(title)>   → 視為一律有用
 4. **部分 key**    oms_trans('labels.lineItem')       → 尾綴比對
                    全庫 734 處，漏掉這種會誤報 11 筆
+5. **葉節點 key**  store.t('detail_about', 'About')   → 尾綴比對
+                   Vue 元件連 domain 前綴都不給。漏掉這種會誤報 13 筆
+                   ——2026-09-09 Fay 用瀏覽器逐一查證才發現
 
 ## 這份報告是「候選」不是「結論」
 
@@ -59,6 +62,12 @@ FULL_KEY = re.compile(
     r"""['"]([a-z][a-z0-9_]*(?:\.[a-zA-Z0-9_:\-]+)+\.?)['"]""")
 PART_KEY = re.compile(
     r"""(?:oms_trans|tenant_trans)\(\s*['"]([A-Za-z0-9_]+(?:\.[A-Za-z0-9_:\-]+)+)['"]""")
+# Vue 元件用 store 自帶的翻譯器，key 只給**葉節點**、連 domain 前綴都沒有：
+#     store.t('detail_about', 'About')
+#     store.t('labels.applies_to', 'Applies to')
+# 2026-09-09 漏掉這種，17 筆「死字串」裡有 13 筆其實畫面上看得到中文
+# （Fay 用瀏覽器逐一查證才發現）。第二個參數是英文 fallback，不是 key。
+STORE_T = re.compile(r"""\bstore\.t\(\s*['"]([A-Za-z0-9_][A-Za-z0-9_.:\-]*)['"]""")
 
 
 def scan_code(root):
@@ -80,6 +89,8 @@ def scan_code(root):
             k = m.group(1)
             (prefix if k.endswith(".") else full).add(k)
         for m in PART_KEY.finditer(txt):
+            partial.add(m.group(1))
+        for m in STORE_T.finditer(txt):
             partial.add(m.group(1))
     # 選單標題存在 admin_menu.title，渲染時才組出 menu.titles.<snake>，
     # 程式碼裡永遠找不到字面 key（見 tenant migration 2026_08_26 的註解）。
