@@ -291,6 +291,17 @@ def propose_from_oms(oms, glossary, docs, top=40, min_keys=1):
         # 地址範例混進候選，進了表會被當成必須遵守的術語去約束翻譯。
         if all(".placeholders." in k or k.endswith(".placeholder") for k in keys):
             continue
+        # 極短的英文字串不可靠。2026-09-09 實測：W 有三個 key，兩個是
+        # shipping_width（宽）、一個是 unit_weight_short（重）——**兩種譯法
+        # 各自都是對的**，是英文那邊用同一個縮寫表示寬度與重量。
+        #
+        # 這個索引以英文字串為鍵，一兩個字母的縮寫必然把不同概念撞在一起，
+        # 看起來像「OMS 自己不一致」，其實不是。當時我就這樣誤報成產品 bug。
+        #
+        # 縮寫本來就依語境而定，填任何一個譯法都會讓另一個語境被譯錯，
+        # 所以這種詞根本不該進術語表。
+        if len(en_disp.strip()) <= 2:
+            continue
         # 取原始大小寫：索引是小寫的，從 key 找不回來，用 cn 判斷不了，
         # 所以這裡只能用小寫比對、顯示時還原成 Title Case 的近似值。
         en_disp = info.get("en") or en_lower
