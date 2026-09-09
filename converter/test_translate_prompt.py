@@ -232,5 +232,31 @@ def test_system_要求巢狀標籤之間不留空白():
     assert "巢狀標籤之間不要留空白" in sysmsg
     assert "词距" in sysmsg or "詞距" in sysmsg
 
+
+def test_術語比對容許英文複數():
+    """詞彙表收單數，原文常常是複數。
+
+    2026-09-09 踩到：「Tracking Number」對不上「review the tracking numbers」，
+    術語整個沒進 prompt。三個模型各自猜，看起來像模型不照規則翻——
+    這種失敗會被誤判成模型品質問題。
+    """
+    g = [{"en": "Tracking Number", "zh": "追踪号"},
+         {"en": "Category", "zh": "类别"},
+         {"en": "Box", "zh": "箱"}]
+    assert tp.find_terms("review the tracking numbers now", g) == \
+        [("Tracking Number", "追踪号")]
+    assert tp.find_terms("one tracking number", g) == \
+        [("Tracking Number", "追踪号")]
+    assert tp.find_terms("browse the categories", g) == [("Category", "类别")]
+    assert tp.find_terms("count the boxes", g) == [("Box", "箱")]
+
+
+def test_複數容忍不會製造誤判():
+    """加了 (?:e?s)? 之後仍然要守住詞邊界，不能命中無關的長詞。"""
+    g = [{"en": "Link", "zh": "关联"}, {"en": "Import", "zh": "导入"}]
+    # Linkage／Important 都不該命中——2026-08 術語稽核時踩過的老問題
+    assert tp.find_terms("the linkage between records", g) == []
+    assert tp.find_terms("an Important Note follows", g) == []
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-q"]))

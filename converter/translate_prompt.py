@@ -46,6 +46,21 @@ def _boundary_pattern(term):
     esc = re.escape(term)
     left = r"\b" if term[:1].isascii() and term[:1].isalnum() else ""
     right = r"\b" if term[-1:].isascii() and term[-1:].isalnum() else ""
+
+    # 容許英文複數。2026-09-09 踩到：詞彙表收「Tracking Number」（單數），
+    # 原文寫「review the tracking numbers」，\b 在 Number 與 s 之間沒有邊界，
+    # 整個術語就沒進 prompt——三個模型各自猜，看起來像模型不照規則翻，
+    # 其實是根本沒收到規則。這種失敗**看起來像模型的問題**，很難察覺。
+    #
+    # 詞彙表裡 Channel 與 Channels 兩列並存，就是有人踩過同一個坑之後
+    # 手動補的。150+ 個詞都這樣補不現實，所以修在比對這一層。
+    #
+    # 中文不受影響：中文沒有複數形，單複數共用同一個譯文。
+    if right:
+        if term.endswith("y") and not term.endswith(("ay", "ey", "oy", "uy")):
+            esc = re.escape(term[:-1]) + "(?:y|ies)"
+        else:
+            esc = esc + "(?:e?s)?"
     return re.compile(left + esc + right, re.IGNORECASE)
 
 
