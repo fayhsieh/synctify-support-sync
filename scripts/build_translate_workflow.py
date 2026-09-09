@@ -1,46 +1,50 @@
 #!/usr/bin/env python3
-"""產生「翻譯 TranslatePress 未翻譯字串」的 n8n 工作流（Workflow 3 骨架）。
+"""產生「翻譯一篇已發佈文章」的 n8n 工作流（Workflow 3）。
 
-## 這支跟 build_model_compare.py 的分工
+## 2026-09-09 重寫：第一版的輸入端整個是錯的
 
-`build_model_compare.py` 是**選型工具**：拿固定樣本比較幾個模型，跑完就丟。
-這支是**正式流程**：從 WP 撈未翻譯字串、翻譯、寫回去。
+第一版做的是「撈 TP 的 status=0 字串 → 翻 → POST /tp/update」。實跑翻到的是
+Docly 佈景主題的樣板文字與示範資料（「頁腳」「論壇」「CEO, Docly」，還有主題
+dummy content 裡的英式俚語）。兩個獨立的錯誤：
 
-兩者共用 `converter/translate_prompt.py`——prompt 規則只有一份，
-改了規則兩邊同時受益。這是刻意的：選型時測到的品質，上線後才算數。
+**沒有 post_id。** `/tp/strings` 支援 post_id 篩選（經 trp_original_meta 關聯），
+不傳就是全站清單。
 
-## 為什麼要 Merge 節點
+**更根本的：那條路徑產出的必然是「片段品質」。** TP 自動登錄的一律是片段
+（block_type=0，以行內元素邊界切分）；整句列（block_type=1）只有人在 TP 編輯器
+上升到外層才會生成，而且一生成就已經是 status=2。所以「撈 status=0 來翻」
+翻到的**只可能**是殘句——那正是 Support Center 早期那批生硬譯文的來源，
+已經被淘汰過一次。
 
-組 prompt 需要兩個來源：**產品術語表**（Notion）與**未翻譯字串**（WP）。
-n8n 的 item 是線性流動的，一個 Code node 只看得到上游一條連線。
-所以兩邊各自撈完後用 Merge（append）合流，適配層再依形狀分開：
-帶 `results` 的是 Notion 回應、帶 `original` 的是 WP 字串。
+外掛 `/tp/block` 的註解與 `converter/tp_blocks.py` 的模組說明都寫著這件事。
+建第一版時沒讀到那裡。
 
-## 模型
+## 正確的路徑
 
-心柔 2026-09-09 選定 **gpt-5.6-terra**（八題裡拿 4 票，sol 與 luna 各 2）。
-決定性的不是票數而是**它是唯一沒有正確性錯誤的**：sol 把
-「记录为备忘录 / 扣款」截斷、luna 漏掉「in one of the following ways」。
+整句列必須**由我們產生**，原文取自已發佈頁面的區塊 innerHTML——那正是 TP 看到
+的同一份來源。`converter/tp_blocks.py` 就是做這件事的（2026-08-14 在測試站
+post 7251 實測通過），第一版完全沒用到它。
 
-成本沒有進入這個決定：測試站 2,058 條字串全部翻完，luna ≈ $0.49、
-terra ≈ $4.87、sol ≈ $9.34。「貴 10 倍」的實際差額是四塊多美金。
+    取文章網址 → 抓頁面 HTML ┐
+    取該篇字典現況            ├→ 合流 → 抽區塊＋組 prompt → 翻譯
+    取產品術語表              ┘        → 整理 → POST /tp/block（block_type=1）
 
-模型仍然放在「參數」節點而不是寫死在 HTTP body 裡——之後要換模型
-或針對特定內容分流時，改一個欄位就好。
+`pending_blocks()` 會扣掉字典裡已經是 status=2 的列——**人工精修過的不重送**。
+status=0/1 的會重送，那是要的：重跑可以修正舊的機器翻譯。
+
+## dry_run 交給端點自己處理
+
+`/tp/block` 本身吃 dry_run，會回報「會做什麼」而不寫入。比在 n8n 這邊用 IF
+分支好：整條路徑（含比對）都會實際走一遍，只是不落地。
 
 ## 術語 gate 的插入點
 
-`n8n/translation-node-migration.md` 設計了「翻譯前先確認新術語」的關卡
-（抽術語 → 比對 → 新詞發到 Notion 等人工確認 → 回寫詞彙表）。
-那一段**還沒做**，插入點在「取詞彙表」與「組 prompt」之間，
-節點的 notes 有標。
+`n8n/translation-node-migration.md` 設計的「翻譯前先確認新術語」還沒做，
+插入點在「取產品術語表」與「抽區塊＋組 prompt」之間。
 
 ## 用法
 
-    python scripts/build_translate_workflow.py --target test
-    python scripts/build_translate_workflow.py --target test --model gpt-5.6-luna
-
-產物在 `n8n/local/`（CLAUDE.md：要匯入的是 local 版）。
+    python scripts/build_translate_workflow.py --target test --post 7251
 """
 import argparse
 import json
@@ -71,14 +75,17 @@ WP_BASE = {"test": "https://support.synctify.io",
 GLOSSARY_DB = "1ab2891d5ddd48db97d1f1c1afeefcf5"
 
 # 心柔 2026-09-09 選定。八題裡 terra 拿 4 票（sol 2、luna 2），而且是唯一
-# 沒有正確性錯誤的：sol 把「记录为备忘录 / 扣款」截斷成「记录为备忘录」，
-# luna 漏掉「in one of the following ways」。
+# 沒有正確性錯誤的：sol 把「记录为备忘录 / 扣款」截斷、luna 漏掉
+# 「in one of the following ways」。
 #
-# 成本沒有進入決定：把測試站 2,058 條字串全部翻完，luna ≈ $0.49、
-# terra ≈ $4.87——「貴 10 倍」的實際差額是四塊多美金。
+# 成本沒有進入決定：2,058 條字串全部翻完 luna ≈ $0.49、terra ≈ $4.87
+# ——「貴 10 倍」的實際差額是四塊多美金。
 DEFAULT_MODEL = "gpt-5.6-terra"
 
-PREP = "組 prompt（每段一則）"
+# 測試站已有手工整句列可比對的文章（tp_blocks 2026-08-14 就是在這篇實測的）
+DEFAULT_POST = 7251
+
+PREP = "抽區塊＋組 prompt"
 LLM = "OpenAI：翻譯"
 
 
@@ -86,32 +93,42 @@ def det(*parts):
     return str(uuid.uuid5(_ID_NS, "|".join(str(p) for p in parts)))
 
 
-def prep_code():
-    """組 prompt 的 Python code node：打包 translate_prompt 與樣本。
+def _module(name):
+    """讀 converter 模組，去掉 __main__ 區塊。"""
+    src = (CONVERTER / name).read_text(encoding="utf-8")
+    return re.split(r'^if __name__ == "__main__":', src, flags=re.M)[0]
 
-    n8n 的 Code node 預設封鎖所有 import（memory：n8n 2.25.7），
-    translate_prompt 已經壓到只需 `re`，可以整份塞進去。
+
+def prep_code(post_id):
+    """抽區塊 + 組 prompt 的 Python code node。
+
+    打包 tp_blocks 與 translate_prompt 兩個模組。兩者都只需要 `re`
+    （memory：n8n 2.25.7 的 Code node 預設封鎖所有 import）。
     """
-    src = re.split(r'^if __name__ == "__main__":',
-                   (CONVERTER / "translate_prompt.py").read_text(encoding="utf-8"),
-                   flags=re.M)[0]
     samples = json.loads(SAMPLES.read_text(encoding="utf-8"))["samples"]
     header = (
         "# " + "=" * 66 + "\n"
         "#  自動產生，請勿直接編輯\n"
-        "#  來源：converter/translate_prompt.py + samples/tp-style-samples.json\n"
+        "#  來源：converter/tp_blocks.py + converter/translate_prompt.py\n"
+        "#        + samples/tp-style-samples.json\n"
         "#  重新產生：./.venv/bin/python scripts/build_translate_workflow.py\n"
         "# " + "=" * 66 + "\n"
     )
+    # 兩份模組的頂層名稱沒有衝突（tp_blocks 是 BLOCK_TAGS/normalize/…、
+    # translate_prompt 是 build_prompt/find_terms/…）；都只 import re。
+    body = _module("tp_blocks.py") + "\n\n" + _module("translate_prompt.py")
+
     adapter = (
         "\n\n# ─── n8n 轉接層 ───\n"
         "_SAMPLES = " + json.dumps(samples, ensure_ascii=False) + "\n"
+        "_POST_ID = " + str(post_id) + "\n"
         "\n"
-        "# 上游是 Merge（append），一條線是 Notion 的術語表、一條線是 WP 的\n"
-        "# 未翻譯字串。**依形狀分辨**而不是依順序——Merge 的輸出順序會隨兩邊\n"
-        "# 回應速度改變，靠順序判斷會間歇性錯亂，而且錯得很安靜。\n"
+        "# 上游是 Merge（append），三條線：頁面 HTML、該篇字典現況、術語表。\n"
+        "# **依形狀分辨**而不是依順序——Merge 的輸出順序會隨各分支回應速度\n"
+        "# 改變，靠順序判斷會間歇性錯亂，而且錯得很安靜。\n"
+        "_html = ''\n"
+        "_existing = []\n"
         "_gloss = []\n"
-        "_strings = []\n"
         "for _it in _items:\n"
         "    _j = _it['json']\n"
         "    if isinstance(_j.get('results'), list):\n"
@@ -124,45 +141,63 @@ def prep_code():
         "                                     .get('rich_text') or []))\n"
         "            if _en.strip() and _zh.strip():\n"
         "                _gloss.append({'en': _en.strip(), 'zh': _zh.strip()})\n"
-        "    elif _j.get('original'):\n"
-        "        _strings.append(_j)\n"
         "    elif isinstance(_j.get('items'), list):\n"
-        "        # /tp/strings 若把結果包在 items 裡\n"
-        "        for _s in _j['items']:\n"
-        "            if _s.get('original'):\n"
-        "                _strings.append(_s)\n"
-        "\n"
-        "_out = []\n"
-        "for _s in _strings:\n"
-        "    _en = _s.get('original') or ''\n"
-        "    _sys, _usr = build_prompt(_en, _gloss, _SAMPLES)\n"
-        "    _hits = [{'en': _e, 'zh': _z} for _e, _z in find_terms(_en, _gloss)]\n"
-        "    _out.append({'json': {\n"
-        "        'string_id': _s.get('id'),\n"
-        "        'original': _en,\n"
-        "        'system': _sys,\n"
-        "        'user': _usr,\n"
-        "        'terms': _hits,\n"
-        "        'glossary_terms': len(_gloss),\n"
-        "    }})\n"
+        "        _existing.extend(_j['items'])\n"
+        "    else:\n"
+        "        for _k in ('data', 'body', 'html'):\n"
+        "            _v = _j.get(_k)\n"
+        "            if isinstance(_v, str) and '<' in _v and len(_v) > len(_html):\n"
+        "                _html = _v\n"
         "\n"
         "if not _gloss:\n"
-        "    # 空術語表不會讓流程失敗，但 prompt 會完全沒有術語約束。\n"
-        "    # 2026-09-08 model-compare 就是這樣跑了一輪才發現，比較結果作廢。\n"
-        "    raise ValueError('術語表是空的——請確認 Notion 節點有回應，'\n"
+        "    raise ValueError('術語表是空的——確認 Notion 節點有回應，'\n"
         "                     '以及該資料庫已與 integration 分享')\n"
+        "if not _html:\n"
+        "    raise ValueError('沒有拿到頁面 HTML——確認「抓頁面 HTML」節點的 '\n"
+        "                     'Response Format 設為 text（不是 JSON）')\n"
+        "\n"
+        "_res = pending_blocks(_html, _POST_ID, _existing)\n"
+        "\n"
+        "_out = []\n"
+        "for _b in _res['pending']:\n"
+        "    _en = _b['original']\n"
+        "    _sys, _usr = build_prompt(_en, _gloss, _SAMPLES)\n"
+        "    _out.append({'json': {\n"
+        "        'post_id': _POST_ID,\n"
+        "        'original': _en,\n"
+        "        'tag': _b['tag'],\n"
+        "        'has_inline': _b['has_inline'],\n"
+        "        'system': _sys,\n"
+        "        'user': _usr,\n"
+        "        'terms': [{'en': _e, 'zh': _z}\n"
+        "                  for _e, _z in find_terms(_en, _gloss)],\n"
+        "        # 診斷數字每一筆都帶著，隨便點開一筆都看得到整體狀況\n"
+        "        'stat_total': _res['total_blocks'],\n"
+        "        'stat_already_human': _res['already_human'],\n"
+        "        'stat_pending': len(_res['pending']),\n"
+        "        'stat_glossary': len(_gloss),\n"
+        "        'stat_notion_residue': len(_res['notion_residue']),\n"
+        "    }})\n"
+        "\n"
+        "if not _out:\n"
+        "    # 沒有待翻區塊是正常結果（整篇都已人工精修），但要說出來，\n"
+        "    # 否則下游看到空輸入會以為是壞掉。\n"
+        "    return [{'json': {'nothing_to_do': True,\n"
+        "                      'post_id': _POST_ID,\n"
+        "                      'stat_total': _res['total_blocks'],\n"
+        "                      'stat_already_human': _res['already_human'],\n"
+        "                      'stat_glossary': len(_gloss)}}]\n"
         "return _out\n"
     )
-    return header + src + adapter
+    return header + body + adapter
 
 
 COLLECT_JS = """
-// 把 OpenAI 節點的回應整理成可寫回 WP 的形狀。
+// 把譯文整理成 /tp/block 吃的形狀。
 //
 // **回應形狀要容錯。** OpenAI 節點在不同 n8n 版本／不同「Simplify」設定下
-// 回傳的欄位不一樣：有時是 message.content、有時是 content、
-// 有時是原始 API 形狀 choices[0].message.content。寫死一種，
-// 換個版本就整條流程安靜地產出空字串——而空字串會被寫進 WP。
+// 回傳的欄位不一樣：content、message.content、choices[0].message.content
+// 都可能。寫死一種，換個版本就整條流程安靜地產出空字串。
 function pickText(j) {
   if (!j) return '';
   if (typeof j.content === 'string') return j.content;
@@ -179,10 +214,17 @@ function tagSig(html) {
 }
 
 const prep = $('PREP_NODE_NAME').all();
+
+// 沒有待翻區塊——整篇都已人工精修。原樣往下傳，不要偽裝成有東西可寫。
+if (prep.length === 1 && prep[0].json.nothing_to_do) {
+  return [{ json: { post_id: prep[0].json.post_id, items: [], count: 0,
+                    nothing_to_do: true, warnings: [] } }];
+}
+
 const outs = $input.all();
 
-// 位置配對。數量對不上就中止——硬配會產生一批看起來正常、
-// 實際上譯文與原文錯位的資料，而那會被寫進 WP。
+// 位置配對。數量對不上就中止——硬配會產生譯文與原文錯位的資料，
+// 而 /tp/block 會照著把錯誤的對應寫進三張表。
 if (outs.length !== prep.length) {
   throw new Error('翻譯結果 ' + outs.length + ' 筆、送出 ' + prep.length +
                   ' 筆，數量對不上，不進行配對');
@@ -193,48 +235,112 @@ const warn = [];
 for (let i = 0; i < prep.length; i++) {
   const p = prep[i].json;
   const text = pickText(outs[i].json).trim();
-  if (!text) { warn.push('#' + p.string_id + ' 沒有譯文'); continue; }
+  if (!text) { warn.push('「' + p.original.slice(0, 40) + '…」沒有譯文'); continue; }
   if (tagSig(text) !== tagSig(p.original)) {
-    warn.push('#' + p.string_id + ' 標籤結構被改動');
+    warn.push('「' + p.original.slice(0, 40) + '…」標籤結構被改動');
   }
-  items.push({ id: p.string_id, translated: text });
+  // block_type 固定 1：我們產生的就是「整句」列。這是這條流程存在的理由，
+  // 不要讓端點依有無標籤自動判定——純文字段落也必須是整句列。
+  items.push({ original: p.original, translated: text, block_type: 1 });
 }
 
-return [{ json: { items: items, count: items.length, warnings: warn } }];
+const s = prep[0].json;
+return [{ json: {
+  post_id: s.post_id,
+  items: items,
+  count: items.length,
+  warnings: warn,
+  stats: {
+    total_blocks: s.stat_total,
+    already_human: s.stat_already_human,
+    pending: s.stat_pending,
+    glossary_terms: s.stat_glossary,
+    notion_residue: s.stat_notion_residue,
+  },
+} }];
 """.strip()
 
 
-def build(target, model):
+def build(target, model, post_id):
     wp = WP_BASE[target]
     cred = WP_CRED[target]
-    n = lambda k: det(target, k)
+    n = lambda k: det(target, "v2", k)
 
     nodes = [
         {"parameters": {}, "id": n("trigger"), "name": "手動執行",
          "type": "n8n-nodes-base.manualTrigger", "typeVersion": 1,
-         "position": [0, 300],
-         "notes": "骨架階段用手動觸發。之後換成 Notion 按鈕的 webhook——\n"
-                  "設計已定（memory：按鈕 webhook 為主、輪詢待命）。"},
+         "position": [0, 400],
+         "notes": "骨架階段用手動觸發。之後換成 Notion 按鈕的 webhook。"},
 
         {"parameters": {"assignments": {"assignments": [
-            {"id": det("a", "lang"), "name": "language",
+            {"id": det("a2", "post"), "name": "post_id",
+             "value": post_id, "type": "number"},
+            {"id": det("a2", "lang"), "name": "language",
              "value": "zh_CN", "type": "string"},
-            {"id": det("a", "model"), "name": "model",
-             "value": model or "", "type": "string"},
-            {"id": det("a", "limit"), "name": "limit", "value": 20, "type": "number"},
-            {"id": det("a", "dry"), "name": "dry_run", "value": True,
+            {"id": det("a2", "model"), "name": "model",
+             "value": model, "type": "string"},
+            {"id": det("a2", "dry"), "name": "dry_run", "value": True,
              "type": "boolean"},
         ]}, "options": {}},
          "id": n("params"), "name": "參數",
          "type": "n8n-nodes-base.set", "typeVersion": 3.4,
-         "position": [200, 300],
+         "position": [200, 400],
          "notes": "**model 必須真的驅動 OpenAI 節點。**\n"
                   "那個節點的模型欄若用下拉選單（mode=list）挑，值就寫死在節點裡，\n"
-                  "這裡改了不會有任何效果——一個安靜失效的參數比沒有參數更糟。\n"
-                  "模型欄要用 By ID 模式、填 {{ $('參數').first().json.model }}。\n\n"
-                  "dry_run 預設 true：跑完只回報會寫什麼，不真的寫進 WP。\n"
-                  "第一次接上正式流程時務必先用 dry_run 看一遍。\n\n"
-                  "limit 是每次處理幾條字串，先小量驗證再放大。"},
+                  "這裡改了不會有任何效果——一個安靜失效的參數比沒有參數更糟。\n\n"
+                  "dry_run 會直接傳給 /tp/block：整條路徑都會走一遍（含比對），\n"
+                  "只是不落地，並回報「會做什麼」。"},
+
+        {"parameters": {
+            "url": "=" + wp + "/wp-json/wp/v2/docs/"
+                   "{{ $json.post_id }}?_fields=id,link,title",
+            "authentication": "genericCredentialType",
+            "genericAuthType": "httpBasicAuth",
+            "options": {}},
+         "credentials": {"httpBasicAuth": cred},
+         "id": n("url"), "name": "WP：取文章網址",
+         "type": "n8n-nodes-base.httpRequest", "typeVersion": 4.2,
+         "position": [420, 260],
+         "notes": "要抓的是**已發佈頁面的渲染 HTML**，不是 REST 的 content.rendered\n"
+                  "（memory：content.rendered 會漂移）。所以先問網址、再抓頁面。"},
+
+        {"parameters": {
+            "url": "={{ $json.link }}",
+            "authentication": "genericCredentialType",
+            "genericAuthType": "httpBasicAuth",
+            "options": {"response": {"response": {"responseFormat": "text"}}}},
+         "credentials": {"httpBasicAuth": cred},
+         "id": n("html"), "name": "抓頁面 HTML",
+         "type": "n8n-nodes-base.httpRequest", "typeVersion": 4.2,
+         "position": [640, 260],
+         "notes": "**Response Format 必須是 text。** 設成 JSON 會拿到解析失敗或空值，\n"
+                  "而下游只會看到「沒有 HTML」。\n\n"
+                  "tp_blocks 會把範圍限縮在 Elementor 內容容器：整頁 143k、\n"
+                  "內容區只有 44k。不限縮會撈到側邊欄、頁首頁尾，\n"
+                  "甚至 Google Tag Manager 的 iframe。"},
+
+        {"parameters": {
+            "url": wp + "/wp-json/synctify/v1/tp/strings",
+            "authentication": "genericCredentialType",
+            "genericAuthType": "httpBasicAuth",
+            "sendQuery": True,
+            "queryParameters": {"parameters": [
+                {"name": "language",
+                 "value": "={{ $('參數').first().json.language }}"},
+                {"name": "post_id",
+                 "value": "={{ $('參數').first().json.post_id }}"},
+                {"name": "limit", "value": "500"},
+            ]},
+            "options": {}},
+         "credentials": {"httpBasicAuth": cred},
+         "id": n("existing"), "name": "WP：取該篇字典現況",
+         "type": "n8n-nodes-base.httpRequest", "typeVersion": 4.2,
+         "position": [420, 400],
+         "notes": "**不篩 status**：全部撈回來，由 pending_blocks 決定哪些要重送。\n"
+                  "規則是「只有 status=2（人工精修）才算完成、不必再送」，\n"
+                  "status=0/1 會重送——重跑可以修正舊的機器翻譯。\n\n"
+                  "**post_id 一定要傳。** 不傳就是全站清單：2026-09-09 第一版\n"
+                  "沒傳，翻到的是 Docly 主題的樣板文字與示範資料。"},
 
         {"parameters": {
             "method": "POST",
@@ -257,54 +363,33 @@ def build(target, model):
          "credentials": {"notionApi": NOTION_CRED},
          "id": n("gloss"), "name": "Notion：取產品術語表",
          "type": "n8n-nodes-base.httpRequest", "typeVersion": 4.2,
-         "position": [420, 180],
-         "notes": "**要分頁**：術語表 161 筆（其中 127 筆有簡中譯文），單次上限 100。\n"
-                  "漏掉的詞若剛好出現在原文裡，就變成「有詞彙表卻沒約束到」\n"
-                  "——比沒有更難察覺。\n\n"
-                  "**怎麼確認分頁真的生效**：看下游「組 prompt」輸出的\n"
-                  "glossary_terms 應該是 127。少於這個數字就是分頁沒作用，\n"
-                  "只拿到第一頁——而流程會照常跑完，不會報錯。\n\n"
+         "position": [420, 540],
+         "notes": "**要分頁**：術語表 161 筆、單次上限 100。\n"
+                  "驗證方式：看下游輸出的 glossary_terms——2026-09-09 實測是 161，\n"
+                  "掉到 100 以下就是分頁沒生效、只拿到第一頁，\n"
+                  "而流程會照常跑完不報錯。\n\n"
                   "── 術語 gate 的插入點 ──\n"
-                  "translation-node-migration.md 設計了「翻譯前先確認新術語」：\n"
-                  "抽術語 → 比對詞彙表 → 新詞發到 Notion 等人工確認 → 回寫。\n"
-                  "那一段還沒做，要做的話接在這個節點之後、組 prompt 之前。"},
+                  "「翻譯前先確認新術語」那一段還沒做，要做的話接在這裡之後。"},
 
-        {"parameters": {
-            "url": wp + "/wp-json/synctify/v1/tp/strings",
-            "authentication": "genericCredentialType",
-            "genericAuthType": "httpBasicAuth",
-            "sendQuery": True,
-            "queryParameters": {"parameters": [
-                {"name": "language", "value": "={{ $('參數').first().json.language }}"},
-                {"name": "status", "value": "0"},
-                {"name": "limit", "value": "={{ $('參數').first().json.limit }}"},
-            ]},
-            "options": {}},
-         "credentials": {"httpBasicAuth": cred},
-         "id": n("strings"), "name": "WP：取未翻譯字串",
-         "type": "n8n-nodes-base.httpRequest", "typeVersion": 4.2,
-         "position": [420, 420],
-         "notes": "status=0 是未翻譯。**不要撈 status=2**——那是人工精修的譯文，\n"
-                  "端點雖然有保護不會被覆蓋（2026-09-09 實測），\n"
-                  "但撈進來只會浪費 API 呼叫。"},
-
-        {"parameters": {"mode": "append", "numberInputs": 2},
+        {"parameters": {"mode": "append", "numberInputs": 3},
          "id": n("merge"), "name": "合流",
          "type": "n8n-nodes-base.merge", "typeVersion": 3,
-         "position": [640, 300],
-         "notes": "組 prompt 需要術語表與字串兩個來源，但 Code node 只看得到\n"
-                  "上游一條連線，所以在這裡合流。\n\n"
-                  "下游**依形狀分辨**而不是依順序——Merge 的輸出順序會隨兩邊\n"
+         "position": [880, 400],
+         "notes": "三條線：頁面 HTML、該篇字典現況、術語表。\n"
+                  "下游**依形狀分辨**而不是依順序——Merge 的輸出順序會隨各分支\n"
                   "回應速度改變，靠順序判斷會間歇性錯亂，而且錯得很安靜。"},
 
-        {"parameters": {"language": "pythonNative", "pythonCode": prep_code()},
+        {"parameters": {"language": "pythonNative",
+                        "pythonCode": prep_code(post_id)},
          "id": n("prep"), "name": PREP,
          "type": "n8n-nodes-base.code", "typeVersion": 2,
-         "position": [860, 300],
-         "notes": "自動產生，勿直接編輯——改 converter/translate_prompt.py 後\n"
-                  "重新跑 scripts/build_translate_workflow.py。\n\n"
-                  "術語表為空會直接拋錯而不是安靜跑完：2026-09-08 model-compare\n"
-                  "就是在沒接上術語表的情況下跑了一輪，結果整份作廢。"},
+         "position": [1100, 400],
+         "notes": "自動產生，勿直接編輯——改 converter/tp_blocks.py 或\n"
+                  "converter/translate_prompt.py 後重新跑產生器。\n\n"
+                  "**這裡抽的是「整句」，不是 TP 的片段。** TP 自動登錄的一律是\n"
+                  "片段（以行內元素邊界切分），翻片段就是 Support Center 早期\n"
+                  "那批生硬譯文的來源。整句列必須由我們產生，原文取自已發佈頁面\n"
+                  "的區塊 innerHTML——那正是 TP 看到的同一份來源。"},
 
         {"parameters": {
             "modelId": {"__rl": True, "mode": "id",
@@ -317,83 +402,67 @@ def build(target, model):
          "credentials": {"openAiApi": OPENAI_CRED},
          "id": n("llm"), "name": LLM,
          "type": "@n8n/n8n-nodes-langchain.openAi", "typeVersion": 1.8,
-         "position": [1080, 300],
-         "notes": "⚠️ 這是本專案第一個 OpenAI 節點（其餘都用 HTTP Request）。\n"
-                  "參數形狀會隨 n8n 版本變動——匯入後請確認：\n"
-                  "  1. 模型欄是「By ID」模式，值取自 參數.model\n"
-                  "  2. 憑證是 OpenAi account 2\n"
-                  "  3. system／user 兩則訊息都在\n\n"
-                  "下游對回應形狀已做容錯（content／message.content／\n"
-                  "choices[0].message.content 都吃），不必為此改設定。"},
+         "position": [1320, 400],
+         "notes": "模型欄用 By ID＋運算式，值取自「參數」節點。\n"
+                  "用下拉選單（mode=list）會把型號寫死在這裡，\n"
+                  "「參數」那個欄位就變成騙人的擺設。\n\n"
+                  "（By ID 模式下不會出現 Tools 接口——本來就用不到，\n"
+                  "這是純翻譯不是 agent。）"},
 
         {"parameters": {"jsCode": COLLECT_JS.replace("PREP_NODE_NAME", PREP)},
          "id": n("collect"), "name": "整理譯文",
          "type": "n8n-nodes-base.code", "typeVersion": 2,
-         "position": [1300, 300],
-         "notes": "配對靠位置，數量對不上就中止——硬配會產生一批看起來正常、\n"
-                  "實際上譯文與原文錯位的資料，而那會被寫進 WP。\n\n"
-                  "標籤結構被改動的會列進 warnings，但**不擋下寫入**：\n"
-                  "骨架階段先看得到問題，要不要擋等實際跑過再決定。"},
-
-        {"parameters": {"conditions": {"options": {
-            "caseSensitive": True, "version": 2, "typeValidation": "strict"},
-            "conditions": [{"id": det("c", "dry"),
-                            "leftValue": "={{ $('參數').first().json.dry_run }}",
-                            "rightValue": True,
-                            "operator": {"type": "boolean", "operation": "false"}}],
-            "combinator": "and"}, "options": {}},
-         "id": n("if"), "name": "要真的寫入嗎",
-         "type": "n8n-nodes-base.if", "typeVersion": 2.2,
-         "position": [1520, 300],
-         "notes": "dry_run=true 走 false 分支（不寫入），只留下整理好的結果。\n"
-                  "第一次接上正式流程時務必先這樣看一遍。"},
+         "position": [1540, 400],
+         "notes": "**block_type 固定 1**：我們產生的就是整句列。不要讓端點依\n"
+                  "有無標籤自動判定——純文字段落也必須是整句列。\n\n"
+                  "配對靠位置，數量對不上就中止：硬配會讓 /tp/block 把錯誤的\n"
+                  "對應寫進三張表。"},
 
         {"parameters": {
             "method": "POST",
-            "url": wp + "/wp-json/synctify/v1/tp/update",
+            "url": wp + "/wp-json/synctify/v1/tp/block",
             "authentication": "genericCredentialType",
             "genericAuthType": "httpBasicAuth",
             "sendBody": True, "specifyBody": "json",
             "jsonBody": "={{ { \"language\": $('參數').first().json.language, "
+                        "\"post_id\": $('參數').first().json.post_id, "
+                        "\"dry_run\": $('參數').first().json.dry_run, "
                         "\"items\": $json.items } }}",
             "options": {}},
          "credentials": {"httpBasicAuth": cred},
-         "id": n("write"), "name": "WP：寫回譯文",
+         "id": n("write"), "name": "WP：寫回整句列",
          "type": "n8n-nodes-base.httpRequest", "typeVersion": 4.2,
-         "position": [1740, 220],
-         "notes": "端點一律寫 status=1（機器翻譯），**已是 status=2 的列跳過不覆蓋**。\n"
-                  "那個保護 2026-09-09 在測試站實測過（scripts/verify_tp_guard.py），\n"
-                  "正反兩面都驗：人工譯文不會被蓋、機器譯文寫得進去。\n\n"
-                  "回應會帶 updated／skipped_human／not_found／failed 四個計數，\n"
-                  "**not_found 不是 0 就要查**——代表 id 已失效，那批譯文沒寫進去。"},
-
-        {"parameters": {}, "id": n("noop"), "name": "dry run：不寫入",
-         "type": "n8n-nodes-base.noOp", "typeVersion": 1,
-         "position": [1740, 380]},
+         "position": [1760, 400],
+         "notes": "寫的是「整句」列（block_type=1），需要同時寫三張表：\n"
+                  "  trp_original_strings → trp_original_meta（掛 post_parent_id）\n"
+                  "  → trp_dictionary_*（譯文本體，original_id 指回去）\n"
+                  "端點已經處理這件事。\n\n"
+                  "status 一律寫 1（機器翻譯），**已是 status=2 的列永不覆蓋**\n"
+                  "（與 /tp/update 同規則；2026-09-09 實測過那條保護）。\n\n"
+                  "dry_run=true 時端點只回報會做什麼，不寫入。"},
     ]
 
     conns = {
         "手動執行": {"main": [[{"node": "參數", "type": "main", "index": 0}]]},
         "參數": {"main": [[
-            {"node": "Notion：取產品術語表", "type": "main", "index": 0},
-            {"node": "WP：取未翻譯字串", "type": "main", "index": 0}]]},
-        "Notion：取產品術語表": {"main": [[
-            {"node": "合流", "type": "main", "index": 0}]]},
-        "WP：取未翻譯字串": {"main": [[
+            {"node": "WP：取文章網址", "type": "main", "index": 0},
+            {"node": "WP：取該篇字典現況", "type": "main", "index": 0},
+            {"node": "Notion：取產品術語表", "type": "main", "index": 0}]]},
+        "WP：取文章網址": {"main": [[
+            {"node": "抓頁面 HTML", "type": "main", "index": 0}]]},
+        "抓頁面 HTML": {"main": [[{"node": "合流", "type": "main", "index": 0}]]},
+        "WP：取該篇字典現況": {"main": [[
             {"node": "合流", "type": "main", "index": 1}]]},
+        "Notion：取產品術語表": {"main": [[
+            {"node": "合流", "type": "main", "index": 2}]]},
         "合流": {"main": [[{"node": PREP, "type": "main", "index": 0}]]},
         PREP: {"main": [[{"node": LLM, "type": "main", "index": 0}]]},
         LLM: {"main": [[{"node": "整理譯文", "type": "main", "index": 0}]]},
-        "整理譯文": {"main": [[{"node": "要真的寫入嗎", "type": "main", "index": 0}]]},
-        "要真的寫入嗎": {"main": [
-            [{"node": "WP：寫回譯文", "type": "main", "index": 0}],
-            [{"node": "dry run：不寫入", "type": "main", "index": 0}]]},
+        "整理譯文": {"main": [[
+            {"node": "WP：寫回整句列", "type": "main", "index": 0}]]},
     }
 
-    # 命名對齊既有慣例：`Synctify — <描述>（<站台>；<觸發方式>）`。
-    # 用破折號不是全形直線；觸發方式跟著標，因為現在是手動、之後會換成
-    # Notion 按鈕，名稱上看得出來才不會誤以為已經接好了。
-    return {"name": "Synctify — 翻譯 TP 未翻譯字串（" +
+    return {"name": "Synctify — 翻譯文章整句列（" +
                     ("測試站" if target == "test" else "正式站") + "；手動觸發）",
             "nodes": nodes, "connections": conns,
             "settings": {"executionOrder": "v1"}}
@@ -404,17 +473,20 @@ def main():
     ap.add_argument("--target", choices=["test", "prod"], default="test")
     ap.add_argument("--model", default=DEFAULT_MODEL,
                     help=f"模型 id（預設 {DEFAULT_MODEL}，心柔 2026-09-09 選定）")
+    ap.add_argument("--post", type=int, default=DEFAULT_POST,
+                    help=f"要翻的文章 post id（預設 {DEFAULT_POST}）")
     args = ap.parse_args()
 
-    wf = build(args.target, args.model)
+    wf = build(args.target, args.model, args.post)
     OUT_DIR.mkdir(parents=True, exist_ok=True)
-    out = OUT_DIR / f"translate-tp-strings.{args.target}.workflow.json"
+    out = OUT_DIR / f"translate-article.{args.target}.workflow.json"
     out.write_text(json.dumps(wf, ensure_ascii=False, indent=2) + "\n",
                    encoding="utf-8")
     print(f"✓ 已產生 {out}")
     print(f"  站台：{WP_BASE[args.target]}")
-    print(f"  模型：{args.model or '（未填——等心柔選完在「參數」節點補上）'}")
-    print(f"  dry_run：預設 true，先看會寫什麼再放行")
+    print(f"  文章：post {args.post}")
+    print(f"  模型：{args.model}")
+    print(f"  dry_run：預設 true（端點只回報，不寫入）")
     print(f"  節點：{len(wf['nodes'])} 個")
     return 0
 
