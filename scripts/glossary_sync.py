@@ -189,6 +189,74 @@ def looks_like_label(en):
     return en[0].isupper()
 
 
+def _prop(name, value):
+    """把值包成 Notion 的屬性形狀。欄位型別是這張表的既有設計，不在這裡發明。"""
+    if name == "English":
+        return {"title": [{"text": {"content": value[:2000]}}]}
+    if name in ("OMS 使用處數", "文件出現次數"):
+        return {"number": value}
+    # 已確認是 **checkbox**，不是 select。2026-09-09 批次建列前先查了資料庫
+    # schema 才發現——照 select 送會 123 筆全部失敗。
+    if name == "已確認":
+        return {"checkbox": bool(value)}
+    if name in ("類型", "一致性"):
+        return {"select": {"name": value}}
+    return {"rich_text": [{"text": {"content": value[:2000]}}] if value else []}
+
+
+def create_proposed(cands, token, dry=True):
+    """把候選詞建成新列。**只新增，永不改動既有列。**
+
+    ## 為什麼這不違反「絕不碰人的決定」
+
+    模組說明那條界線講的是不能覆寫 `简体中文`／`已確認`／`備註` 等人填的欄位。
+    這裡建的是**全新的、已確認=NO 的列**，沒有覆寫任何既有決定，反而是把
+    「有人得決定這個詞」這件事登記下來。
+
+    ## OMS 自己不一致的詞，簡繁兩欄留空
+
+    留空而不是先挑一個填：填了就會進 prompt 去約束翻譯，等於讓腳本替人做了決定。
+    空的話這個詞不影響翻譯，但已登記在表上，下次 --propose 不會重複提出。
+    """
+    created, skipped = [], []
+    for c in cands:
+        props = {"English": _prop("English", c["en"])}
+        note = ("2026-09 起由 scripts/glossary_sync.py --propose 從 OMS 反向提出。\n"
+                "先前的流程只替「已在表裡的詞」補欄位、從不提新詞，"
+                "所以常用標籤會一直漏收。\n\n")
+        if len(c["cn"]) == 1:
+            props["简体中文"] = _prop("简体中文", c["cn"][0])
+            note += "譯文取自 OMS 現況，**尚未經人審定**。\n\n"
+        else:
+            note += ("**簡繁兩欄刻意留空——OMS 自己就用了不只一種說法，需要有人拍板。**\n"
+                     "OMS 現況：" + "／".join(c["cn"]) + "\n\n"
+                     "留空而不是先填一個：填了就會進 prompt 去約束翻譯，"
+                     "等於讓腳本替人做了決定。\n\n")
+        note += ("⚠️ 繁體中文欄留空。這一批是批次補進來的，繁體是機械轉換、"
+                 "無法逐筆驗證，填錯比留空糟——要用繁體時再逐筆補。")
+        keys = c["keys"]
+        props["i18n key"] = _prop("i18n key", "、".join(keys[:3])
+                                  + (f" 等 {len(keys)} 個" if len(keys) > 3 else ""))
+        props["OMS v0 現況"] = _prop("OMS v0 現況", "／".join(c["cn"]))
+        props["OMS 使用處數"] = _prop("OMS 使用處數", len(keys))
+        props["文件出現次數"] = _prop("文件出現次數", c.get("doc_hits", 0))
+        props["一致性"] = _prop("一致性",
+                                "OMS 自己不一致" if len(c["cn"]) > 1
+                                else classify(c["cn"], c.get("doc_cn") or []))
+        props["類型"] = _prop("類型", "UI 標籤")
+        props["已確認"] = _prop("已確認", False)
+        props["備註"] = _prop("備註", note)
+        if c.get("doc_cn"):
+            props["文件現況"] = _prop("文件現況", "／".join(c["doc_cn"][:2]))
+        if dry:
+            skipped.append(c["en"])
+            continue
+        notion("/pages", token, "POST",
+               {"parent": {"database_id": GLOSSARY_DB}, "properties": props})
+        created.append(c["en"])
+    return created, skipped
+
+
 def propose_from_oms(oms, glossary, docs, top=40, min_keys=1):
     """列出「OMS 裡有、術語表沒有」的候選詞。
 
@@ -217,6 +285,11 @@ def propose_from_oms(oms, glossary, docs, top=40, min_keys=1):
             continue
         keys = info["keys"]
         if len(keys) < min_keys or not info["cn"]:
+            continue
+        # 全部 key 都在 placeholders 底下 → 那是輸入框的**範例文字**，不是術語。
+        # 2026-09-09 第一次跑 --create 前抓到：San Francisco、Suite 201 這種
+        # 地址範例混進候選，進了表會被當成必須遵守的術語去約束翻譯。
+        if all(".placeholders." in k or k.endswith(".placeholder") for k in keys):
             continue
         # 取原始大小寫：索引是小寫的，從 key 找不回來，用 cn 判斷不了，
         # 所以這裡只能用小寫比對、顯示時還原成 Title Case 的近似值。
@@ -272,6 +345,15 @@ def main():
     ap.add_argument("--propose", action="store_true",
                     help="只列出「OMS 裡有、術語表沒有」的候選詞，不寫入任何欄位")
     ap.add_argument("--top", type=int, default=40, help="--propose 列幾筆（預設 40）")
+    ap.add_argument("--create", action="store_true",
+                    help="把 --propose 的候選建成新列（已確認=NO）。"
+                         "只新增，永不改動既有列")
+    ap.add_argument("--only", choices=["labels", "undecided", "all"],
+                    default="labels",
+                    help="--create 要建哪一類：labels＝多字專有標籤（預設）、"
+                         "undecided＝OMS 自己不一致的、all＝兩者。"
+                         "**單字通用詞一律不建**——Connect／All／Add 這類詞"
+                         "在散文裡會被誤套，稽核報告已看到 19–34 筆分歧")
     ap.add_argument("--language", default=None)
     args = ap.parse_args()
 
@@ -297,6 +379,25 @@ def main():
 
     if args.propose:
         cands = propose_from_oms(oms, glossary, docs, top=args.top)
+        if args.create:
+            # 單字通用詞一律排除，不管 --only 選什麼：Status／Cancel／Close
+            # 這種詞進了表會強制套用到散文，稽核報告顯示既有的 Connect→开始对接
+            # 已經造成 19 筆分歧（「connect with our community」被套成「开始对接」）。
+            multi = [c for c in cands if len(c["en"].split()) > 1]
+            pick = ([c for c in multi if len(c["cn"]) == 1] if args.only == "labels"
+                    else [c for c in cands if len(c["cn"]) > 1] if args.only == "undecided"
+                    else [c for c in multi if len(c["cn"]) == 1]
+                         + [c for c in cands if len(c["cn"]) > 1])
+            created, _ = create_proposed(pick, token, dry=not args.write)
+            if args.write:
+                print(f"✓ 已建立 {len(created)} 筆（已確認=NO）")
+            else:
+                print(f"（dry-run）會建立 {len(pick)} 筆——加 --write 才實際寫入")
+                for c in pick[:10]:
+                    print(f"    {c['en']}　→　{'／'.join(c['cn']) if len(c['cn'])==1 else '（留空，OMS 不一致）'}")
+                if len(pick) > 10:
+                    print(f"    …其餘 {len(pick)-10} 筆")
+            return 0
         print("=" * 70)
         print(f"OMS 裡有、術語表沒有的候選詞（依 OMS 使用處數排序，前 {args.top}）")
         print("=" * 70)
