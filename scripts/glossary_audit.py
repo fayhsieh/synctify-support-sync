@@ -6,7 +6,7 @@
 詞彙對照表被賦予的任務是成為術語的**單一真實來源**——不只支援文件，之後工程
 團隊開發 UI 也要照它翻，這樣文件用語才不會跟產品實際介面脫鉤。
 
-但目前它只有 38 筆，而 TranslatePress 裡人工精修過的譯文（status=2）有 1000 筆
+2026-08 寫這支時它只有 38 筆（現在 161 筆），而 TranslatePress 裡人工精修過的譯文（status=2）有 1000 筆
 以上。真正累積術語決定的地方是後者，而那些決定從來沒有回流到表裡。差一個數量級
 的脫鉤已經存在，不是未來的風險。
 
@@ -37,7 +37,19 @@ from collections import Counter
 
 import wp_env
 
-GLOSSARY_DB = "28d2f2ed-e27d-805b-90f3-000b73c8a2af"
+# ⚠️ 2026-09-09 修正：這裡原本指向**行銷用**術語表（28d2f2ed-…，38 筆，
+# 內容是 Feature／Sam's Club／Learn More 那類）。這支腳本要對帳的是**產品用**
+# 術語表，兩張表的內容幾乎不重疊。
+#
+# 後果不是「少報」而是「報太多」：拿行銷表當基準，產品表裡早就有的詞會通通被
+# 列成「候選新詞」。看的人翻兩頁全是已知的詞，很容易判定這份清單沒用而不再細看
+# ——真正該補的詞就埋在裡面。Integration 在人工譯文裡出現 50 次卻一直沒進表，
+# 這是原因之一。
+#
+# 這裡要的是 **database** ID，不是 collection／data source ID（後者是
+# aed72de7-d753-403d-b9c0-2d362c357205，丟給公開 API 會回 404 object_not_found，
+# 而錯誤訊息只會說「請確認有分享給整合」，很容易誤判成權限問題）。
+GLOSSARY_DB = "1ab2891d5ddd48db97d1f1c1afeefcf5"
 
 # 繁體專用字（簡體寫法不同者）。**刻意保守，不求窮盡**——目的是攔下「整段簡體裡
 # 混一個繁體字」這種實際發生過的錯誤（用戶、預定演示、系統设定），不是做完整的
@@ -103,7 +115,10 @@ def fetch_glossary_from_notion(token):
                 "english": _plain(p.get("English")),
                 "zh_cn": _plain(p.get("简体中文")),
                 "zh_tw": _plain(p.get("繁體中文")),
-                "category": (p.get("類別") or {}).get("select", {}).get("name") or "",
+                # 產品表的欄位叫「類型」、行銷表叫「類別」。兩個都試，
+                # 免得換表之後這一欄安靜地變成空字串。
+                "category": ((p.get("類型") or p.get("類別") or {})
+                             .get("select", {}) or {}).get("name") or "",
                 "note": _plain(p.get("備註")),
             })
         if not data.get("has_more"):

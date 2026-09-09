@@ -103,7 +103,9 @@ echo json_encode($out, JSON_UNESCAPED_UNICODE);'''
         sys.exit("✗ 找不到可用的 php，無法解析語言檔")
 
     flat = json.loads(r.stdout)
-    out = defaultdict(lambda: {"cn": set(), "keys": []})
+    # 鍵維持小寫（寫入路徑靠它比對），另存一份原始大小寫供 --propose 顯示——
+    # 候選清單是要給人直接貼進術語表的，全小寫還得手改。
+    out = defaultdict(lambda: {"cn": set(), "keys": [], "en": ""})
     for k, v in flat.items():
         if k.split(".")[0] in SKIP_DOMAINS:
             continue
@@ -112,6 +114,8 @@ echo json_encode($out, JSON_UNESCAPED_UNICODE);'''
         if not en or len(en) >= 50:
             continue
         out[en.lower()]["keys"].append(k)
+        if not out[en.lower()]["en"]:
+            out[en.lower()]["en"] = en
         if cn:
             out[en.lower()]["cn"].add(cn)
     return out
@@ -164,6 +168,74 @@ def fetch_glossary(token):
         cursor = data["next_cursor"]
 
 
+# 明顯不是術語的值：帶佔位符、看起來是句子、或純標點數字。
+# **刻意保守**——這份清單是給人讀的，混進雜訊就沒人會看完，
+# 那跟沒有這份清單是一樣的結果（glossary_audit 指錯表就是這樣被忽略的）。
+_PLACEHOLDER = re.compile(r":[a-zA-Z_]+")
+_SENTENCE_END = re.compile(r"[.?!。？！]\s*$")
+
+
+def looks_like_label(en):
+    """判斷這個英文值像不像 UI 標籤（值得進術語表），而不是一句話。"""
+    if not en or len(en) > 40:
+        return False
+    if _PLACEHOLDER.search(en) or _SENTENCE_END.search(en):
+        return False
+    if len(en.split()) > 4:
+        return False
+    if not re.search(r"[A-Za-z]", en):
+        return False
+    # 全小寫的多半是內部識別字（success、pending_review），不是畫面上的標籤
+    return en[0].isupper()
+
+
+def propose_from_oms(oms, glossary, docs, top=40, min_keys=1):
+    """列出「OMS 裡有、術語表沒有」的候選詞。
+
+    ## 為什麼需要這個方向
+
+    2026-09-09 追查「為什麼 Integration、Preferences、Release Order 這些常用詞
+    一直沒進表」時發現的空缺：這支腳本原本**只補既有列的欄位，從不提新詞**
+    （設計如此，見模組說明的「只寫衍生欄位」）。所以一個詞若沒有人先手動輸入，
+    不管它在 OMS 裡用了幾處都不會被提到。Integration 在人工譯文裡出現 50 次、
+    OMS 裡 105 次，照樣漏掉。
+
+    而負責「發現」的 glossary_audit 當時指向行銷用術語表，清單全是雜訊。
+    兩支腳本各有缺口，交集就是「常用詞持續漏收」。
+
+    ## 排序用 OMS 使用處數
+
+    跟模組說明同一個理由：那是「改動會影響產品幾個地方」，比文件出現次數
+    有鑑別度得多。
+
+    **只報告，不寫入。** 譯法要由人決定，這裡給的是 OMS 現況供判讀。
+    """
+    known = {r["english"].strip().lower() for r in glossary if r["english"].strip()}
+    out = []
+    for en_lower, info in oms.items():
+        if en_lower in known:
+            continue
+        keys = info["keys"]
+        if len(keys) < min_keys or not info["cn"]:
+            continue
+        # 取原始大小寫：索引是小寫的，從 key 找不回來，用 cn 判斷不了，
+        # 所以這裡只能用小寫比對、顯示時還原成 Title Case 的近似值。
+        en_disp = info.get("en") or en_lower
+        if not looks_like_label(en_disp):
+            continue
+        out.append({
+            "en": en_disp,
+            "cn": sorted(info["cn"]),
+            "keys": keys,
+            # fetch_docs 回的是 {en: {"cn": set, "n": int}}，不是計數——
+            # 直接拿去排序會炸（TypeError: bad operand type for unary -）。
+            "doc_hits": (docs.get(en_lower) or {}).get("n", 0),
+            "doc_cn": sorted((docs.get(en_lower) or {}).get("cn", [])),
+        })
+    out.sort(key=lambda r: (-len(r["keys"]), -r["doc_hits"], r["en"].lower()))
+    return out[:top]
+
+
 def classify(oms_cn, doc_cn):
     if oms_cn and doc_cn:
         if len(oms_cn) > 1:
@@ -197,6 +269,9 @@ def main():
     ap = argparse.ArgumentParser(description="把衍生欄位寫回 Notion 產品用術語表")
     wp_env.add_target_arg(ap, default="test")
     ap.add_argument("--write", action="store_true", help="實際寫入（預設只報告）")
+    ap.add_argument("--propose", action="store_true",
+                    help="只列出「OMS 裡有、術語表沒有」的候選詞，不寫入任何欄位")
+    ap.add_argument("--top", type=int, default=40, help="--propose 列幾筆（預設 40）")
     ap.add_argument("--language", default=None)
     args = ap.parse_args()
 
@@ -219,6 +294,27 @@ def main():
     print("讀取 Notion 術語表…")
     glossary = fetch_glossary(token)
     print(f"  {len(glossary)} 筆\n")
+
+    if args.propose:
+        cands = propose_from_oms(oms, glossary, docs, top=args.top)
+        print("=" * 70)
+        print(f"OMS 裡有、術語表沒有的候選詞（依 OMS 使用處數排序，前 {args.top}）")
+        print("=" * 70)
+        if not cands:
+            print("  ✅ 沒有候選——OMS 的標籤都已收錄")
+        for c in cands:
+            cn = "／".join(c["cn"])
+            print(f"\n  {c['en']}　→　{cn}")
+            if c["doc_cn"]:
+                print(f"    文件現況：{'／'.join(c['doc_cn'][:2])}")
+            print(f"    OMS {len(c['keys'])} 處"
+                  + (f"　文件 {c['doc_hits']} 次" if c["doc_hits"] else "")
+                  + f"　{c['keys'][0]}"
+                  + (f" 等 {len(c['keys'])} 個 key" if len(c["keys"]) > 1 else ""))
+        print("\n" + "-" * 70)
+        print("**只報告，不寫入。** 譯法要由人決定——上面給的是 OMS 現況供判讀，")
+        print("同一個詞若列出多個中文，代表 OMS 自己就不一致，那更需要有人拍板。")
+        return 0
 
     changed, unchanged, missing, locked = [], 0, [], []
     for row in glossary:
