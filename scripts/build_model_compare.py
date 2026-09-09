@@ -118,6 +118,9 @@ def code_body(models, n, named, pool):
         "_out = []\n"
         "for _idx, _s in enumerate(_CASES):\n"
         "    _sys, _usr = build_prompt(_s['en'], _gloss, _SAMPLES)\n"
+        "    # 這一句命中的術語，併表時用來把譯文裡的對應中文標粗體。\n"
+        "    # find_terms 已經處理過詞邊界與長詞優先，不要在下游重做。\n"
+        "    _hits = [{'en': _e, 'zh': _z} for _e, _z in find_terms(_s['en'], _gloss)]\n"
         "    for _mi, _m in enumerate(_MODELS):\n"
         "        _out.append({'json': {\n"
         "            'case': _idx,\n"
@@ -128,6 +131,7 @@ def code_body(models, n, named, pool):
         "            'en': _s['en'],\n"
         "            'boss': _s['zh_cn'],\n"
         "            'glossary_terms': len(_gloss),\n"
+        "            'terms': _hits,\n"
         "        }})\n"
         "return _out\n"
     )
@@ -206,7 +210,8 @@ for (let i = 0; i < calls.length; i++) {
   }
   if (!txt) txt = res.content || res.text || '';
   const c = meta.case;
-  if (!rows[c]) rows[c] = { en: meta.en || '', boss: meta.boss || '', out: {} };
+  if (!rows[c]) rows[c] = { en: meta.en || '', boss: meta.boss || '',
+                            terms: meta.terms || [], out: {} };
   rows[c].out[meta.label] = String(txt || '').trim();
   models[meta.label] = res.model || meta.model || '?';
 }
@@ -236,20 +241,79 @@ function code(sv) {
 // ⚠️ 用 direction_step(?!s) 而不是 direction_step：外層是 direction_steps
 // （複數），純子字串比對會先命中外層、把整包吃掉，內層就抓不到了。
 const STEP_RE = /<span[^>]*class="[^"]*direction_step(?!s)[^"]*"[^>]*>([\\s\\S]*?)<\\/span>/g;
-function richFrom(html) {
-  const src = String(html == null ? '' : html);
+// 句中出現的首字大寫詞＝UI 標籤或專有名詞，兩邊都標粗體（Fay 2026-09-09）。
+//
+// 這些正是術語表該管的詞。標出來之後，「某個模型有沒有照表翻」一眼就看得到，
+// 不用逐字比對。
+//
+// **句首的大寫不算**——那是英文的句法，不是專有名詞。判斷方式是看前面
+// 是不是字串開頭或句末標點，不是看有沒有大寫。
+//
+// 單字用 [A-Z][A-Za-z0-9]* 而不是 [A-Z][a-z]*：SSCC／ASIN／UPC 這種全大寫
+// 縮寫要當成一個詞，用後者會被拆成 S、S、C、C 四個。
+function capTerms(plain) {
+  const found = [];
+  const re = /([A-Z][A-Za-z0-9]*(?:\\s+[A-Z][A-Za-z0-9]*)*)/g;
+  let m;
+  while ((m = re.exec(plain)) !== null) {
+    const before = plain.slice(0, m.index).replace(/\\s+$/, '');
+    const atStart = !before || /[.!?:;]$/.test(before);
+    // 句首的大寫是英文句法，不是專有名詞。但**只能丟掉句首那一個字**——
+    // 「Click Create in the…」會被抓成一組 "Click Create"，整組丟掉的話
+    // Create 就跟著不見了，而那正是要標的詞。
+    const words = atStart ? m[1].split(/\\s+/).slice(1) : [m[1].trim()];
+    const term = words.join(' ').trim();
+    if (term.length < 2) continue;
+    found.push(term);
+  }
+  return found;
+}
+
+// 把一段純文字依 needles 切開，命中的標粗體。長的優先，否則
+// 「Shipment Routing Requests」會先被「Shipment」吃掉，剩下兩個字散在外面。
+function splitBold(text, needles) {
+  if (!needles.length) return [{ t: text, b: false }];
+  const esc = needles.slice().sort((a, b) => b.length - a.length)
+    .map(n => n.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&'));
+  const re = new RegExp('(' + esc.join('|') + ')', 'g');
   const out = [];
+  let last = 0, m;
+  while ((m = re.exec(text)) !== null) {
+    if (m.index > last) out.push({ t: text.slice(last, m.index), b: false });
+    out.push({ t: m[0], b: true });
+    last = m.index + m[0].length;
+  }
+  if (last < text.length) out.push({ t: text.slice(last), b: false });
+  return out;
+}
+
+function richFrom(html, needles) {
+  const src = String(html == null ? '' : html);
+  const nds = needles || [];
+  const out = [];
+  // 一段文字可能同時是 UI 路徑（code）與專有名詞（bold），Notion 允許並存。
+  const push = (text, isCode) => {
+    for (const part of splitBold(text, nds)) {
+      if (!part.t) continue;
+      const o = { type: 'text', text: { content: part.t.slice(0, 1900) } };
+      const ann = {};
+      if (isCode) ann.code = true;
+      if (part.b) ann.bold = true;
+      if (isCode || part.b) o.annotations = ann;
+      out.push(o);
+    }
+  };
   let last = 0, m;
   STEP_RE.lastIndex = 0;
   while ((m = STEP_RE.exec(src)) !== null) {
     const before = stripTags(src.slice(last, m.index));
-    if (before) out.push(txt(before));
+    if (before) push(before, false);
     const inner = stripTags(m[1]);
-    if (inner) out.push(code(inner));
+    if (inner) push(inner, true);
     last = m.index + m[0].length;
   }
   const tail = stripTags(src.slice(last));
-  if (tail) out.push(txt(tail));
+  if (tail) push(tail, false);
   return out.length ? out : [txt('')];
 }
 function h3(s)       { return { object: 'block', type: 'heading_3', heading_3: { rich_text: [txt(s)] } }; }
@@ -336,8 +400,20 @@ let qn = 0;
 for (const it of chosen) {
   const r = it.r;
   qn++;
+  // 原文標粗體的是「句中出現的大寫詞」；譯文標的是它們的中文對應。
+  //
+  // 中文那邊的詞從術語表來（prep 節點已經算好這一句命中哪些），不是自己猜。
+  // 英文詞本身也一起找——UI 標籤常常整個保留英文不譯，那時候要標的是英文。
+  const capped = capTerms(stripTags(r.en));
+  const zhTerms = [];
+  for (const t of (r.terms || [])) {
+    if (t.zh) zhTerms.push(t.zh);
+    if (t.en) zhTerms.push(t.en);
+  }
+  const outNeedles = zhTerms.concat(capped);
+
   blocks.push(h3(qn + '. 原文'));
-  blocks.push(para(richFrom(r.en)));
+  blocks.push(para(richFrom(r.en, capped)));
 
   const w = labels.length + 1;
   const head = [[txt('Model', true)]];
@@ -345,7 +421,8 @@ for (const it of chosen) {
   const pick = [[txt('我選這個', true)]];
   labels.forEach((k, idx) => {
     head.push([txt(models[k], true)]);
-    body.push(it.texts[idx] ? richFrom(it.texts[idx]) : [txt('（沒有回應）')]);
+    body.push(it.texts[idx] ? richFrom(it.texts[idx], outNeedles)
+                            : [txt('（沒有回應）')]);
     pick.push([txt('')]);
   });
   blocks.push(table(w, [row(head), row(body), row(pick)]));
