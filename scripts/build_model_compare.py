@@ -260,51 +260,37 @@ function table(w, rows) {
                     has_row_header: false, children: rows } };
 }
 
-// ── 盲測：心柔的版本也當成匿名選項之一 ──
+// ── 三個模型並排，直接標明型號 ──
 //
-// Fay 2026-09-08：「如果要給老闆選，就不要把老闆的答案印在 Notion 上，
-// 這樣的測驗才有意義。」對——原本把心柔的譯文標好名字放在最上面，
-// 她只會挑「跟我一樣的那個」，那不是在評翻譯品質，是在認自己的字跡。
+// Fay 2026-09-09 改設計，兩個理由：
 //
-// 改成四個匿名選項（①②③④），其中一個是她自己的：
-//   選到自己的 → 模型還沒到她的水準
-//   選到模型的 → 那個模型在她不知情下被認可了
+// 1. **心柔的譯文早於詞彙表定案**，帶著過時術語（商品／产品那類）。
+//    把它當成選項之一，會讓「詞彙表到底有沒有生效」看不出來——
+//    她的版本用舊術語卻讀起來最順，模型用新術語反而像是譯錯了。
 //
-// 每一句的順序獨立打亂，否則她的版本固定在某個位置，兩三句就被看穿。
-// 打亂用內容雜湊而不是隨機數：同一份資料重跑會得到同一個順序，
-// Fay 手上的對照表才不會跟頁面對不起來。
-function hashStr(sv) {
-  let x = 0;
-  const t = String(sv || '');
-  for (let i = 0; i < t.length; i++) { x = (x * 31 + t.charCodeAt(i)) >>> 0; }
-  return x;
-}
-const MARKS = ['①', '②', '③', '④', '⑤', '⑥'];
-
+// 2. 目標變了。原本問「模型追上人工了嗎」，現在問「三個模型你偏好哪個」，
+//    因為**不可能再請心柔逐句翻**，她的版本不是可持續的標準。
+//    選出來的那個之後要調校，所以要知道的是偏好，不是及格與否。
+//
+// 既然不再跟人比，匿名也就沒有意義了：她不會認得任何一個版本的字跡，
+// 而標明型號讓 Fay 讀結果時不必再對照表。
+//
+// 版面是每題一張橫向表：型號當欄、譯文並排一列。並排比堆疊容易看出差異，
+// 差別往往只在兩三個字。
 const blocks = [];
 blocks.push(para([
-  txt('每一句底下有幾個譯文版本，請挑出'),
-  txt('你認為最好的那一個', true),
-  txt('。版本順序每句都不一樣，沒有規律。')
+  txt('每一題有三個模型的譯文並排。請在最底下那一列標出'),
+  txt('你偏好哪一個', true),
+  txt('（打勾、○ 都可以）。')
 ]));
 blocks.push(para([
   txt('只看中文讀起來自然不自然、術語用得對不對。', true),
-  txt('在最右欄填上記號即可（打勾、○ 都可以）。'
-      + 'HTML 標籤有沒有被保留是硬性要求，已由程式另外檢查，不用你費神。')
+  txt('HTML 標籤有沒有被保留是硬性要求，已由程式另外檢查，不用你費神。')
+]));
+blocks.push(para([
+  txt('這一輪不含人工譯文——術語表定案後很多詞改過，舊譯文放進來會干擾判斷。')
 ]));
 
-const decode = [];   // 給 Fay 的對照表，不寫進 Notion
-
-// 先把每一題的選項算出來：**顯示文字相同的合併成一個**。
-//
-// Fay 2026-09-08：「三個模型翻出來一樣的話，心柔要怎麼選？」
-// 合併而不是剔除——三個模型有共識、心柔不同，那反而是最有價值的一題：
-// 「模型的共識」對上「人的版本」。她只該看到兩個選項，不是四個一樣的。
-//
-// 比對用**她實際看到的文字**（剝掉標籤）：兩個版本若只差在標籤空白，
-// 在她眼裡就是同一個答案，分成兩欄只會讓她困惑。
-//
-// 只有連心柔的版本都相同時才是真的沒得選，那題剔除。
 // 可疑字元檢查：譯文出現了原文沒有的成對符號。
 //
 // 2026-09-08 實測抓到：某個模型把第 1 句譯成「…然后点击`确认`】【。」——
@@ -326,50 +312,43 @@ function oddChars(src, out) {
   return bad;
 }
 
+// 三個模型全部譯得一樣的題目沒有東西好選，剔除。
+// （不再合併重複選項：型號既然公開，兩個模型剛好一樣本身就是資訊，
+//   並排看得到，不需要程式幫忙併欄。）
 const built = [];
 for (const c of keys) {
   const r = rows[c];
-  const seen = {};
-  const cands = [];
-  const add = (src, text) => {
-    if (!text) return;
-    const key = stripTags(text);
-    if (!key) return;
-    if (seen[key]) { seen[key].srcs.push(src); return; }
-    const cd = { srcs: [src], text: text };
-    seen[key] = cd; cands.push(cd);
-  };
-  for (const k of labels) add(models[k], r.out[k]);
-  add('心柔（人工）', r.boss);
-  if (cands.length >= 2) built.push({ c: c, r: r, cands: cands });
+  const texts = labels.map(k => r.out[k] || '');
+  if (!texts.some(t => t)) continue;
+  const uniq = {};
+  texts.forEach(t => { if (t) uniq[stripTags(t)] = 1; });
+  if (Object.keys(uniq).length >= 2) {
+    built.push({ c: c, r: r, texts: texts, n: Object.keys(uniq).length });
+  }
 }
 
-// 選項越多＝模型之間差異越大＝越有鑑別度，優先出這些題
-built.sort((a, b) => b.cands.length - a.cands.length || a.c - b.c);
+// 差異越大越有鑑別度，優先出題
+built.sort((a, b) => b.n - a.n || a.c - b.c);
 const chosen = built.slice(0, __N_SHOW__).sort((a, b) => a.c - b.c);
 const dropped = keys.length - built.length;
 
 let qn = 0;
 for (const it of chosen) {
-  const c = it.c, r = it.r, cands = it.cands;
+  const r = it.r;
   qn++;
-  cands.sort((a, b) => hashStr(c + '|' + a.text) - hashStr(c + '|' + b.text));
+  blocks.push(h3(qn + '. 原文'));
+  blocks.push(para(richFrom(r.en)));
 
-  blocks.push(h3('第 ' + qn + ' 題'));
-  blocks.push(para([txt('原文　', true)].concat(richFrom(r.en))));
-
-  // 第三欄留空給心柔勾選。標籤檢查移到 report（給 Fay）——那是客觀事實，
-  // 不需要她判斷，擺在她眼前只會分散注意力（Fay 2026-09-08）。
-  const trs = [row([[txt('版本', true)], [txt('譯文', true)],
-                    [txt('我選這個', true)]])];
-  const line = [];
-  cands.forEach((cd, idx) => {
-    const mk = MARKS[idx] || String(idx + 1);
-    trs.push(row([[txt(mk, true)], richFrom(cd.text), [txt('')]]));
-    line.push(mk + '=' + cd.srcs.join('／'));
+  const w = labels.length + 1;
+  const head = [[txt('Model', true)]];
+  const body = [[txt('翻譯', true)]];
+  const pick = [[txt('我選這個', true)]];
+  labels.forEach((k, idx) => {
+    head.push([txt(models[k], true)]);
+    body.push(it.texts[idx] ? richFrom(it.texts[idx]) : [txt('（沒有回應）')]);
+    pick.push([txt('')]);
   });
-  blocks.push(table(3, trs));
-  decode.push('第 ' + qn + ' 題（原第 ' + (c + 1) + ' 句）　' + line.join('　'));
+  blocks.push(table(w, [row(head), row(body), row(pick)]));
 }
 
 blocks.push({ object: 'block', type: 'divider', divider: {} });
@@ -377,10 +356,10 @@ if (!chosen.length) {
   // 全部題目都被剔除＝每一句所有版本都相同。頁面留白會讓人以為壞了，
   // 但這其實是個結論：模型的產出已經跟人工一致，沒有東西好選。
   blocks.push(para([
-    txt('這批句子裡，所有版本（含人工譯文）都完全相同，沒有需要選擇的題目。', true)
+    txt('這批句子裡，三個模型譯出來完全相同，沒有需要選擇的題目。', true)
   ]));
-  blocks.push(para([txt('這代表模型的產出已經跟既有譯文一致——'
-                        + '不是出錯，是沒有差異可比。請告訴 Fay。')]));
+  blocks.push(para([txt('不是出錯，是沒有差異可比——術語與句式都被約束住了。'
+                        + '請告訴 Fay。')]));
 } else {
   blocks.push(para([txt('選好之後把這頁給 Fay 就可以了。')]));
 }
@@ -442,14 +421,17 @@ for (const k of labels) {
 }
 lines.push('');
 lines.push('='.repeat(70));
-lines.push('對照表（給 Fay，**不要給評估的人看**）');
-lines.push('每一句的順序都不同，心柔的版本也在裡面當匿名選項：');
-decode.forEach(d => lines.push('  ' + d));
+lines.push('人工譯文（僅供 Fay 對照，沒有放進 Notion）：');
+lines.push('心柔的版本早於術語表定案，術語可能過時——列在這裡是為了');
+lines.push('看出「模型改用新術語」與「模型譯錯」的差別。');
+for (const it of chosen) {
+  lines.push('  原第 ' + (it.c + 1) + ' 句　' + stripTags(it.r.boss || '（無）'));
+}
 
 return [{ json: { report: lines.join('\\n'), notion_blocks: blocks,
                   cases: chosen.length, pool: keys.length,
                   dropped: dropped, failed: errs.length,
-                  mapping: models, decode: decode } }];
+                  mapping: models } }];
 """.replace("PREP_NODE_NAME", PREP_NODE))
 
 
@@ -611,7 +593,8 @@ def main():
     print(f"  題庫：{_pool} 句（共 {_pool * len(models)} 次呼叫）")
     print(f"  出題：最多 {args.n} 題——挑選項最多（模型差異最大）的，"
           f"全部版本相同的題目會剔除")
-    print(f"  標示：{'直接顯示型號' if args.named else '盲測（A／B／C，對照表印在報告最後）'}")
+    print(f"  版面：每題一張橫向表，型號當欄、三個模型的譯文並排")
+    print(f"  人工譯文：不進 Notion（術語過時會干擾判斷），只印在報告供對照")
     print(f"  憑證：{args.cred or OPENAI_CRED_NAME}（id 已內建，匯入即可用）")
 
 
