@@ -180,3 +180,10 @@ def test_只用re模組():
     imports = {ln.strip() for ln in src.splitlines()
                if ln.startswith("import ") or ln.startswith("from ")}
     assert imports == {"import re"}, imports
+
+
+def test_detect_post_id優先取文章容器而非模板():
+    """頁首若是 Elementor 模板，第一個 data-elementor-id 會是模板，不是文章。"""
+    html = ('<div data-elementor-type="header" data-elementor-id="12"></div>'
+            '<div data-elementor-type="wp-post" data-elementor-id="7889"><p>x</p></div>')
+    assert tb.detect_post_id(html) == 7889

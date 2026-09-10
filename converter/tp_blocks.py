@@ -80,8 +80,17 @@ def detect_post_id(html):
     Elementor 會在容器上留 `data-elementor-id="7251"`。有了這個，n8n 的 Code node
     只需要「HTML ＋ 現有字典列」兩個輸入，不必再從別的節點把 id 傳進來——
     Python Code node 只拿得到 `_items`，跨節點取值一律行不通，能少一個依賴就少一個。
+
+    **優先取文章容器**（data-elementor-type="wp-post"／"wp-page"）：頁首頁尾若也是
+    Elementor 模板，頁面上會有多個 data-elementor-id，第一個未必是文章。
+    2026-09-10 查過：測試站 7251、正式站 7889 目前都只有一個（就是文章本身）；
+    正式站的分類首頁 8006 一個都沒有——那種頁面沒有文章內容可翻。
     """
-    m = re.search(r'data-elementor-id="(\d+)"', html or "")
+    html = html or ""
+    for m in re.finditer(r'<[^>]*data-elementor-id="(\d+)"[^>]*>', html):
+        if re.search(r'data-elementor-type="wp-(?:post|page)"', m.group(0)):
+            return int(m.group(1))
+    m = re.search(r'data-elementor-id="(\d+)"', html)
     return int(m.group(1)) if m else None
 
 

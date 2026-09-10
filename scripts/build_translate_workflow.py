@@ -120,7 +120,7 @@ def _module(name):
     return re.split(r'^if __name__ == "__main__":', src, flags=re.M)[0]
 
 
-def prep_code(post_id):
+def prep_code():
     """抽區塊 + 組 prompt 的 Python code node。
 
     打包 tp_blocks 與 translate_prompt 兩個模組。兩者都只需要 `re`
@@ -142,7 +142,6 @@ def prep_code(post_id):
     adapter = (
         "\n\n# ─── n8n 轉接層 ───\n"
         "_SAMPLES = " + json.dumps(samples, ensure_ascii=False) + "\n"
-        "_POST_ID = " + str(post_id) + "\n"
         "\n"
         "# 上游是 Merge（append），四條線：頁面 HTML、該篇字典現況、\n"
         "# 全站人工譯文、術語表。字典類的兩條都併進 _existing——\n"
@@ -180,6 +179,15 @@ def prep_code(post_id):
         "if not _html:\n"
         "    raise ValueError('沒有拿到頁面 HTML——確認「抓頁面 HTML」節點的 '\n"
         "                     'Response Format 設為 text（不是 JSON）')\n"
+        "\n"
+        "# 文章 ID 從頁面自己認，不在產生工作流時寫死。2026-09-10 發現：原本寫死成\n"
+        "# 產生當下的 --post，在 n8n 裡改「參數」的 post_id 只會換掉抓的頁面，\n"
+        "# 抽取範圍卻還用舊 ID 去找——範圍找不到就退回整頁，翻到側邊欄與頁首頁尾。\n"
+        "_POST_ID = detect_post_id(_html)\n"
+        "if _POST_ID is None:\n"
+        "    raise ValueError('頁面上找不到文章內容容器（data-elementor-id）。'\n"
+        "                     '分類首頁沒有這個容器，不要拿來翻：抽取範圍會退回整頁，'\n"
+        "                     '翻到的是側邊欄與頁首頁尾')\n"
         "\n"
         "_res = pending_blocks(_html, _POST_ID, _existing)\n"
         "\n"
@@ -254,6 +262,16 @@ function tagSig(html) {
 }
 
 const prep = $('PREP_NODE_NAME').all();
+
+// 抽取範圍用的是「頁面自己認出的文章 ID」，寫入用的是「參數」節點的 post_id。
+// 兩者不一致＝抓到的頁面不是要翻的那篇（例如網址被轉址到別篇），
+// 硬寫會把 A 篇的譯文掛到 B 篇底下——寧可停下來。
+const wantId = Number($('參數').first().json.post_id);
+const gotId = Number(prep[0].json.post_id);
+if (wantId !== gotId) {
+  throw new Error('「參數」的 post_id 是 ' + wantId + '，但抓到的頁面是文章 ' + gotId +
+                  '，不寫入');
+}
 
 // 沒有待翻區塊——整篇都已人工精修。原樣往下傳，不要偽裝成有東西可寫。
 if (prep.length === 1 && prep[0].json.nothing_to_do) {
@@ -333,6 +351,8 @@ def build(target, model, post_id):
          "notes": "**model 必須真的驅動 OpenAI 節點。**\n"
                   "那個節點的模型欄若用下拉選單（mode=list）挑，值就寫死在節點裡，\n"
                   "這裡改了不會有任何效果——一個安靜失效的參數比沒有參數更糟。\n\n"
+                  "post_id 可以直接在這裡改，不必重新產生工作流：抽取範圍由\n"
+                  "頁面自己認出文章 ID，寫入前會比對兩者是否一致。\n\n"
                   "dry_run 會直接傳給 /tp/block：整條路徑都會走一遍（含比對），\n"
                   "只是不落地，並回報「會做什麼」。"},
 
@@ -460,7 +480,7 @@ def build(target, model, post_id):
                   "回應速度改變，靠順序判斷會間歇性錯亂，而且錯得很安靜。"},
 
         {"parameters": {"language": "pythonNative",
-                        "pythonCode": prep_code(post_id)},
+                        "pythonCode": prep_code()},
          "id": n("prep"), "name": PREP,
          "type": "n8n-nodes-base.code", "typeVersion": 2,
          "position": [1100, 400],
