@@ -165,7 +165,16 @@ def build_prompt(block_html, glossary, samples, target_name="簡體中文"):
         "6. **巢狀標籤之間不要留空白**。英文原文寫成 "
         "`<span A> <span B>Create</span> </span>`，那些空白是英文的詞距；"
         "中文不需要字距，留著會變成「点击 创建 按钮」。譯文請寫成 "
-        "`<span A><span B>创建</span></span>`。標籤本身仍然一字不改。\n\n"
+        "`<span A><span B>创建</span></span>`。標籤本身仍然一字不改。\n"
+        # Fay 2026-09-10：post 7251 的譯文裡 UI 路徑前後有時留空格、有時不留
+        # （「前往 <span>…」「前往：<span>…」「点击 <span>…</span>不会」），
+        # 同一篇文章體例不一。規則 6 只管巢狀標籤之間，沒管中文與 UI 路徑之間。
+        "7. **UI 路徑（direction_steps）前後各留一個半形空格**，與中文或英文隔開："
+        "`点击 <span A><span B>创建</span></span> 按钮`。"
+        "**緊鄰全形標點（，。：；、！？）的那一側不加空格**："
+        "`前往：<span A>…</span></span>`、`点击 <span A>…</span></span>。`\n"
+        # Fay 2026-09-10：FAQ 的「Yes.」同一篇裡譯成「是的。」與「是。」兩種。
+        "8. **固定譯法**：句首的「Yes.」一律譯為「是的。」\n\n"
         # 以下規則來自 skill/SKILL.md（Support Article Writer），是已在實際
         # 寫作與翻譯中累積驗證過的房規。移植過來而不是重新發明，
         # 才不會讓自動翻譯跟人工翻譯長出兩種風格。

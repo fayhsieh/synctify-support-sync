@@ -293,5 +293,17 @@ def test_連字號要對上空格():
     assert tp.find_terms("lines will remain on hold and continue", g) == \
         [("On-Hold", "保留")]
 
+
+def test_system_規定UI路徑前後留空格():
+    """2026-09-10 post 7251 的譯文裡 UI 路徑前後空格不一致，Fay 決定統一加空格。"""
+    sysmsg, _ = tp.build_prompt("Anything", 詞彙表, 樣本)
+    assert "UI 路徑（direction_steps）前後各留一個半形空格" in sysmsg
+    assert "緊鄰全形標點" in sysmsg     # 標點旁不加，否則會出現「前往： <span」
+
+
+def test_system_Yes固定譯為是的():
+    sysmsg, _ = tp.build_prompt("Yes. It works.", 詞彙表, 樣本)
+    assert "「Yes.」一律譯為「是的。」" in sysmsg
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-q"]))
