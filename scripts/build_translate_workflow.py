@@ -43,6 +43,16 @@ API 呼叫，而且 pending 數字浮報了 21%。
 端點的比對是**全站**的 `WHERE original = ?`，所以我們的過濾基準也必須是全站的，
 兩邊對「這句翻過了沒」的認定才會一致。
 
+## 只用「已確認」的詞（2026-09-10）
+
+術語表頁面與總覽頁的維護規則都寫著「**未打勾＝草稿，不可作為翻譯依據**」。
+第一版只要有簡中就拿去用，於是 9/09 批次補進來、還沒審的一百多列，
+已經在約束譯文——等於工作流在違反術語表自己寫的規則。
+
+現在草稿列不進 prompt，但會拿來比對：**這篇待翻內容用到、卻還沒勾的詞**
+輸出在 `unconfirmed_terms_used`。審核者只要勾那份清單上的幾個，
+不必一次處理整張表。
+
 ## dry_run 交給端點自己處理
 
 `/tp/block` 本身吃 dry_run，會回報「會做什麼」而不寫入。比在 n8n 這邊用 IF
@@ -142,6 +152,7 @@ def prep_code(post_id):
         "_html = ''\n"
         "_existing = []\n"
         "_gloss = []\n"
+        "_draft = []   # 有簡中但未勾已確認：依術語表規則不可作為翻譯依據\n"
         "for _it in _items:\n"
         "    _j = _it['json']\n"
         "    if isinstance(_j.get('results'), list):\n"
@@ -152,8 +163,9 @@ def prep_code(post_id):
         "            _zh = ''.join(_x.get('plain_text', '')\n"
         "                          for _x in ((_p.get('\\u7b80\\u4f53\\u4e2d\\u6587') or {})\n"
         "                                     .get('rich_text') or []))\n"
+        "            _ok = bool((_p.get('已確認') or {}).get('checkbox'))\n"
         "            if _en.strip() and _zh.strip():\n"
-        "                _gloss.append({'en': _en.strip(), 'zh': _zh.strip()})\n"
+        "                (_gloss if _ok else _draft).append({'en': _en.strip(), 'zh': _zh.strip()})\n"
         "    elif isinstance(_j.get('items'), list):\n"
         "        _existing.extend(_j['items'])\n"
         "    else:\n"
@@ -163,13 +175,24 @@ def prep_code(post_id):
         "                _html = _v\n"
         "\n"
         "if not _gloss:\n"
-        "    raise ValueError('術語表是空的——確認 Notion 節點有回應，'\n"
+        "    raise ValueError('已確認的術語是 0 筆——確認 Notion 節點有回應，'\n"
         "                     '以及該資料庫已與 integration 分享')\n"
         "if not _html:\n"
         "    raise ValueError('沒有拿到頁面 HTML——確認「抓頁面 HTML」節點的 '\n"
         "                     'Response Format 設為 text（不是 JSON）')\n"
         "\n"
         "_res = pending_blocks(_html, _POST_ID, _existing)\n"
+        "\n"
+        "# 這篇待翻內容用到、但還沒勾已確認的詞。比對跑在「已確認＋草稿」全集上\n"
+        "# 再挑出草稿——find_terms 是長詞優先，被已確認長詞包住的草稿短詞\n"
+        "# 不該報出來。英文與已確認列重複的（例如 Cartons 拆成兩列）也不算草稿。\n"
+        "_draft_en = {_d['en'] for _d in _draft} - {_g['en'] for _g in _gloss}\n"
+        "_used = {}\n"
+        "for _b in _res['pending']:\n"
+        "    for _e, _z in find_terms(_b['original'], _gloss + _draft):\n"
+        "        if _e in _draft_en:\n"
+        "            _used[_e] = _z\n"
+        "_draft_used = [{'en': _e, 'zh': _z} for _e, _z in sorted(_used.items())]\n"
         "\n"
         "_out = []\n"
         "for _b in _res['pending']:\n"
@@ -190,6 +213,8 @@ def prep_code(post_id):
         "        'stat_pending': len(_res['pending']),\n"
         "        'stat_glossary': len(_gloss),\n"
         "        'stat_notion_residue': len(_res['notion_residue']),\n"
+        "        'stat_draft_total': len(_draft),\n"
+        "        'draft_terms_used': _draft_used,\n"
         "    }})\n"
         "\n"
         "if not _out:\n"
@@ -199,7 +224,9 @@ def prep_code(post_id):
         "                      'post_id': _POST_ID,\n"
         "                      'stat_total': _res['total_blocks'],\n"
         "                      'stat_already_human': _res['already_human'],\n"
-        "                      'stat_glossary': len(_gloss)}}]\n"
+        "                      'stat_glossary': len(_gloss),\n"
+        "                      'stat_draft_total': len(_draft),\n"
+        "                      'draft_terms_used': _draft_used}}]\n"
         "return _out\n"
     )
     return header + body + adapter
@@ -231,7 +258,8 @@ const prep = $('PREP_NODE_NAME').all();
 // 沒有待翻區塊——整篇都已人工精修。原樣往下傳，不要偽裝成有東西可寫。
 if (prep.length === 1 && prep[0].json.nothing_to_do) {
   return [{ json: { post_id: prep[0].json.post_id, items: [], count: 0,
-                    nothing_to_do: true, warnings: [] } }];
+                    nothing_to_do: true, warnings: [],
+                    unconfirmed_terms_used: prep[0].json.draft_terms_used || [] } }];
 }
 
 const outs = $input.all();
@@ -263,11 +291,15 @@ return [{ json: {
   items: items,
   count: items.length,
   warnings: warn,
+  // 這篇用到、但術語表還沒勾已確認的詞——它們**沒有**進 prompt。
+  // 勾完再重跑，這些詞才會被約束。
+  unconfirmed_terms_used: s.draft_terms_used || [],
   stats: {
     total_blocks: s.stat_total,
     already_human: s.stat_already_human,
     pending: s.stat_pending,
     glossary_terms: s.stat_glossary,
+    unconfirmed_glossary_terms: s.stat_draft_total,
     notion_residue: s.stat_notion_residue,
   },
 } }];
@@ -411,9 +443,11 @@ def build(target, model, post_id):
          "type": "n8n-nodes-base.httpRequest", "typeVersion": 4.2,
          "position": [420, 820],
          "notes": "**要分頁**：術語表 161 筆、單次上限 100。\n"
-                  "驗證方式：看下游輸出的 glossary_terms——2026-09-09 實測是 161，\n"
-                  "掉到 100 以下就是分頁沒生效、只拿到第一頁，\n"
+                  "驗證方式：下游輸出的 glossary_terms（已確認）＋\n"
+                  "unconfirmed_glossary_terms（草稿）應等於術語表裡有簡中的列數。\n"
+                  "加總掉到 100 以下就是分頁沒生效、只拿到第一頁，\n"
                   "而流程會照常跑完不報錯。\n\n"
+                  "只有已確認的列進 prompt（術語表規則：未打勾＝草稿）。\n\n"
                   "── 術語 gate 的插入點 ──\n"
                   "「翻譯前先確認新術語」那一段還沒做，要做的話接在這裡之後。"},
 
