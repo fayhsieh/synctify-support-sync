@@ -194,7 +194,7 @@ WP_BASE = ""     # 由 use_target() 設定
 
 HEADER = '''# ══════════════════════════════════════════════════════════════════
 #  自動產生，請勿直接編輯
-#  來源：converter/notion_blocks.py + converter/notion2elementor.py
+#  來源：converter/notion_blocks.py + notion2elementor.py + translate_prompt.py + term_check.py
 #  重新產生：./.venv/bin/python scripts/build_n8n_code_node.py [--target test]
 #  修改請改 converter/*.py 並跑 pytest，再重新產生後貼回 n8n
 #
@@ -285,6 +285,23 @@ def _run(blocks, meta):
             template, report, placeholder_url_for(wp_base))
     report["images_todo"] = images_todo
 
+    # 術語檢查：撈出 UI 詞（[direction]、粗體）對照術語表（Fay 2026-09-10 的流程）。
+    # 術語表沒讀到就整段跳過——空術語表會把每個詞都判成新詞，自動建出幾十列雜訊。
+    _gloss = glossary_from_notion(meta["glossary_pages"] if "glossary_pages" in meta else [])
+    if _gloss:
+        _terms = check(strings_in([template, faq_items]), _gloss)
+        _today = meta["today"] if "today" in meta else ""
+        _term_rows = [{"parent": {"database_id": "__GLOSSARY_DB_ID__"},
+                       "properties": new_row_properties(_x, title, _today)}
+                      for _x in _terms["new"]]
+        _term_comment = comment_text(_terms, "__GLOSSARY_URL__")
+        _term_changelog = changelog_rich_text(_terms, title)
+    else:
+        _terms = {"skipped": True, "pending": 0, "ready": False, "new": [],
+                  "summary": "⚠️ 未檢查：術語表沒有讀到（確認 Notion 憑證能存取產品用術語表），"
+                             "暫時無法判斷能不能翻譯"}
+        _term_rows, _term_comment, _term_changelog = [], "", []
+
     return {
         "template": template,
         "faq_items": faq_items,
@@ -318,6 +335,11 @@ def _run(blocks, meta):
         "links_written": _hrefs_in(template),
         # 對照表的前幾個 key，用來確認鍵值格式是否如預期
         "link_map_keys_sample": list(_link_map)[:3],
+        # 術語檢查結果，以及下游直接用的現成內容（建列 body、留言、變更紀錄條目）
+        "term_check": _terms,
+        "term_new_rows": _term_rows,
+        "term_comment": _term_comment,
+        "term_changelog": _term_changelog,
     }
 
 
@@ -392,6 +414,8 @@ if not _blocks:
         "數字清單 2 步（單一 widget、編號連續）": _steps == 2,
         "inline code → [direction] 且 > 轉成 &gt;": _direction_ok,
         "標題 Notion H1 → h2": _out["markdown"].startswith("## Overview"),
+        # 打包後 term_check 與 translate_prompt 真的在同一個命名空間裡可用
+        "術語檢查撈得到 UI 路徑": len(candidates(strings_in(_out["template"]))) == 2,
     }
     return [{"json": {
         "SELF_TEST": "PASS" if all(_checks.values()) else "FAIL",
@@ -512,9 +536,22 @@ def build():
     # 兩個模組都有 `import re`，保留第一個即可
     conv_src = re.sub(r"^import re$", "", conv_src, count=1, flags=re.M)
 
+    # 術語檢查（同步後）：term_check 依賴 translate_prompt 的比對規則，兩者接在同一個
+    # 檔案裡，所以 term_check 的 import 那行要拿掉（n8n 也不允許 import 自訂模組）。
+    # ⚠️ 四個模組共用同一個命名空間，頂層名稱不可重複——後定義的會靜默蓋掉前面的
+    #    （2026-09-10 查到 term_check 與 notion_blocks 都有 _plain，已改名）。
+    #    converter/test_term_check.py 有測試把關。
+    tp_src = (CONVERTER / "translate_prompt.py").read_text(encoding="utf-8")
+    tc_src = (CONVERTER / "term_check.py").read_text(encoding="utf-8")
+    tp_src = re.sub(r"^import re$", "", tp_src, count=1, flags=re.M)
+    tc_src = re.sub(r"^import re$", "", tc_src, count=1, flags=re.M)
+    tc_src = re.sub(r"^from translate_prompt import .*$", "", tc_src, flags=re.M)
+
     # ADAPTER 是靜態字串，欄位名要在組裝時代入——兩站的 Post ID 欄位不同，
     # 讀錯會讓連結對照表指向另一站的文章 ID。
-    adapter = ADAPTER.replace("__POST_ID_PROP__", POST_ID_PROP)
+    adapter = (ADAPTER.replace("__POST_ID_PROP__", POST_ID_PROP)
+               .replace("__GLOSSARY_DB_ID__", GLOSSARY_DB_ID)
+               .replace("__GLOSSARY_URL__", GLOSSARY_URL))
     body = "\n".join([
         HEADER,
         "# ─── converter/notion_blocks.py ───",
@@ -522,6 +559,12 @@ def build():
         "",
         "# ─── converter/notion2elementor.py ───",
         conv_src.rstrip(),
+        "",
+        "# ─── converter/translate_prompt.py ───",
+        tp_src.rstrip(),
+        "",
+        "# ─── converter/term_check.py ───",
+        tc_src.rstrip(),
         adapter.rstrip(),
         "",
     ])
@@ -534,6 +577,16 @@ def build():
 # 404 object_not_found（2026-08-02 實際踩過）。
 # 已用 Notion API 確認此 ID 的 metadata type 為 database、標題為 Support Center Content Hub。
 NOTION_DB_ID = "3272f2ed-e27d-807e-9fac-f2313dd2d0de"
+
+# 產品用術語表——同步後的術語檢查用（Fay 2026-09-10 定的流程：同步成功 → 顯示 UI 詞
+# 與術語表的比對 → 新詞寫進術語表並記變更紀錄 → 補完譯文、勾已確認 → 才按翻譯）。
+# 讀取與建列都用 NOTION_CRED（Support Center Sync）：翻譯工作流一直用它讀術語表；
+# 建列另需該 integration 開 Insert content，沒開的話建列節點回 403，同步本身不受影響。
+GLOSSARY_DB_ID = "1ab2891d5ddd48db97d1f1c1afeefcf5"     # database id：查詢與建列的 parent
+GLOSSARY_PAGE_ID = "3bc2f2ede27d81238c4fd63c958ac9fc"   # 術語表頁面：變更紀錄寫在這頁
+GLOSSARY_URL = "https://app.notion.com/p/" + GLOSSARY_PAGE_ID
+TRANSLATE_STATUS_PROP = "翻譯狀態"
+TERM_CHECK_PROP = "術語檢查"
 # 勾選輪詢用的 checkbox 屬性與間隔。POLLING="removed" 時不會被引用，
 # 但把 POLLING 改回 "active" 就需要——一起留著才救得回來。
 TRIGGER_PROP = "待同步"
@@ -818,6 +871,29 @@ def build_polling_workflow(code):
                   "含其他佈景主題的示範內容）。永久連結含分類路徑，拼不出來只能查。\n"
                   "沒有任何 id 時用 include=0 讓它回空陣列——留空會變成回傳全部。"},
 
+        {"parameters": {**notion_http(
+            "POST", f"https://api.notion.com/v1/databases/{GLOSSARY_DB_ID}/query",
+            '={{ { "page_size": 100 } }}'),
+            "options": {"pagination": {"pagination": {
+                "paginationMode": "updateAParameterInEachRequest",
+                "parameters": {"parameters": [
+                    {"type": "body", "name": "start_cursor",
+                     "value": "={{ $response.body.next_cursor }}"}]},
+                "paginationCompleteWhen": "other",
+                "completeExpression": "={{ $response.body.has_more === false }}",
+                "limitPagesFetched": True, "maxRequestsF": 20}}}},
+         "id": nid(), "name": "Notion：取術語表", "type": "n8n-nodes-base.httpRequest",
+         "typeVersion": 4.2, "position": [1350, 480], "executeOnce": True,
+         "onError": "continueRegularOutput",
+         "credentials": {"notionApi": {"id": NOTION_CRED_ID, "name": NOTION_CRED_NAME}},
+         "notes": "術語檢查用：同步後比對文章的 UI 詞。\n"
+                  "放在轉換之前而不是之後：Python 節點讀不到其他節點，只能靠「組裝參數」\n"
+                  "帶進去（跟連結對照表一樣）。\n\n"
+                  "executeOnce：上游 WP 節點回傳陣列會被拆成多個 item。\n"
+                  "**要分頁**：術語表約 290 列、單次上限 100。\n"
+                  "onError=continue：讀不到術語表時照常同步，轉換節點會跳過術語檢查\n"
+                  "（空術語表會把每個詞判成新詞，自動建出一堆雜訊列）。"},
+
         {"parameters": {"assignments": {"assignments": [
             {"id": nid(), "name": "title", "value": "={{ " + clean_title + " }}",
              "type": "string"},
@@ -829,6 +905,12 @@ def build_polling_workflow(code):
              "value": "={{ $('Notion：取得連結對照').first().json.results }}"},
             {"id": nid(), "name": "wp_docs", "type": "array",
              "value": "={{ $('WP：取得文章網址').all().map(i => i.json) }}"},
+            # 術語檢查用。分頁會輸出多個 item（每頁一個），要攤平成一個陣列。
+            # 節點失敗時 results 不存在 → 空陣列 → 轉換節點跳過術語檢查。
+            {"id": nid(), "name": "glossary_pages", "type": "array",
+             "value": "={{ $('Notion：取術語表').all().flatMap(i => i.json.results || []) }}"},
+            {"id": nid(), "name": "today", "type": "string",
+             "value": "={{ $now.setZone('Asia/Taipei').toFormat('yyyy-MM-dd') }}"},
             {"id": nid(), "name": "faq_group",
              "value": "={{ (" + clean_title + ").toLowerCase()"
                       ".replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '') }}",
@@ -1005,11 +1087,18 @@ def build_polling_workflow(code):
 
         {"parameters": notion_http(
             "PATCH", "=https://api.notion.com/v1/pages/{{ " + f"$('{PICK}').first().json.page_id" + " }}",
-            '={{ { "properties": { "' + STATUS_PROP + '": { "select": { "name": "❌ 同步失敗" } } } } }}'),
+            '={{ { "properties": { "' + STATUS_PROP + '": { "select": { "name": "❌ 同步失敗" } }, '
+            '"' + TRANSLATE_STATUS_PROP + '": { "select": { "name": "－" } }, '
+            '"' + TERM_CHECK_PROP + '": { "rich_text": [] } } } }}'),
          "id": nid(), "name": "回寫：同步失敗", "type": "n8n-nodes-base.httpRequest",
          "typeVersion": 4.2, "position": [3060, 620],
          "credentials": {"notionApi": {"id": NOTION_CRED_ID, "name": NOTION_CRED_NAME}},
-         "notes": "寫在「被按下的那一列」而不是母列——使用者在哪裡按就在哪裡看到結果。"},
+         "notes": "寫在「被按下的那一列」而不是母列——使用者在哪裡按就在哪裡看到結果。\n"
+                  "\n"
+                  "同時把翻譯狀態重設為「－」、清空術語檢查（Fay 2026-09-11：每按一次同步\n"
+                  "都回預設）。成功路徑由「Notion：回寫術語檢查」寫入新結果。\n"
+                  "重設放在結尾而不是開頭：開頭重設的話，得插在母列 IF 前面，會改掉下游\n"
+                  "依賴的 $json；分支並行則執行順序靠畫布位置，可能反過來蓋掉新結果。"},
 
         {"parameters": {"errorMessage":
             "=同步未完成：{{ $('原因：節點失敗').isExecuted "
@@ -1259,6 +1348,147 @@ def build_polling_workflow(code):
          "credentials": {"notionApi": {"id": NOTION_CRED_ID, "name": NOTION_CRED_NAME}},
          "notes": "文章**已經同步上去了**，狀態仍是成功——這是提醒不是失敗。\n"
                   "訊息開頭講清楚這點，否則小編會以為要重按。"},
+
+        # ── 術語檢查（Fay 2026-09-10）──────────────────────────────────────
+        # 同步成功後：回寫比對摘要與翻譯狀態 → 新詞建成術語表草稿列 → 記進術語表的
+        # 變更紀錄 → 有待處理的詞就留言提醒。
+        # 全部 onError=continueRegularOutput：文章已經同步上去了，術語檢查失敗
+        # 不該讓整次同步被標成失敗（小編會以為要重按）。
+        {"parameters": notion_http(
+            "PATCH", "=https://api.notion.com/v1/pages/{{ " + page_id + " }}",
+            "={{ (() => { const t = $('" + CONV + "').first().json.term_check || {};"
+            " return { properties: {"
+            " '" + TERM_CHECK_PROP + "': { rich_text: [ { text: { content: String(t.summary || '') } } ] },"
+            " '" + TRANSLATE_STATUS_PROP + "': { select: { name: t.pending > 0 ? '待術語確認' : '－' } } } }; })() }}"),
+         "id": nid(), "name": "Notion：回寫術語檢查",
+         "type": "n8n-nodes-base.httpRequest", "typeVersion": 4.2, "position": [4160, 560],
+         "onError": "continueRegularOutput",
+         "credentials": {"notionApi": {"id": NOTION_CRED_ID, "name": NOTION_CRED_NAME}},
+         "notes": "「術語檢查」欄寫一句話：✅ 可以翻譯／⚠️ 先補術語再翻譯（附新詞、沒簡中、\n"
+                  "未勾、已確認的數字）。沒有新詞但有草稿未勾，一樣是 ⚠️——翻譯按鈕會擋。\n"
+                  "\n"
+                  "**每按一次同步兩欄都重設**（Fay 2026-09-11）：翻譯狀態有待處理的詞 →\n"
+                  "待術語確認，否則一律回「－」——包括原本「已翻譯完成」的文章，因為內容可能\n"
+                  "改過，要重按翻譯。術語表沒讀到時也是「－」，欄位寫明未檢查。\n"
+                  "失敗路徑（回寫：同步失敗）同樣重設，所以不管成功失敗都不會留下舊狀態。"},
+
+        {"parameters": {"conditions": {
+            "options": {"caseSensitive": True, "typeValidation": "loose", "version": 2},
+            "conditions": [{"id": nid(),
+                            "leftValue": "={{ ($('" + CONV + "').first().json.term_new_rows || []).length }}",
+                            "operator": {"type": "number", "operation": "gt"},
+                            "rightValue": 0}],
+            "combinator": "and"}},
+         "id": nid(), "name": "有新詞？", "type": "n8n-nodes-base.if",
+         "typeVersion": 2.2, "position": [4380, 560]},
+
+        {"parameters": {"jsCode":
+            "return ($('" + CONV + "').first().json.term_new_rows || [])"
+            ".map(r => ({ json: r }));"},
+         "id": nid(), "name": "拆出新詞", "type": "n8n-nodes-base.code",
+         "typeVersion": 2, "position": [4600, 480],
+         "notes": "每個新詞一個 item；body（parent＋properties）由轉換節點組好。"},
+
+        {"parameters": notion_http("POST", "https://api.notion.com/v1/pages", "={{ $json }}"),
+         "id": nid(), "name": "Notion：建立術語草稿列",
+         "type": "n8n-nodes-base.httpRequest", "typeVersion": 4.2, "position": [4820, 480],
+         "onError": "continueRegularOutput",
+         "credentials": {"notionApi": {"id": NOTION_CRED_ID, "name": NOTION_CRED_NAME}},
+         "notes": "已確認一律不勾（術語表規則：未打勾＝草稿，不可作為翻譯依據）。\n"
+                  "重按同步不會重複建：第二次時這些詞已在表內，會被判成「沒簡中」而非新詞。\n"
+                  "⚠️ 需要 Support Center Sync 這個 integration 開 Insert content，沒開會回 403\n"
+                  "——同步本身不受影響，留言會提醒改為手動新增。"},
+
+        {"parameters": {"jsCode":
+            "const all = $input.all();\n"
+            "const ok = all.filter(i => i.json && i.json.object === 'page').length;\n"
+            "return [{ json: { created: ok, failed: all.length - ok } }];"},
+         "id": nid(), "name": "收合建列結果", "type": "n8n-nodes-base.code",
+         "typeVersion": 2, "position": [5040, 480],
+         "notes": "把逐詞的建列結果收回一個 item，下游只跑一次。"},
+
+        {"parameters": {**notion_http(
+            "GET", "https://api.notion.com/v1/blocks/" + GLOSSARY_PAGE_ID + "/children?page_size=100"),
+            "options": {"pagination": {"pagination": {
+                "paginationMode": "updateAParameterInEachRequest",
+                "parameters": {"parameters": [
+                    {"type": "qs", "name": "start_cursor",
+                     "value": "={{ $response.body.next_cursor }}"}]},
+                "paginationCompleteWhen": "other",
+                "completeExpression": "={{ $response.body.has_more === false }}",
+                "limitPagesFetched": True, "maxRequestsF": 10}}}},
+         "id": nid(), "name": "Notion：取術語表頁面區塊",
+         "type": "n8n-nodes-base.httpRequest", "typeVersion": 4.2, "position": [5260, 480],
+         "executeOnce": True, "onError": "continueRegularOutput",
+         "credentials": {"notionApi": {"id": NOTION_CRED_ID, "name": NOTION_CRED_NAME}},
+         "notes": "找「變更紀錄」標題與當天的日期標題，決定新條目插在哪。只取頂層區塊。"},
+
+        {"parameters": {"jsCode":
+            "const blocks = $('Notion：取術語表頁面區塊').all().flatMap(i => i.json.results || []);\n"
+            "const text = b => ((b[b.type] || {}).rich_text || []).map(t => t.plain_text).join('').trim();\n"
+            "const today = $('" + PARAMS + "').first().json.today;\n"
+            "const rich = $('" + CONV + "').first().json.term_changelog || [];\n"
+            "const created = $('收合建列結果').first().json.created;\n"
+            "if (!rich.length || !created) return [{ json: { skip: true, reason: created ? '沒有新詞' : '建列全部失敗，不寫變更紀錄' } }];\n"
+            "const iLog = blocks.findIndex(b => b.type === 'heading_2' && text(b) === '變更紀錄');\n"
+            "if (iLog < 0) return [{ json: { skip: true, reason: '術語表頁面找不到「變更紀錄」標題' } }];\n"
+            "let end = blocks.findIndex((b, i) => i > iLog && b.type === 'heading_2');\n"
+            "if (end < 0) end = blocks.length;\n"
+            "const bullet = { object: 'block', type: 'bulleted_list_item', bulleted_list_item: { rich_text: rich } };\n"
+            "const iDate = blocks.findIndex((b, i) => i > iLog && i < end && b.type === 'heading_3' && text(b) === today);\n"
+            "if (iDate >= 0) return [{ json: { after: blocks[iDate].id, children: [bullet] } }];\n"
+            "const next = blocks[iLog + 1];\n"
+            "const anchor = next && next.type === 'callout' ? next : blocks[iLog];\n"
+            "const heading = { object: 'block', type: 'heading_3', heading_3: { rich_text: [ { type: 'text', text: { content: today } } ] } };\n"
+            "return [{ json: { after: anchor.id, children: [heading, bullet] } }];"},
+         "id": nid(), "name": "組出變更紀錄寫入", "type": "n8n-nodes-base.code",
+         "typeVersion": 2, "position": [5480, 480],
+         "notes": "最新日期在最上面（與既有紀錄一致）：當天已有日期標題就插在它正下方；\n"
+                  "沒有就在說明 callout 之後新增當天標題。建列全部失敗時不寫——\n"
+                  "紀錄寫「新增了哪些詞」但表裡其實沒有，比沒寫更糟。"},
+
+        {"parameters": {"conditions": {
+            "options": {"caseSensitive": True, "typeValidation": "loose", "version": 2},
+            "conditions": [{"id": nid(),
+                            "leftValue": "={{ !$json.skip }}",
+                            "operator": {"type": "boolean", "operation": "true",
+                                         "singleValue": True}}],
+            "combinator": "and"}},
+         "id": nid(), "name": "有變更紀錄要寫？", "type": "n8n-nodes-base.if",
+         "typeVersion": 2.2, "position": [5700, 480]},
+
+        {"parameters": notion_http(
+            "PATCH", "https://api.notion.com/v1/blocks/" + GLOSSARY_PAGE_ID + "/children",
+            "={{ { children: $json.children, after: $json.after } }}"),
+         "id": nid(), "name": "Notion：寫入變更紀錄",
+         "type": "n8n-nodes-base.httpRequest", "typeVersion": 4.2, "position": [5920, 400],
+         "onError": "continueRegularOutput",
+         "credentials": {"notionApi": {"id": NOTION_CRED_ID, "name": NOTION_CRED_NAME}}},
+
+        {"parameters": {"conditions": {
+            "options": {"caseSensitive": True, "typeValidation": "loose", "version": 2},
+            "conditions": [{"id": nid(),
+                            "leftValue": "={{ ($('" + CONV + "').first().json.term_check || {}).pending || 0 }}",
+                            "operator": {"type": "number", "operation": "gt"},
+                            "rightValue": 0}],
+            "combinator": "and"}},
+         "id": nid(), "name": "有待處理術語？", "type": "n8n-nodes-base.if",
+         "typeVersion": 2.2, "position": [6140, 560]},
+
+        {"parameters": notion_http(
+            "POST", "https://api.notion.com/v1/comments",
+            "={{ (() => { let note = '';"
+            " try { if ($('收合建列結果').isExecuted) { const f = $('收合建列結果').first().json;"
+            " if (f.failed) note = '\\n\\n⚠️ 有 ' + f.failed + ' 個新詞沒能自動加入術語表（多半是 Notion 權限），請手動新增。'; } } catch (e) {}"
+            " return { parent: { page_id: " + page_id + " },"
+            " rich_text: [ { text: { content: $('" + CONV + "').first().json.term_comment + note } } ] }; })() }}"),
+         "id": nid(), "name": "Notion：留言術語檢查",
+         "type": "n8n-nodes-base.httpRequest", "typeVersion": 4.2, "position": [6360, 480],
+         "onError": "continueRegularOutput",
+         "credentials": {"notionApi": {"id": NOTION_CRED_ID, "name": NOTION_CRED_NAME}},
+         "notes": "只在有待處理的詞時留言——每次同步都留一則「沒問題」會把真正要看的淹掉。\n"
+                  "留言會通知頁面的關注者，這是提醒按同步的人去補譯文的管道\n"
+                  "（按鈕本身不能跳視窗）。"},
     ]
 
     conns = {
@@ -1285,7 +1515,8 @@ def build_polling_workflow(code):
     # 輪詢每一輪都重抓同一列。輪詢移除時整個認領節點也不存在，直接接防呆。
     claim = [] if POLLING == "removed" else ["先取消勾選（認領）"]
     chain = [PICK] + claim + ["是母列？（誤按防呆）"]
-    chain2 = ["Notion：取得連結對照", "WP：取得文章網址", "Notion：取得頁面 blocks",
+    chain2 = ["Notion：取得連結對照", "WP：取得文章網址", "Notion：取術語表",
+              "Notion：取得頁面 blocks",
               PARAMS, CONV,
               "WP：上傳圖片", "組合回填輸入", "回填媒體網址", MOTHER,
               "母列自己還有上層？（草稿層防呆）"]
@@ -1348,7 +1579,23 @@ def build_polling_workflow(code):
         {"node": "組出 FAQ 清單", "type": "main", "index": 0}]]}
     # 成功路徑尾端插入警告分支。兩條分支都回到迴圈——有沒有警告都要繼續跑
     # 下一篇，警告不是中止條件。
-    conns["Notion：回寫子列"] = {"main": [[{"node": "彙整警告", "type": "main", "index": 0}]]}
+    # 術語檢查插在回寫子列與警告之間（Fay 2026-09-10）。每條分支最後都匯到
+    # 「有待處理術語？」→ 留言（或略過）→ 彙整警告，原本的警告流程不變。
+    def _to(n):
+        return [{"node": n, "type": "main", "index": 0}]
+    conns["Notion：回寫子列"] = {"main": [_to("Notion：回寫術語檢查")]}
+    conns["Notion：回寫術語檢查"] = {"main": [_to("有新詞？")]}
+    conns["有新詞？"] = {"main": [_to("拆出新詞"), _to("有待處理術語？")]}
+    for a, b in (("拆出新詞", "Notion：建立術語草稿列"),
+                 ("Notion：建立術語草稿列", "收合建列結果"),
+                 ("收合建列結果", "Notion：取術語表頁面區塊"),
+                 ("Notion：取術語表頁面區塊", "組出變更紀錄寫入"),
+                 ("組出變更紀錄寫入", "有變更紀錄要寫？"),
+                 ("Notion：寫入變更紀錄", "有待處理術語？"),
+                 ("Notion：留言術語檢查", "彙整警告")):
+        conns[a] = {"main": [_to(b)]}
+    conns["有變更紀錄要寫？"] = {"main": [_to("Notion：寫入變更紀錄"), _to("有待處理術語？")]}
+    conns["有待處理術語？"] = {"main": [_to("Notion：留言術語檢查"), _to("彙整警告")]}
     conns["彙整警告"] = {"main": [[{"node": "有警告？", "type": "main", "index": 0}]]}
     conns["有警告？"] = {"main": [
         [{"node": "Notion：留言警告", "type": "main", "index": 0}],   # true
