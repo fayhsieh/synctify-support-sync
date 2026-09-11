@@ -87,19 +87,49 @@ def _stem_pattern(term):
     return re.escape(term) + "(?:e?s)?"
 
 
+# TP 渲染會把 & 寫成 &#038; 或 &amp;。post 7622 裡「Preview & Test」三種寫法都有，
+# 不先還原的話詞條 `Preview & Test` 只命中其中一種。
+_AMP_RE = re.compile(r"&(?:amp|#0*38);")
+
+# 不是 -ed 結尾、但同樣「句中小寫就不是狀態」的詞。
+_STATUS_WORDS = frozenset(("processing",))
+
+
+def _label_only(term):
+    """這個詞是否「大寫開頭才算術語，句中小寫不套用」。
+
+    2026-09-10 post 7622 踩到：已確認的狀態標籤 Selected＝已选择、Resolved＝已解决，
+    比對不分大小寫，於是「the selected context」譯成「已选择的上下文」（12 段）、
+    「resolved to an unexpected value」譯成「已解决为意外值」。心柔在正式站 7889
+    寫的是「所选」「映射／解析」。
+
+    **不能**把「UI 標籤」類整批改成分大小寫：已確認的 141 筆幾乎全是 UI 標籤，
+    Order（小寫出現 13 次）、Warehouse（12 次）、integration（見 _stem_pattern
+    的教訓）小寫時都要套用。會出事的是過去分詞形的狀態詞——當標籤時是狀態名，
+    放進句子就變回動詞或形容詞。所以只挑單字、-ed 結尾，加上 _STATUS_WORDS。
+    """
+    low = term.lower()
+    return (" " not in term and "-" not in term and term[:1].isupper()
+            and (low.endswith("ed") or low in _STATUS_WORDS))
+
+
 def find_terms(text, glossary):
     """挑出這段文字裡真的出現的術語。回傳 [(英文, 譯文), ...]，長詞在前。
 
     glossary 是 [{"en": ..., "zh": ...}, ...]。zh 空白的直接跳過——沒有譯文的
     詞條放進 prompt 只會讓模型自由發揮，那正是我們要避免的。
     """
+    text = _AMP_RE.sub("&", text or "")
     hits = []
     taken = []          # 已命中的區間，用來擋住被長詞包住的短詞
     for entry in sorted(glossary, key=lambda e: -len(e.get("en") or "")):
         en, zh = (entry.get("en") or "").strip(), (entry.get("zh") or "").strip()
         if not en or not zh:
             continue
+        strict = _label_only(en)
         for m in _boundary_pattern(en).finditer(text):
+            if strict and not m.group(0)[:1].isupper():
+                continue        # 句中小寫的 selected／resolved 不是狀態標籤
             # `Product SKU` 已命中的話，`Product` 不該再命中同一段文字，
             # 否則模型會收到兩條指向不同譯文的規則。
             if any(a <= m.start() < b or a < m.end() <= b for a, b in taken):
@@ -178,14 +208,24 @@ def build_prompt(block_html, glossary, samples, target_name="簡體中文"):
         # 以下規則來自 skill/SKILL.md（Support Article Writer），是已在實際
         # 寫作與翻譯中累積驗證過的房規。移植過來而不是重新發明，
         # 才不會讓自動翻譯跟人工翻譯長出兩種風格。
+        #
+        # 2026-09-10 拿掉 SKILL.md 的「已核可的英文 UI label 保持英文」。那條是寫
+        # **英文**文件用的（不要改寫截圖上的字），搬進翻譯 prompt 後變成「沒進術語表
+        # 的 UI label 就留英文」：post 7622 的 49 個 UI 路徑有 14 個留英文
+        # （Override、Direction、Carriers…），而且同一個 Direction 翻 3 次、留 3 次。
+        # 對照正式站 7889，心柔的做法是全部照譯（覆盖、方向、承运商）。
         "## 簡中在地化（承自 Support Article Writer 的規則）\n"
         "- 用自然的簡體中文表達。\n"
         "- **避免繁體中文句法與台灣用語**。\n"
-        "- 已核可的英文 UI label 保持英文，除非上方術語對照給了譯名。\n"
+        "- **UI label 一律翻成簡中**：術語對照有給的用對照，沒給的由你翻；"
+        "不要因為它是按鈕或欄位名稱就保留英文。\n"
         "- 同一個術語在標題、步驟、FAQ 中必須一致。\n"
         "- 來源不明確時用保守用詞，**不要臆測產品行為**。\n\n"
         "## UI 用詞\n"
-        "- **可見的 UI label 不可改寫、正規化或意譯**，除非術語對照給了譯名。\n"
+        "- **可見的 UI label 照字面翻，不可改寫、正規化或意譯**"
+        "（例：Create Override → 创建覆盖，不要寫成「新建覆盖设置」）。\n"
+        "- 「the selected …」這類句中形容詞譯為「所选…」，不要套用狀態標籤的「已选择」；"
+        "code resolves to … 指代碼對應／解析到某個值，不是「已解决」。\n"
         "- 導覽路徑維持在同一段內、用 `>` 分隔（例：Integration > Connect）。\n"
         "- 圖示控制項沿用 emoji＋英文動作名的寫法（例：✏️(Edit)），不要翻譯"
         "括號裡的動作名，也不要自行猜測不熟悉的圖示含義。\n"

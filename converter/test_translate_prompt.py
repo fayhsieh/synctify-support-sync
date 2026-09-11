@@ -206,6 +206,15 @@ def test_system_禁止改寫可見的_UI_label():
     assert "不可改寫" in sysmsg
 
 
+def test_system_UI_label要翻譯而不是留英文():
+    """2026-09-10 post 7622：舊規則「UI label 保持英文」讓 49 個 UI 路徑有 14 個
+    留英文；心柔在正式站 7889 全部照譯。"""
+    sysmsg, _ = tp.build_prompt("Anything", 詞彙表, 樣本)
+    assert "保持英文" not in sysmsg
+    assert "UI label 一律翻成簡中" in sysmsg
+    assert "所选" in sysmsg
+
+
 def test_system_要求非散文內容原樣輸出():
     """字典裡混有 GTM 的 iframe（id 3020）與錨點 href（#31-etsy）。
 
@@ -283,6 +292,34 @@ def test_ss結尾不當成複數剝掉():
     g = [{"en": "Address", "zh": "地址"}, {"en": "Process", "zh": "流程"}]
     assert tp.find_terms("the Address field", g) == [("Address", "地址")]
     assert tp.find_terms("the Addresses list", g) == [("Address", "地址")]
+
+
+def test_狀態詞句中小寫不套用():
+    """post 7622：「the selected context」被套成「已选择的上下文」12 段。"""
+    g = [{"en": "Selected", "zh": "已选择"}, {"en": "Resolved", "zh": "已解决"},
+         {"en": "Processing", "zh": "处理中"}]
+    assert tp.find_terms("for the selected context", g) == []
+    assert tp.find_terms("resolved to an unexpected value", g) == []
+    assert tp.find_terms("during order processing", g) == []
+    assert tp.find_terms("the order shows <strong>Resolved</strong>", g) == \
+        [("Resolved", "已解决")]
+    assert tp.find_terms("filter by Selected", g) == [("Selected", "已选择")]
+
+
+def test_一般UI標籤小寫仍要套用():
+    """只有狀態詞分大小寫——Order 在 7622 小寫出現 13 次，那些都要套用。"""
+    g = [{"en": "Order", "zh": "订单"}, {"en": "Warehouse", "zh": "仓库"},
+         {"en": "Integrations", "zh": "平台对接"}]
+    assert tp.find_terms("a real order", g) == [("Order", "订单")]
+    assert tp.find_terms("a specific warehouse", g) == [("Warehouse", "仓库")]
+    assert tp.find_terms("a WMS-type integration", g) == [("Integrations", "平台对接")]
+
+
+def test_HTML實體的_amp_也要命中():
+    """TP 渲染把 & 寫成 &#038; 或 &amp;，7622 裡 Preview & Test 三種寫法都有。"""
+    g = [{"en": "Preview & Test", "zh": "预览与测试"}]
+    for s in ("Use Preview &#038; Test", "Preview &amp; Test lets you", "Click Preview & Test"):
+        assert tp.find_terms(s, g) == [("Preview & Test", "预览与测试")], s
 
 
 def test_連字號要對上空格():

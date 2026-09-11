@@ -187,3 +187,16 @@ def test_detect_post_id優先取文章容器而非模板():
     html = ('<div data-elementor-type="header" data-elementor-id="12"></div>'
             '<div data-elementor-type="wp-post" data-elementor-id="7889"><p>x</p></div>')
     assert tb.detect_post_id(html) == 7889
+
+
+def test_跳過FAQ群組標題():
+    """Arconix FAQ 的群組標題內容是代稱（manage-integrated-message-codes）。
+
+    2026-09-10 post 7622 把它譯成「管理集成信息代码」；正式站 7889 心柔沒翻它。
+    """
+    inner = ('<h2 class="elementor-heading-title">FAQ</h2>'
+             '<div class="elementor-shortcode"><h3 id="faq-manage-integrated-message-codes" '
+             'class="arconix-faq-term-title arconix-faq-term-manage-integrated-message-codes">'
+             'manage-integrated-message-codes</h3>'
+             '<div class="arconix-faq-accordion-wrap"><p>Some codes are read-only.</p></div></div>')
+    assert originals(wrap(inner)) == ["FAQ", "Some codes are read-only."]

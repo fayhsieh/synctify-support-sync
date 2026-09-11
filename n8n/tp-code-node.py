@@ -67,6 +67,13 @@ _NOISE_RE = re.compile(
 
 _TAG_RE = re.compile(r"<(/?)([a-zA-Z][a-zA-Z0-9]*)\b[^>]*?>")
 
+# 帶這些 class 的區塊不是內文，不送翻譯。
+# arconix-faq-term-title：Arconix FAQ 短碼輸出的群組標題，內容是群組代稱
+#   （manage-integrated-message-codes）。2026-09-10 post 7622 把它當標題譯成
+#   「管理集成信息代码」；正式站 7889 心柔沒翻它。代稱顯示在前台是內容面的問題
+#   （兩站都看得到），該在 FAQ 群組設定處理，不是翻成中文蓋過去。
+_SKIP_CLASS_RE = re.compile(r'class="[^"]*\barconix-faq-term-title\b')
+
 
 def normalize(s):
     """比對用的正規化：只統一換行。
@@ -94,8 +101,17 @@ def detect_post_id(html):
     Elementor 會在容器上留 `data-elementor-id="7251"`。有了這個，n8n 的 Code node
     只需要「HTML ＋ 現有字典列」兩個輸入，不必再從別的節點把 id 傳進來——
     Python Code node 只拿得到 `_items`，跨節點取值一律行不通，能少一個依賴就少一個。
+
+    **優先取文章容器**（data-elementor-type="wp-post"／"wp-page"）：頁首頁尾若也是
+    Elementor 模板，頁面上會有多個 data-elementor-id，第一個未必是文章。
+    2026-09-10 查過：測試站 7251、正式站 7889 目前都只有一個（就是文章本身）；
+    正式站的分類首頁 8006 一個都沒有——那種頁面沒有文章內容可翻。
     """
-    m = re.search(r'data-elementor-id="(\d+)"', html or "")
+    html = html or ""
+    for m in re.finditer(r'<[^>]*data-elementor-id="(\d+)"[^>]*>', html):
+        if re.search(r'data-elementor-type="wp-(?:post|page)"', m.group(0)):
+            return int(m.group(1))
+    m = re.search(r'data-elementor-id="(\d+)"', html)
     return int(m.group(1)) if m else None
 
 
@@ -131,7 +147,7 @@ def extract_blocks(html, post_id=None):
     """
     scope = content_scope(html, post_id) if post_id is not None else normalize(html)
 
-    stack = []          # [tag, 內容起點, 是否含子區塊]
+    stack = []          # [tag, 內容起點, 是否含子區塊, 是否跳過]
     out, seen = [], set()
 
     for m in _TAG_RE.finditer(scope):
@@ -141,7 +157,7 @@ def extract_blocks(html, post_id=None):
         if not closing:
             for fr in stack:
                 fr[2] = True          # 外層有子區塊了，它自己不是葉節點
-            stack.append([tag, m.end(), False])
+            stack.append([tag, m.end(), False, bool(_SKIP_CLASS_RE.search(m.group(0)))])
             continue
 
         # 收尾：往回找同名的那一層，中間對不上的一律丟棄（頁面 HTML 不保證完美）
@@ -156,6 +172,8 @@ def extract_blocks(html, post_id=None):
         del stack[idx:]
         if frame[2]:
             continue                  # 有子區塊，不是翻譯單位
+        if frame[3]:
+            continue                  # FAQ 群組標題之類，不是內文
 
         inner = scope[frame[1]:m.start()]
         if not text_of(inner):
