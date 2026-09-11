@@ -294,7 +294,7 @@ def _run(blocks, meta):
         _term_rows = [{"parent": {"database_id": "__GLOSSARY_DB_ID__"},
                        "properties": new_row_properties(_x, title, _today)}
                       for _x in _terms["new"]]
-        _term_comment = comment_text(_terms, "__GLOSSARY_URL__")
+        _term_comment = comment_rich_text(_terms, "__GLOSSARY_URL__")
         _term_changelog = changelog_rich_text(_terms, title)
     else:
         _gerr = meta["glossary_error"] if "glossary_error" in meta else ""
@@ -302,7 +302,7 @@ def _run(blocks, meta):
                   "summary": "⚠️ 未檢查：術語表沒有讀到"
                              + ("（" + _gerr + "）" if _gerr else "")
                              + "，暫時無法判斷能不能翻譯"}
-        _term_rows, _term_comment, _term_changelog = [], "", []
+        _term_rows, _term_comment, _term_changelog = [], [], []
 
     return {
         "template": template,
@@ -713,10 +713,14 @@ def build_polling_workflow(code):
                   "按鈕請放在「版本子列」上：母列沒有內容區塊，按了會轉出空文章。\n"
                   "\n"
                   "【按鈕的動作順序】（Fay 2026-09-11）\n"
-                  "1. Edit property：上稿狀態 → 同步中（測試站按鈕改的是「上稿狀態 (Test)」）\n"
+                  "1. Edit property（同一個動作裡設三個欄位）：\n"
+                  "   上稿狀態 → 同步中（測試站按鈕改的是「上稿狀態 (Test)」）\n"
+                  "   翻譯狀態 → －\n"
+                  "   術語檢查 → 清空\n"
                   "2. Send webhook\n"
-                  "先改屬性，按下的瞬間就看得到「同步中」；完成後由本流程寫回\n"
-                  "「草稿已建立」或「❌ 同步失敗」。\n"
+                  "先改屬性，按下的瞬間就看得到「同步中」、舊的術語檢查與翻譯狀態也立刻清掉\n"
+                  "（Fay 2026-09-11：原本等流程跑完才覆寫，同步中看到的是上一次的結果）。\n"
+                  "完成後由本流程寫回「草稿已建立」或「❌ 同步失敗」與新的術語檢查。\n"
                   "不要改由 n8n 在開頭寫「同步中」：要等好幾秒，而且獨立分支的執行順序\n"
                   "可能晚於主流程，會把完成狀態蓋回「同步中」。\n"
                   "⚠️ webhook 沒送到（n8n 停機、payload 無 page_id）時會停在「同步中」，重按即可。"},
@@ -1410,8 +1414,9 @@ def build_polling_workflow(code):
          "type": "n8n-nodes-base.httpRequest", "typeVersion": 4.2, "position": [4160, 560],
          "onError": "continueRegularOutput",
          "credentials": {"notionApi": {"id": NOTION_CRED_ID, "name": NOTION_CRED_NAME}},
-         "notes": "「術語檢查」欄寫一句話：✅ 可以翻譯／⚠️ 先補術語再翻譯（附新詞、沒簡中、\n"
-                  "未勾、已確認的數字）。沒有新詞但有草稿未勾，一樣是 ⚠️——翻譯按鈕會擋。\n"
+         "notes": "「術語檢查」欄寫一句話：✅ 可以翻譯／⚠️ 先補術語再翻譯（附待確認、已確認\n"
+                  "的數字，兩者加總等於 UI 詞數；待確認含本次新增，細分寫在留言）。\n"
+                  "沒有新詞但有草稿未勾，一樣是 ⚠️——翻譯按鈕會擋。\n"
                   "\n"
                   "**每按一次同步兩欄都重設**（Fay 2026-09-11）：翻譯狀態有待處理的詞 →\n"
                   "待術語確認，否則一律回「－」——包括原本「已翻譯完成」的文章，因為內容可能\n"
@@ -1526,8 +1531,11 @@ def build_polling_workflow(code):
             "={{ (() => { let note = '';"
             " try { if ($('收合建列結果').isExecuted) { const f = $('收合建列結果').first().json;"
             " if (f.failed) note = '\\n\\n⚠️ 有 ' + f.failed + ' 個新詞沒能自動加入術語表（多半是 Notion 權限），請手動新增。'; } } catch (e) {}"
-            " return { parent: { page_id: " + page_id + " },"
-            " rich_text: [ { text: { content: $('" + CONV + "').first().json.term_comment + note } } ] }; })() }}"),
+            # term_comment 已是 rich_text 陣列：[0] 粗體「術語檢查」[1] 本文 [2] 空行＋👉
+            # [3] 可點的術語表連結（見 term_check.comment_rich_text）。建列失敗的提醒插在 [1] 之後。
+            " const r = $('" + CONV + "').first().json.term_comment || [];"
+            " const rich = note ? r.slice(0, 2).concat([{ text: { content: note } }], r.slice(2)) : r;"
+            " return { parent: { page_id: " + page_id + " }, rich_text: rich }; })() }}"),
          "id": nid(), "name": "Notion：留言術語檢查",
          "type": "n8n-nodes-base.httpRequest", "typeVersion": 4.2, "position": [6360, 480],
          "onError": "continueRegularOutput",

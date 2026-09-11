@@ -185,8 +185,13 @@ def check(texts, glossary):
     elif not pending:
         summary = f"✅ 可以翻譯｜{total} 個 UI 詞都已確認"
     else:
-        summary = (f"⚠️ 先補術語再翻譯｜新詞 {len(groups[NEW])}｜"
-                   f"沒簡中 {len(groups[EMPTY])}｜未勾 {len(groups[DRAFT])}｜"
+        # 欄位只給一個數字：「待確認」＝還不能用在翻譯的詞（沒簡中＋有簡中沒勾），
+        # 細分留給留言清單（Fay 2026-09-11）。演進：6074 最初顯示「新詞 20｜沒簡中 0｜
+        # 未勾 0」，讀起來像新詞已有簡中；改成「待補簡中 20｜待勾選 0」後，「待勾選 0」
+        # 資訊量仍然很低。要做的事都是「去術語表處理完、勾已確認」，合成一個數字最不會誤讀。
+        # 待確認＋已確認＝UI 詞數。
+        added = f"（本次新增 {len(groups[NEW])}）" if groups[NEW] else ""
+        summary = (f"⚠️ 先補術語再翻譯｜待確認 {pending}{added}｜"
                    f"已確認 {len(groups[CONFIRMED])}（UI 詞 {total}）")
     return {
         "total": total,
@@ -204,25 +209,43 @@ def _join(labels, limit):
     return "、".join(labels[:limit]) + f"…等 {len(labels)} 個"
 
 
-def comment_text(report, glossary_url, limit=30):
-    """留言內容。Notion 單段 rich_text 上限 2000 字，清單過長就截斷。"""
+def comment_text(report, limit=30):
+    """留言本文：接在粗體「術語檢查」之後的部分（以「：」開頭，不含術語表連結）。
+
+    Notion 留言只有 rich_text，沒有清單區塊，所以項目符號用「•」字元（Fay 2026-09-11
+    指定的格式）。單段 rich_text 上限 2000 字，清單過長就截斷。
+    """
     if not report["pending"]:
         return ""
-    lines = [f"🔤 術語檢查：{report['summary']}",
-             "翻譯前請到術語表補上譯文並勾「已確認」——沒勾的詞翻譯時不會使用，"
-             "按「翻譯」也會被擋下。", ""]
+    lines = [f"：{report['summary']}",
+             "翻譯前請到術語表把下列詞補上簡中、勾「已確認」——沒勾的詞翻譯時不會使用，"
+             "按「翻譯」也會被擋下。", "", "待確認的詞：", ""]
     if report["new"]:
-        lines.append("新詞（已自動加入術語表，簡繁中待填）："
+        lines.append("• 還沒有簡中（本次新增到術語表）："
                      + _join([x["label"] for x in report["new"]], limit))
     if report["empty"]:
-        lines.append("術語表有列但沒有簡中："
+        lines.append("• 還沒有簡中："
                      + _join([x["label"] for x in report["empty"]], limit))
     if report["draft"]:
-        lines.append("有簡中但還沒勾："
+        lines.append("• 有簡中、只差勾選："
                      + _join([f"{x['label']}（{x['zh']}）" for x in report["draft"]], limit))
-    lines += ["", "術語表：" + glossary_url]
     # 留 100 字給 n8n 端附加的「建列失敗」提醒，合起來仍在 2000 字內
     return "\n".join(lines)[:1900]
+
+
+def comment_rich_text(report, glossary_url, limit=30):
+    """留言的 rich_text。沒有待確認的詞回空陣列。
+
+    固定四段：[0] 粗體「術語檢查」[1] 本文 [2] 空行＋👉 [3] 可點的「開啟產品用術語表」。
+    n8n 的「Notion：留言術語檢查」會把「建列失敗」提醒插在 [1] 之後——改段落順序要一起改。
+    """
+    body = comment_text(report, limit)
+    if not body:
+        return []
+    return [{"type": "text", "text": {"content": "術語檢查"}, "annotations": {"bold": True}},
+            {"type": "text", "text": {"content": body}},
+            {"type": "text", "text": {"content": "\n\n👉 "}},
+            {"type": "text", "text": {"content": "開啟產品用術語表", "link": {"url": glossary_url}}}]
 
 
 def new_row_properties(item, title, date):

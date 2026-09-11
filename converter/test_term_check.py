@@ -93,7 +93,7 @@ def test_check_彙整與可序列化():
     assert rep["total"] == 4 and rep["pending"] == 3
     assert [x["label"] for x in rep["new"]] == ["Create Override"]
     assert rep["draft"][0]["zh"] == "承运商代码"
-    assert rep["summary"] == "⚠️ 先補術語再翻譯｜新詞 1｜沒簡中 1｜未勾 1｜已確認 1（UI 詞 4）"
+    assert rep["summary"] == "⚠️ 先補術語再翻譯｜待確認 3（本次新增 1）｜已確認 1（UI 詞 4）"
     assert rep["ready"] is False
     json.dumps(rep)          # kinds 不能是 set
 
@@ -107,6 +107,32 @@ def test_沒有待處理才說可以翻譯():
     draft_only = tc.check(["<strong>Carrier Code</strong>"], G)
     assert draft_only["new"] == [] and draft_only["ready"] is False
     assert draft_only["summary"].startswith("⚠️ 先補術語再翻譯")
+
+
+def test_摘要只給待確認與已確認且加總等於UI詞數():
+    """演進：6074 先顯示「新詞 20｜沒簡中 0｜未勾 0」（像新詞已有簡中），改成「待補簡中 20｜
+    待勾選 0」後「待勾選 0」資訊量仍低。欄位只給「待確認」一個數字，細分放留言（Fay 2026-09-11）。"""
+    rep = tc.check(["<strong>Brand New Label</strong>", "<strong>Override</strong>",
+                    "<strong>Carrier Code</strong>", "<strong>Integrations</strong>"], G)
+    assert rep["summary"] == "⚠️ 先補術語再翻譯｜待確認 3（本次新增 1）｜已確認 1（UI 詞 4）"
+    no_new = tc.check(["<strong>Override</strong>"], G)
+    assert no_new["summary"] == "⚠️ 先補術語再翻譯｜待確認 1｜已確認 0（UI 詞 1）"
+    txt = tc.comment_text(rep)
+    assert "\n• 還沒有簡中（本次新增到術語表）：Brand New Label" in txt
+    assert "\n• 還沒有簡中：Override" in txt
+    assert "\n• 有簡中、只差勾選：Carrier Code（承运商代码）" in txt
+    assert "http" not in txt                      # 網址改成下面那段可點的連結
+
+
+def test_留言的術語表是可點的連結():
+    rep = tc.check(["<strong>Override</strong>"], G)
+    rich = tc.comment_rich_text(rep, "https://example.com/glossary")
+    # 格式由 Fay 2026-09-11 指定；n8n 會把「建列失敗」提醒插在 [1] 之後，段落順序不能亂動
+    assert rich[0] == {"type": "text", "text": {"content": "術語檢查"}, "annotations": {"bold": True}}
+    assert rich[1]["text"]["content"].startswith("：⚠️ 先補術語再翻譯")
+    assert rich[2]["text"]["content"] == "\n\n👉 "          # 只空一行（Fay 2026-09-11 實看後調整）
+    assert rich[3]["text"] == {"content": "開啟產品用術語表", "link": {"url": "https://example.com/glossary"}}
+    assert all(len(r["text"]["content"]) <= 2000 for r in rich)
 
 
 def test_glossary_from_notion():
@@ -128,13 +154,13 @@ def test_glossary_from_notion_也吃精簡過的列():
 
 def test_沒有待處理就不留言():
     rep = tc.check(["<strong>Integrations</strong>"], G)
-    assert rep["pending"] == 0 and tc.comment_text(rep, "https://x") == ""
+    assert rep["pending"] == 0 and tc.comment_rich_text(rep, "https://x") == []
 
 
 def test_留言截斷在上限內():
     many = ["<strong>Label Number %d</strong>" % i for i in range(300)]
     rep = tc.check(many, G)
-    txt = tc.comment_text(rep, "https://x", limit=30)
+    txt = tc.comment_text(rep, limit=30)
     assert len(txt) <= 2000 and "等 300 個" in txt
 
 
