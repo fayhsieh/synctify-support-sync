@@ -36,7 +36,7 @@ _DIRECTION_RE = re.compile(r"\[direction\](.*?)\[/direction\]", re.S)
 _STEP_RE = re.compile(r'<span class="direction_step">(.*?)</span>', re.S)
 _BOLD_RE = re.compile(r"<(strong|b)\b[^>]*>(.*?)</\1>", re.S)
 _PATH_SEP = re.compile(r"\s*(?:>|&gt;)\s*")
-_TAG_RE = re.compile(r"<[^>]+>")
+_ANY_TAG_RE = re.compile(r"<[^>]+>")
 # 代碼值不是術語：UPS_GR_RES、FEDEX_2DAY
 _CODE_VALUE = re.compile(r"^[A-Z0-9]+(?:_[A-Z0-9]+)+$")
 
@@ -57,7 +57,7 @@ def unescape(s):
 
 def clean_label(raw):
     """去標籤、還原實體、壓空白；去掉按鈕前的加號與結尾冒號。"""
-    s = unescape(_TAG_RE.sub("", raw or ""))
+    s = unescape(_ANY_TAG_RE.sub("", raw or ""))
     s = re.sub(r"\s+", " ", s).strip()
     # 「+ Add Code」「＋添加代码」按鈕前的加號是圖示，不是標籤的一部分
     s = s.lstrip("+＋").strip()
@@ -164,8 +164,13 @@ def glossary_from_notion(pages):
     return [r for r in rows if r["en"]]
 
 
-def check(texts, glossary):
-    """整篇的比對結果。可直接序列化（n8n 輸出不接受 set）。"""
+def check(texts, glossary, when="同步時"):
+    """整篇的比對結果。可直接序列化（n8n 輸出不接受 set）。
+
+    when 是「這次檢查發生在什麼時候」，寫進摘要開頭（同步時／翻譯前）。
+    Fay 2026-09-11：同步寫的術語檢查欄是「同步當下」的結果，補完術語後欄位還是舊的，
+    寫「先補術語再翻譯」會讓人以為現在還不能翻——其實直接按翻譯就會重新檢查。
+    """
     found = candidates(texts)
     groups = {NEW: [], EMPTY: [], DRAFT: [], CONFIRMED: []}
     for rec in found.values():
@@ -191,7 +196,7 @@ def check(texts, glossary):
         # 資訊量仍然很低。要做的事都是「去術語表處理完、勾已確認」，合成一個數字最不會誤讀。
         # 待確認＋已確認＝UI 詞數。
         added = f"（本次新增 {len(groups[NEW])}）" if groups[NEW] else ""
-        summary = (f"⚠️ 先補術語再翻譯｜待確認 {pending}{added}｜"
+        summary = (f"⚠️ {when}有詞待確認｜待確認 {pending}{added}｜"
                    f"已確認 {len(groups[CONFIRMED])}（UI 詞 {total}）")
     return {
         "total": total,
@@ -200,6 +205,7 @@ def check(texts, glossary):
         "pending": pending,
         "ready": not pending,
         "summary": summary,
+        "when": when,
     }
 
 
@@ -217,9 +223,12 @@ def comment_text(report, limit=30):
     """
     if not report["pending"]:
         return ""
-    lines = [f"：{report['summary']}",
-             "翻譯前請到術語表把下列詞補上簡中、勾「已確認」——沒勾的詞翻譯時不會使用，"
-             "按「翻譯」也會被擋下。", "", "待確認的詞：", ""]
+    # 補完不必再同步：翻譯前會用最新的術語表重新檢查。再同步反而會把新內容寫成
+    # WP 草稿、讓前台又落後，按翻譯會被擋成「尚無法開始翻譯」（Fay 2026-09-11 釐清流程）。
+    guide = "補上簡中、勾「已確認」後，直接按「翻譯」即可——翻譯前會用最新的術語表重新檢查，不用再同步。"
+    if report.get("when", "同步時") == "同步時":
+        guide += "發佈到 WP 後才能翻譯。"
+    lines = [f"：{report['summary']}", guide, "", "待確認的詞：", ""]
     if report["new"]:
         lines.append("• 還沒有簡中（本次新增到術語表）："
                      + _join([x["label"] for x in report["new"]], limit))

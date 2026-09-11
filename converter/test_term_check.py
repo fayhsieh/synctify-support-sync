@@ -93,9 +93,20 @@ def test_check_彙整與可序列化():
     assert rep["total"] == 4 and rep["pending"] == 3
     assert [x["label"] for x in rep["new"]] == ["Create Override"]
     assert rep["draft"][0]["zh"] == "承运商代码"
-    assert rep["summary"] == "⚠️ 先補術語再翻譯｜待確認 3（本次新增 1）｜已確認 1（UI 詞 4）"
+    assert rep["summary"] == "⚠️ 同步時有詞待確認｜待確認 3（本次新增 1）｜已確認 1（UI 詞 4）"
     assert rep["ready"] is False
     json.dumps(rep)          # kinds 不能是 set
+
+
+def test_摘要與留言依檢查時機措辭():
+    """同步寫的欄位是「同步當下」的結果；翻譯被術語閘門擋下時要寫「翻譯前」（Fay 2026-09-11）。"""
+    sync = tc.check(["<strong>Override</strong>"], G)
+    assert sync["summary"] == "⚠️ 同步時有詞待確認｜待確認 1｜已確認 0（UI 詞 1）"
+    txt = tc.comment_text(sync)
+    assert "直接按「翻譯」即可" in txt and "不用再同步" in txt and "發佈到 WP 後才能翻譯" in txt
+    gate = tc.check(["<strong>Override</strong>"], G, when="翻譯前")
+    assert gate["summary"] == "⚠️ 翻譯前有詞待確認｜待確認 1｜已確認 0（UI 詞 1）"
+    assert "發佈到 WP 後才能翻譯" not in tc.comment_text(gate)      # 能走到術語閘門代表已發佈
 
 
 def test_沒有待處理才說可以翻譯():
@@ -106,7 +117,7 @@ def test_沒有待處理才說可以翻譯():
     assert none["ready"] and none["summary"] == "✅ 可以翻譯｜這篇沒有 UI 詞"
     draft_only = tc.check(["<strong>Carrier Code</strong>"], G)
     assert draft_only["new"] == [] and draft_only["ready"] is False
-    assert draft_only["summary"].startswith("⚠️ 先補術語再翻譯")
+    assert draft_only["summary"].startswith("⚠️ 同步時有詞待確認")
 
 
 def test_摘要只給待確認與已確認且加總等於UI詞數():
@@ -114,9 +125,9 @@ def test_摘要只給待確認與已確認且加總等於UI詞數():
     待勾選 0」後「待勾選 0」資訊量仍低。欄位只給「待確認」一個數字，細分放留言（Fay 2026-09-11）。"""
     rep = tc.check(["<strong>Brand New Label</strong>", "<strong>Override</strong>",
                     "<strong>Carrier Code</strong>", "<strong>Integrations</strong>"], G)
-    assert rep["summary"] == "⚠️ 先補術語再翻譯｜待確認 3（本次新增 1）｜已確認 1（UI 詞 4）"
+    assert rep["summary"] == "⚠️ 同步時有詞待確認｜待確認 3（本次新增 1）｜已確認 1（UI 詞 4）"
     no_new = tc.check(["<strong>Override</strong>"], G)
-    assert no_new["summary"] == "⚠️ 先補術語再翻譯｜待確認 1｜已確認 0（UI 詞 1）"
+    assert no_new["summary"] == "⚠️ 同步時有詞待確認｜待確認 1｜已確認 0（UI 詞 1）"
     txt = tc.comment_text(rep)
     assert "\n• 還沒有簡中（本次新增到術語表）：Brand New Label" in txt
     assert "\n• 還沒有簡中：Override" in txt
@@ -129,7 +140,7 @@ def test_留言的術語表是可點的連結():
     rich = tc.comment_rich_text(rep, "https://example.com/glossary")
     # 格式由 Fay 2026-09-11 指定；n8n 會把「建列失敗」提醒插在 [1] 之後，段落順序不能亂動
     assert rich[0] == {"type": "text", "text": {"content": "術語檢查"}, "annotations": {"bold": True}}
-    assert rich[1]["text"]["content"].startswith("：⚠️ 先補術語再翻譯")
+    assert rich[1]["text"]["content"].startswith("：⚠️ 同步時有詞待確認")
     assert rich[2]["text"]["content"] == "\n\n👉 "          # 只空一行（Fay 2026-09-11 實看後調整）
     assert rich[3]["text"] == {"content": "開啟產品用術語表", "link": {"url": "https://example.com/glossary"}}
     assert all(len(r["text"]["content"]) <= 2000 for r in rich)
@@ -207,6 +218,29 @@ def test_打包的四個模組頂層名稱不重複():
     import ast
     seen, dup = {}, []
     for m in ("notion_blocks.py", "notion2elementor.py", "translate_prompt.py", "term_check.py"):
+        src = (CONVERTER_DIR / m).read_text(encoding="utf-8")
+        src = re.split(r'^if __name__ == "__main__":', src, flags=re.M)[0]
+        for n in ast.parse(src).body:
+            if isinstance(n, (ast.FunctionDef, ast.ClassDef)):
+                names = [n.name]
+            elif isinstance(n, ast.Assign):
+                names = [x.id for t in n.targets for x in ast.walk(t) if isinstance(x, ast.Name)]
+            else:
+                names = []
+            for nm in names:
+                if nm in seen and seen[nm] != m:
+                    dup.append((nm, seen[nm], m))
+                seen.setdefault(nm, m)
+    assert dup == []
+
+
+def test_翻譯節點打包的三個模組頂層名稱不重複():
+    """翻譯工作流的 Code node 把 tp_blocks、translate_prompt、term_check 接成同一個檔案。
+    2026-09-11 接術語閘門前查到 tp_blocks 與 term_check 都有 _TAG_RE（兩個正規式不同），
+    打包後 term_check 的會蓋掉 tp_blocks 的，extract_blocks 讀不到分組就壞掉。"""
+    import ast
+    seen, dup = {}, []
+    for m in ("tp_blocks.py", "translate_prompt.py", "term_check.py"):
         src = (CONVERTER_DIR / m).read_text(encoding="utf-8")
         src = re.split(r'^if __name__ == "__main__":', src, flags=re.M)[0]
         for n in ast.parse(src).body:

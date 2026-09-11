@@ -1414,7 +1414,7 @@ def build_polling_workflow(code):
          "type": "n8n-nodes-base.httpRequest", "typeVersion": 4.2, "position": [4160, 560],
          "onError": "continueRegularOutput",
          "credentials": {"notionApi": {"id": NOTION_CRED_ID, "name": NOTION_CRED_NAME}},
-         "notes": "「術語檢查」欄寫一句話：✅ 可以翻譯／⚠️ 先補術語再翻譯（附待確認、已確認\n"
+         "notes": "「術語檢查」欄寫一句話：✅ 可以翻譯／⚠️ 同步時有詞待確認（附待確認、已確認\n"
                   "的數字，兩者加總等於 UI 詞數；待確認含本次新增，細分寫在留言）。\n"
                   "沒有新詞但有草稿未勾，一樣是 ⚠️——翻譯按鈕會擋。\n"
                   "\n"
