@@ -118,6 +118,12 @@ def test_glossary_from_notion():
     assert tc.glossary_from_notion(pages) == [{"en": "Override", "zh": "覆盖", "ok": True, "id": "p1"}]
 
 
+def test_glossary_from_notion_也吃精簡過的列():
+    """n8n「整理術語表」會先縮成 {en, zh, ok}：原始 1.15 MB 送進 Python 會拖垮 task runner。"""
+    slim = [{"en": " Override ", "zh": "覆盖", "ok": True}, {"en": "", "zh": "x", "ok": False}]
+    assert tc.glossary_from_notion(slim) == [{"en": "Override", "zh": "覆盖", "ok": True, "id": None}]
+
+
 # ── 輸出 ──────────────────────────────────────────────────
 
 def test_沒有待處理就不留言():

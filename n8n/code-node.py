@@ -1857,9 +1857,18 @@ def _rich_plain(rich):
 
 
 def glossary_from_notion(pages):
-    """Notion API 查詢結果（results 陣列）→ [{en, zh, ok, id}]。"""
+    """Notion API 查詢結果（results 陣列）→ [{en, zh, ok, id}]。
+
+    也吃**已精簡過**的列（有 en 鍵）：n8n 同步工作流的「整理術語表」會先把原始頁面
+    （316 列約 1.15 MB）縮成 {en, zh, ok}（約 18 KB）再送進 Python 節點——
+    2026-09-11 同步 6074（146 個區塊）時 task runner 因資料量過大逾時被中止。
+    """
     rows = []
     for p in pages or []:
+        if "en" in p:
+            rows.append({"en": (p.get("en") or "").strip(), "zh": (p.get("zh") or "").strip(),
+                         "ok": bool(p.get("ok")), "id": p.get("id")})
+            continue
         props = p.get("properties") or {}
         rows.append({
             "en": _rich_plain((props.get("English") or {}).get("title")),
@@ -2039,7 +2048,7 @@ def _run(blocks, meta):
 
     # 術語檢查：撈出 UI 詞（[direction]、粗體）對照術語表（Fay 2026-09-10 的流程）。
     # 術語表沒讀到就整段跳過——空術語表會把每個詞都判成新詞，自動建出幾十列雜訊。
-    _gloss = glossary_from_notion(meta["glossary_pages"] if "glossary_pages" in meta else [])
+    _gloss = glossary_from_notion(meta["glossary_rows"] if "glossary_rows" in meta else [])
     if _gloss:
         _terms = check(strings_in([template, faq_items]), _gloss)
         _today = meta["today"] if "today" in meta else ""
@@ -2049,9 +2058,11 @@ def _run(blocks, meta):
         _term_comment = comment_text(_terms, "https://app.notion.com/p/3bc2f2ede27d81238c4fd63c958ac9fc")
         _term_changelog = changelog_rich_text(_terms, title)
     else:
+        _gerr = meta["glossary_error"] if "glossary_error" in meta else ""
         _terms = {"skipped": True, "pending": 0, "ready": False, "new": [],
-                  "summary": "⚠️ 未檢查：術語表沒有讀到（確認 Notion 憑證能存取產品用術語表），"
-                             "暫時無法判斷能不能翻譯"}
+                  "summary": "⚠️ 未檢查：術語表沒有讀到"
+                             + ("（" + _gerr + "）" if _gerr else "")
+                             + "，暫時無法判斷能不能翻譯"}
         _term_rows, _term_comment, _term_changelog = [], "", []
 
     return {

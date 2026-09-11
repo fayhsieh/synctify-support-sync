@@ -287,7 +287,7 @@ def _run(blocks, meta):
 
     # 術語檢查：撈出 UI 詞（[direction]、粗體）對照術語表（Fay 2026-09-10 的流程）。
     # 術語表沒讀到就整段跳過——空術語表會把每個詞都判成新詞，自動建出幾十列雜訊。
-    _gloss = glossary_from_notion(meta["glossary_pages"] if "glossary_pages" in meta else [])
+    _gloss = glossary_from_notion(meta["glossary_rows"] if "glossary_rows" in meta else [])
     if _gloss:
         _terms = check(strings_in([template, faq_items]), _gloss)
         _today = meta["today"] if "today" in meta else ""
@@ -297,9 +297,11 @@ def _run(blocks, meta):
         _term_comment = comment_text(_terms, "__GLOSSARY_URL__")
         _term_changelog = changelog_rich_text(_terms, title)
     else:
+        _gerr = meta["glossary_error"] if "glossary_error" in meta else ""
         _terms = {"skipped": True, "pending": 0, "ready": False, "new": [],
-                  "summary": "⚠️ 未檢查：術語表沒有讀到（確認 Notion 憑證能存取產品用術語表），"
-                             "暫時無法判斷能不能翻譯"}
+                  "summary": "⚠️ 未檢查：術語表沒有讀到"
+                             + ("（" + _gerr + "）" if _gerr else "")
+                             + "，暫時無法判斷能不能翻譯"}
         _term_rows, _term_comment, _term_changelog = [], "", []
 
     return {
@@ -708,7 +710,16 @@ def build_polling_workflow(code):
                   "瀏覽器紀錄與轉寄的訊息裡，header 才是真正可輪替的憑證。\n"
                   "\n"
                   "responseMode=onReceived：立刻回 200，不讓 Notion 等整條流程跑完。\n"
-                  "按鈕請放在「版本子列」上：母列沒有內容區塊，按了會轉出空文章。"},
+                  "按鈕請放在「版本子列」上：母列沒有內容區塊，按了會轉出空文章。\n"
+                  "\n"
+                  "【按鈕的動作順序】（Fay 2026-09-11）\n"
+                  "1. Edit property：上稿狀態 → 同步中（測試站按鈕改的是「上稿狀態 (Test)」）\n"
+                  "2. Send webhook\n"
+                  "先改屬性，按下的瞬間就看得到「同步中」；完成後由本流程寫回\n"
+                  "「草稿已建立」或「❌ 同步失敗」。\n"
+                  "不要改由 n8n 在開頭寫「同步中」：要等好幾秒，而且獨立分支的執行順序\n"
+                  "可能晚於主流程，會把完成狀態蓋回「同步中」。\n"
+                  "⚠️ webhook 沒送到（n8n 停機、payload 無 page_id）時會停在「同步中」，重按即可。"},
 
         {"parameters": {"assignments": {"assignments": [
             # Notion 按鈕 webhook 的實際 payload 結構請以第一次執行的 log 為準；
@@ -871,28 +882,46 @@ def build_polling_workflow(code):
                   "含其他佈景主題的示範內容）。永久連結含分類路徑，拼不出來只能查。\n"
                   "沒有任何 id 時用 include=0 讓它回空陣列——留空會變成回傳全部。"},
 
-        {"parameters": {**notion_http(
-            "POST", f"https://api.notion.com/v1/databases/{GLOSSARY_DB_ID}/query",
-            '={{ { "page_size": 100 } }}'),
-            "options": {"pagination": {"pagination": {
-                "paginationMode": "updateAParameterInEachRequest",
-                "parameters": {"parameters": [
-                    {"type": "body", "name": "start_cursor",
-                     "value": "={{ $response.body.next_cursor }}"}]},
-                "paginationCompleteWhen": "other",
-                "completeExpression": "={{ $response.body.has_more === false }}",
-                "limitPagesFetched": True, "maxRequestsF": 20}}}},
-         "id": nid(), "name": "Notion：取術語表", "type": "n8n-nodes-base.httpRequest",
-         "typeVersion": 4.2, "position": [1350, 480], "executeOnce": True,
-         "onError": "continueRegularOutput",
+        {"parameters": {
+            "resource": "databasePage", "operation": "getAll",
+            "databaseId": {"__rl": True, "mode": "id", "value": GLOSSARY_DB_ID},
+            "returnAll": True, "simple": False, "filterType": "none", "options": {}},
+         "id": nid(), "name": "Notion：取術語表", "type": "n8n-nodes-base.notion",
+         "typeVersion": 2.2, "position": [1260, 480], "executeOnce": True,
+         "alwaysOutputData": True, "onError": "continueRegularOutput",
          "credentials": {"notionApi": {"id": NOTION_CRED_ID, "name": NOTION_CRED_NAME}},
          "notes": "術語檢查用：同步後比對文章的 UI 詞。\n"
-                  "放在轉換之前而不是之後：Python 節點讀不到其他節點，只能靠「組裝參數」\n"
-                  "帶進去（跟連結對照表一樣）。\n\n"
+                  "用 Notion 節點（Return All 自己處理分頁），不用 HTTP 分頁——2026-09-11\n"
+                  "同步 6074 時 HTTP 版回「JSON Body 不是合法 JSON」，錯誤被下游展開成\n"
+                  "146 則留言（見「整理術語表」的說明）。\n"
+                  "Simplify 必須關閉：轉換節點要原始的 properties。\n"
                   "executeOnce：上游 WP 節點回傳陣列會被拆成多個 item。\n"
-                  "**要分頁**：術語表約 290 列、單次上限 100。\n"
-                  "onError=continue：讀不到術語表時照常同步，轉換節點會跳過術語檢查\n"
-                  "（空術語表會把每個詞判成新詞，自動建出一堆雜訊列）。"},
+                  "放在轉換之前：Python 節點讀不到其他節點，只能靠「組裝參數」帶進去。"},
+
+        {"parameters": {"jsCode":
+            "// 把術語表收成「一個乾淨的 item」。不可省略：上一個節點失敗時會輸出帶 error\n"
+            "// 的 item，若直接接到「Notion：取得頁面 blocks」（有錯誤輸出），n8n 會把它\n"
+            "// 展開出的每個區塊都送進失敗路徑——2026-09-11 一次留了 146 則留言。\n"
+            "// 同時縮成 {en, zh, ok}：原始頁面 316 列約 1.15 MB、精簡後約 18 KB。\n"
+            "// 2026-09-11 同步 6074（146 個區塊）時 Python 節點的 task runner 因資料量\n"
+            "// 逾時被中止。欄位對應與 converter/term_check.py 的 glossary_from_notion 一致。\n"
+            "const items = $input.all();\n"
+            "const bad = items.find(i => i.json && i.json.error);\n"
+            "const plain = a => (a || []).map(t => t.plain_text || '').join('').trim();\n"
+            "const rows = items.filter(i => i.json && i.json.properties).map(i => {\n"
+            "  const p = i.json.properties;\n"
+            "  return { en: plain(p['English'] && p['English'].title),\n"
+            "           zh: plain(p['简体中文'] && p['简体中文'].rich_text),\n"
+            "           ok: !!(p['已確認'] && p['已確認'].checkbox) };\n"
+            "}).filter(r => r.en);\n"
+            "const e = bad ? bad.json.error : null;\n"
+            "return [{ json: { glossary_rows: rows, glossary_error: e\n"
+            "  ? String(e.message || e).slice(0, 200)\n"
+            "  : (rows.length ? '' : '術語表是空的，或 Notion 節點的 Simplify 沒關') } }];"},
+         "id": nid(), "name": "整理術語表", "type": "n8n-nodes-base.code",
+         "typeVersion": 2, "position": [1350, 480],
+         "notes": "錯誤在這裡轉成純文字（glossary_error），不再是 n8n 認得的錯誤 item。\n"
+                  "讀取失敗時同步照常進行，術語檢查欄會寫「未檢查」並附上原因。"},
 
         {"parameters": {"assignments": {"assignments": [
             {"id": nid(), "name": "title", "value": "={{ " + clean_title + " }}",
@@ -901,14 +930,23 @@ def build_polling_workflow(code):
             # 關係，必須用 .first() / .all() 取整批。WP 那支回傳陣列會被 n8n 拆成
             # 多個項目，所以要 .all().map() 收回成陣列（2026-08-11 實測踩到：
             # 直接用 .item.json 會拿到單一物件而型別驗證失敗）。
+            # **只留 build_link_map 會讀的四個欄位**（id、Doc name、WP Post ID、Parent item），
+            # 形狀維持 Notion 原生格式，轉換器不必改。這個 Set 節點每個區塊跑一次：
+            # 整張 Content Hub（97 列、每列約 30 欄）原樣複製 146 次會上百 MB，
+            # 2026-09-11 同步 6074 時 Python 節點的 task runner 因此逾時被中止。
             {"id": nid(), "name": "hub_rows", "type": "array",
-             "value": "={{ $('Notion：取得連結對照').first().json.results }}"},
+             "value": "={{ $('Notion：取得連結對照').first().json.results.map(r => ({ id: r.id,"
+                      " properties: { 'Doc name': { title: ((r.properties['Doc name'] || {}).title || []).slice(0, 1) },"
+                      " '" + POST_ID_PROP + "': { rich_text: ((r.properties['" + POST_ID_PROP + "'] || {}).rich_text || []).slice(0, 1) },"
+                      " 'Parent item': { relation: ((r.properties['Parent item'] || {}).relation || []).slice(0, 1) } } })) }}"},
             {"id": nid(), "name": "wp_docs", "type": "array",
              "value": "={{ $('WP：取得文章網址').all().map(i => i.json) }}"},
-            # 術語檢查用。分頁會輸出多個 item（每頁一個），要攤平成一個陣列。
-            # 節點失敗時 results 不存在 → 空陣列 → 轉換節點跳過術語檢查。
-            {"id": nid(), "name": "glossary_pages", "type": "array",
-             "value": "={{ $('Notion：取術語表').all().flatMap(i => i.json.results || []) }}"},
+            # 術語檢查用。已由「整理術語表」縮成 {en, zh, ok}（約 18 KB），
+            # 這個 Set 節點每個區塊跑一次也只多幾 MB。
+            {"id": nid(), "name": "glossary_rows", "type": "array",
+             "value": "={{ $('整理術語表').first().json.glossary_rows }}"},
+            {"id": nid(), "name": "glossary_error", "type": "string",
+             "value": "={{ $('整理術語表').first().json.glossary_error }}"},
             {"id": nid(), "name": "today", "type": "string",
              "value": "={{ $now.setZone('Asia/Taipei').toFormat('yyyy-MM-dd') }}"},
             {"id": nid(), "name": "faq_group",
@@ -1079,9 +1117,13 @@ def build_polling_workflow(code):
                       "typeof $json.error === 'string' ? $json.error"
                       " : ($json.error && $json.error.message ? $json.error.message"
                       " : JSON.stringify($json).slice(0, 800))) }}"},
+            # 卡在哪個節點。$prevNode 是把錯誤送進來的節點（2026-09-11：146 則留言
+            # 沒有一則說出是哪一步，只能從數字反推）。
+            {"id": nid(), "name": "fail_node", "type": "string",
+             "value": "={{ $prevNode.name }}"},
         ]}, "options": {}},
          "id": nid(), "name": "原因：節點失敗", "type": "n8n-nodes-base.set",
-         "typeVersion": 3.4, "position": [2840, 780],
+         "typeVersion": 3.4, "position": [2840, 780], "executeOnce": True,
          "notes": "各節點的錯誤輸出都接到這裡。用 $prevNode.name 取得實際失敗的節點名，\n"
                   "讓小編在 Notion 的留言裡直接看到卡在哪一步。"},
 
@@ -1091,7 +1133,7 @@ def build_polling_workflow(code):
             '"' + TRANSLATE_STATUS_PROP + '": { "select": { "name": "－" } }, '
             '"' + TERM_CHECK_PROP + '": { "rich_text": [] } } } }}'),
          "id": nid(), "name": "回寫：同步失敗", "type": "n8n-nodes-base.httpRequest",
-         "typeVersion": 4.2, "position": [3060, 620],
+         "typeVersion": 4.2, "position": [3060, 620], "executeOnce": True,
          "credentials": {"notionApi": {"id": NOTION_CRED_ID, "name": NOTION_CRED_NAME}},
          "notes": "寫在「被按下的那一列」而不是母列——使用者在哪裡按就在哪裡看到結果。\n"
                   "\n"
@@ -1114,14 +1156,18 @@ def build_polling_workflow(code):
         {"parameters": notion_http(
             "POST", "https://api.notion.com/v1/comments",
             '={{ { "parent": { "page_id": ' + f"$('{PICK}').first().json.page_id" + ' }, '
-            '"rich_text": [ { "text": { "content": "⚠️ 同步已中止：" + '
+            '"rich_text": [ { "text": { "content": "⚠️ 同步已中止" + '
+            '($json.fail_node ? "（卡在「" + $json.fail_node + "」）" : "") + "：" + '
             '($json.fail_reason ?? ("（原因運算式求值失敗）" + ($json.fail_raw ?? ""))) '
             '} } ] } }}'),
          "id": nid(), "name": "Notion：留言說明原因", "type": "n8n-nodes-base.httpRequest",
-         "typeVersion": 4.2, "position": [3280, 620],
+         "typeVersion": 4.2, "position": [3280, 620], "executeOnce": True,
          "credentials": {"notionApi": {"id": NOTION_CRED_ID, "name": NOTION_CRED_NAME}},
          "notes": "按鈕觸發時沒人在看 n8n，所以把原因留言回 Notion 頁面上。\n"
-                  "留言比 select 值能承載更多資訊，使用者當場就知道該怎麼做。"},
+                  "留言比 select 值能承載更多資訊，使用者當場就知道該怎麼做。\n"
+                  "\n"
+                  "executeOnce（2026-09-11）：失敗的節點若一次處理多筆（例如 146 個區塊），\n"
+                  "錯誤也會是 146 筆；不設就會留 146 則一模一樣的留言。"},
 
         {"parameters": notion_http(
             "GET", "=https://api.notion.com/v1/pages/{{ " + f"$('{PICK}').first().json.mother_id" + " }}"),
@@ -1515,7 +1561,7 @@ def build_polling_workflow(code):
     # 輪詢每一輪都重抓同一列。輪詢移除時整個認領節點也不存在，直接接防呆。
     claim = [] if POLLING == "removed" else ["先取消勾選（認領）"]
     chain = [PICK] + claim + ["是母列？（誤按防呆）"]
-    chain2 = ["Notion：取得連結對照", "WP：取得文章網址", "Notion：取術語表",
+    chain2 = ["Notion：取得連結對照", "WP：取得文章網址", "Notion：取術語表", "整理術語表",
               "Notion：取得頁面 blocks",
               PARAMS, CONV,
               "WP：上傳圖片", "組合回填輸入", "回填媒體網址", MOTHER,
@@ -1617,6 +1663,9 @@ def build_polling_workflow(code):
         CONV, "WP：上傳圖片", "回填媒體網址", MOTHER,
         "WP：查詢既有文章", "WP：建立新草稿", "WP：寫入 Elementor 版面",
         "WP：套用站方預設欄位", "WP：寫入 SEO meta", "WP：同步 FAQ",
+        # 按鈕會先把上稿狀態設成「同步中」（2026-09-11）。回寫節點失敗時若不接錯誤輸出，
+        # 狀態會永遠卡在「同步中」——接上後至少會寫「❌ 同步失敗」並留言原因。
+        "Notion：回寫母列", "Notion：回寫子列",
     ]
     by_name = {n["name"]: n for n in nodes}
     for name in FAILABLE:
