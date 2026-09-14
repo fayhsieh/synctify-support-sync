@@ -57,7 +57,7 @@ prompt 仍然只放已確認的列。
 ## 用法
 
     python scripts/build_translate_workflow.py              # 測試站
-    python scripts/build_translate_workflow.py --model gpt-5.6-terra
+    python scripts/build_translate_workflow.py --model general-docs-writer
 
 webhook path 取自 .env 的 N8N_TRANSLATE_WEBHOOK_PATH_TEST（不入庫；產物寫到已 gitignore
 的 n8n/local/）。沒設會用佔位字串並提示。
@@ -82,7 +82,10 @@ _ID_NS = uuid.UUID("7f3a1c02-5d64-4e8b-9a11-2c6d0f4b7e93")
 
 # n8n 憑證「引用」——只有識別碼，不含任何密鑰
 # （CLAUDE.md：匯出時確認憑證欄位為引用而非明文）
-OPENAI_CRED = {"id": "UEtEu6Jad1QJoQvz", "name": "OpenAi account 2"}
+# 2026-09-14 Sam 提議改用公司的 AI 中轉站（OpenAI 相容，Base URL https://ai.synctify.io/v1），
+# 不再用 Fay 個人的 OpenAI 額度。舊憑證是 {"id": "UEtEu6Jad1QJoQvz", "name": "OpenAi account 2"}。
+# ⚠️ id 結尾是大寫 i（…TzIh）。2026-09-14 從截圖讀成小寫 L，匯入後節點出現紅色驚嘆號。
+OPENAI_CRED = {"id": "Zc16VwO7TLYXtzIh", "name": "AI Transfer Station"}
 NOTION_CRED = {"id": "xfGHH7Wx4EucMC0X", "name": "Support Center Sync"}
 WEBHOOK_AUTH_CRED = {"id": "8rnHKnTbrXTDCzwc", "name": "Header Auth"}   # 與同步按鈕共用
 WP_CRED = {
@@ -103,9 +106,13 @@ TERM_CHECK_PROP = "術語檢查"
 GLOSSARY_DB = "1ab2891d5ddd48db97d1f1c1afeefcf5"
 GLOSSARY_URL = "https://app.notion.com/p/3bc2f2ede27d81238c4fd63c958ac9fc"
 
-# 心柔 2026-09-09 選定。八題裡 terra 拿 4 票（sol 2、luna 2），而且是唯一
-# 沒有正確性錯誤的。成本沒有進入決定：2,058 條字串全部翻完 terra ≈ $4.87。
-DEFAULT_MODEL = "gpt-5.6-terra"
+# 中轉站上 Sam 為 Fay 建的組合模型（2026-09-14）。組合裡依序是
+#   GPT 5.6 Terra → Claude Sonnet 5 → GLM 5.2 → DeepSeek V4 Flash，
+# 額度不足時自動往下調用。第一順位 terra 是心柔 2026-09-09 盲測選定的（八題拿 4 票、
+# 唯一沒有正確性錯誤）；後面三個**沒有評比過**——所以工作流會記錄每段實際用了哪個模型，
+# 一篇用到不只一個時在完成留言提醒抽查（同一篇前後換模型，用詞與語氣可能不一致）。
+# n8n 的模型清單會把名稱顯示成大寫，實際 id 是小寫。
+DEFAULT_MODEL = "general-docs-writer"
 
 PREP = "抽區塊＋術語閘門＋組 prompt"
 LLM = "OpenAI：翻譯"
@@ -257,6 +264,13 @@ function pickText(j) {
   return '';
 }
 
+// 實際回答的模型。中轉站額度不足時會往下調用組合裡的其他模型，
+// 要 Simplify Output 關閉才拿得到回應裡的 model 欄位。
+function pickModel(j) {
+  if (!j) return '（未回報）';
+  return j.model || (j.response && j.response.model) || '（未回報）';
+}
+
 function tagSig(html) {
   const m = String(html || '').match(/<[^>]+>/g) || [];
   return m.map(t => t.replace(/\\s+/g, ' ').trim()).join('');
@@ -284,9 +298,12 @@ if (outs.length !== prep.length) {
 
 const items = [];
 const warn = [];
+const models = {};
 for (let i = 0; i < prep.length; i++) {
   const p = prep[i].json;
   const text = pickText(outs[i].json).trim();
+  const m = pickModel(outs[i].json);
+  models[m] = (models[m] || 0) + 1;
   if (!text) { warn.push('「' + p.original.replace(/<[^>]+>/g, '').slice(0, 40) + '…」沒有譯文'); continue; }
   if (tagSig(text) !== tagSig(p.original)) {
     warn.push('「' + p.original.replace(/<[^>]+>/g, '').slice(0, 40) + '…」標籤結構被改動');
@@ -302,6 +319,7 @@ return [{ json: {
   items: items,
   count: items.length,
   warnings: warn,
+  models: models,
   stats: {
     total_blocks: s.stat_total,
     already_human: s.stat_already_human,
@@ -342,6 +360,14 @@ const created = count('created'), updated = count('updated');
 const human = (collected.stats.already_human || 0) + count('skipped_human');
 let text = '：寫入 ' + (created + updated) + ' 段（新增 ' + created + '、更新 ' + updated +
            '）；已有人工譯文、沒有重翻 ' + human + ' 段。';
+const models = collected.models || {};
+const names = Object.keys(models).sort((a, b) => models[b] - models[a]);
+if (names.length) {
+  text += '\\n\\n使用模型：' + names.map(n => n + ' ×' + models[n]).join('、');
+  if (names.length > 1) {
+    text += '\\n⚠️ 這篇由不只一個模型翻譯（中轉站額度不足時會往下調用），前後用詞與語氣可能不一致，建議抽查。';
+  }
+}
 const warn = collected.warnings || [];
 if (warn.length) {
   text += '\\n\\n⚠️ 以下段落請到測試站確認：\\n' +
@@ -540,13 +566,13 @@ def build(target, model, webhook_path):
         {"parameters": {"assignments": {"assignments": [
             {"id": n("p-post"), "name": "post_id", "value": "={{ $json.post_id }}", "type": "number"},
             {"id": n("p-lang"), "name": "language", "value": "zh_CN", "type": "string"},
-            {"id": n("p-model"), "name": "model", "value": model, "type": "string"},
             {"id": n("p-dry"), "name": "dry_run", "value": False, "type": "boolean"},
         ]}, "options": {}},
          "id": n("params"), "name": "參數", "type": "n8n-nodes-base.set",
          "typeVersion": 3.4, "position": [1760, 300],
          "notes": "post_id 取自 Notion 母列。\n\n"
-                  "**model 必須真的驅動 OpenAI 節點**：那個節點的模型欄用 By ID＋運算式。\n\n"
+                  "模型不在這裡設：OpenAI 節點直接選中轉站的 general-docs-writer，\n"
+                  "要換模型到中轉站後台調整組合（2026-09-14 起）。\n\n"
                   "dry_run 直接傳給 /tp/block。按鈕版一律真的寫入；要試跑可暫時改成 true，\n"
                   "端點會只回報會做什麼（收尾統計會是 0 段）。"},
 
@@ -680,16 +706,28 @@ def build(target, model, webhook_path):
                 notes="整篇都已人工精修時，直接走收尾（照樣標已翻譯完成）。"),
 
         {"parameters": {
-            "modelId": {"__rl": True, "mode": "id", "value": "={{ $('參數').first().json.model }}"},
+            # From list：模型名稱直接存在節點裡。2026-09-14 前用 By ID＋「參數」運算式，
+            # 為的是在 n8n 換模型時「參數」與節點不會不一致；改用中轉站後換模型是在中轉站
+            # 後台調整組合，n8n 永遠只寫 general-docs-writer，所以改回直觀的 From list，
+            # 並拿掉「參數」的 model 欄位（留著會變成改了沒效果的擺設）。
+            # n8n 清單把名稱顯示成大寫，cachedResultName 照它的顯示寫。
+            "modelId": {"__rl": True, "mode": "list", "value": model,
+                        "cachedResultName": model.upper()},
             "messages": {"values": [
                 {"role": "system", "content": "={{ $json.system }}"},
                 {"content": "={{ $json.user }}"},
             ]},
+            # 關掉 Simplify：要回應裡的 model 欄位，才知道中轉站實際用了哪個模型
+            "simplify": False,
             "options": {}},
          "credentials": {"openAiApi": OPENAI_CRED},
          "id": n("llm"), "name": LLM, "type": "@n8n/n8n-nodes-langchain.openAi",
          "typeVersion": 1.8, "position": [3520, 400],
-         "notes": "模型欄用 By ID＋運算式，值取自「參數」。用下拉選單會把型號寫死在這裡。\n"
+         "notes": "憑證是 AI 中轉站（2026-09-14 起），模型 general-docs-writer 是組合模型，\n"
+                  "額度不足時會往下調用其他模型；Simplify Output 關閉才拿得到實際的 model。\n\n"
+                  "要換模型：到中轉站後台調整 general-docs-writer 的組合，不必改這個節點。\n"
+                  "實際用了哪個模型以中轉站「日誌」為準（例：general-docs-writer →\n"
+                  "codex/gpt-5.6-terra-medium）。\n"
                   "逐段送出，一篇 150 段約十幾分鐘——這就是按鈕要先顯示「翻譯中」的原因。"},
 
         {"parameters": {"jsCode": COLLECT_JS.replace("PREP_NODE_NAME", PREP)},
@@ -856,7 +894,7 @@ def main():
     ap.add_argument("--target", choices=["test"], default="test",
                     help="目前只做測試站（Fay 2026-09-10：先做測試站翻譯按鈕）")
     ap.add_argument("--model", default=DEFAULT_MODEL,
-                    help=f"模型 id（預設 {DEFAULT_MODEL}，心柔 2026-09-09 選定）")
+                    help=f"模型 id（預設 {DEFAULT_MODEL}：中轉站組合，第一順位是心柔選定的 terra）")
     args = ap.parse_args()
 
     env_key = WEBHOOK_ENV[args.target]
