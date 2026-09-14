@@ -271,9 +271,27 @@ function pickModel(j) {
   return j.model || (j.response && j.response.model) || '（未回報）';
 }
 
-function tagSig(html) {
+// 標籤檢查：比「有哪些標籤、各幾個」，**不比順序**。中文語序常把粗體的頁面名稱挪到按鈕前面
+// （2026-09-14 測試站 6086：「请在<strong>库存水平</strong>页面点击 <span…>导入库存</span>」），
+// 比順序會誤報——誤報多了，真正壞掉的那段反而會被略過。
+function tagBag(html) {
   const m = String(html || '').match(/<[^>]+>/g) || [];
-  return m.map(t => t.replace(/\\s+/g, ' ').trim()).join('');
+  return m.map(t => t.replace(/\\s+/g, ' ').trim()).sort().join('');
+}
+
+// 巢狀檢查：數量都對、但開關交錯（<strong><em></strong></em>）一樣會壞版面。
+const VOID_TAGS = { br: 1, img: 1, hr: 1, input: 1, wbr: 1 };
+function wellNested(html) {
+  const stack = [];
+  const re = /<(\\/?)([a-zA-Z][a-zA-Z0-9]*)\\b[^>]*?(\\/?)>/g;
+  let m;
+  while ((m = re.exec(String(html || '')))) {
+    const tag = m[2].toLowerCase();
+    if (VOID_TAGS[tag] || m[3]) continue;
+    if (!m[1]) { stack.push(tag); continue; }
+    if (stack.pop() !== tag) return false;
+  }
+  return stack.length === 0;
 }
 
 const prep = $('PREP_NODE_NAME').all();
@@ -305,8 +323,10 @@ for (let i = 0; i < prep.length; i++) {
   const m = pickModel(outs[i].json);
   models[m] = (models[m] || 0) + 1;
   if (!text) { warn.push('「' + p.original.replace(/<[^>]+>/g, '').slice(0, 40) + '…」沒有譯文'); continue; }
-  if (tagSig(text) !== tagSig(p.original)) {
-    warn.push('「' + p.original.replace(/<[^>]+>/g, '').slice(0, 40) + '…」標籤結構被改動');
+  if (tagBag(text) !== tagBag(p.original)) {
+    warn.push('「' + p.original.replace(/<[^>]+>/g, '').slice(0, 40) + '…」標籤被增減或改動');
+  } else if (wellNested(p.original) && !wellNested(text)) {
+    warn.push('「' + p.original.replace(/<[^>]+>/g, '').slice(0, 40) + '…」標籤巢狀錯亂');
   }
   // block_type 固定 1：我們產生的就是「整句」列。這是這條流程存在的理由，
   // 不要讓端點依有無標籤自動判定——純文字段落也必須是整句列。
