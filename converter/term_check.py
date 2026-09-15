@@ -225,7 +225,9 @@ def comment_text(report, limit=30):
         return ""
     # 補完不必再同步：翻譯前會用最新的術語表重新檢查。再同步反而會把新內容寫成
     # WP 草稿、讓前台又落後，按翻譯會被擋成「尚無法開始翻譯」（Fay 2026-09-11 釐清流程）。
-    guide = "補上簡中、勾「已確認」後，直接按「翻譯」即可——翻譯前會用最新的術語表重新檢查，不用再同步。"
+    # 2026-09-15 起在審核區補術語（完整表太大），要推送回完整表才算數——翻譯只看完整表。
+    guide = ("到審核區按「取出待確認」，補上簡中、勾「已確認」，按「推送回完整表」後，"
+             "再回來按「翻譯」即可——翻譯前會用最新的術語表重新檢查，不用再同步。")
     if report.get("when", "同步時") == "同步時":
         guide += "發佈到 WP 後才能翻譯。"
     lines = [f"：{report['summary']}", guide, "", "待確認的詞：", ""]
@@ -245,8 +247,9 @@ def comment_text(report, limit=30):
 def comment_rich_text(report, glossary_url, limit=30):
     """留言的 rich_text。沒有待確認的詞回空陣列。
 
-    固定四段：[0] 粗體「術語檢查」[1] 本文 [2] 空行＋👉 [3] 可點的「開啟產品用術語表」。
+    固定四段：[0] 粗體「術語檢查」[1] 本文 [2] 空行＋👉 [3] 可點的「開啟術語審核區」。
     n8n 的「Notion：留言術語檢查」會把「建列失敗」提醒插在 [1] 之後——改段落順序要一起改。
+    glossary_url 傳審核頁的網址（2026-09-15 起在審核區補術語）。
     """
     body = comment_text(report, limit)
     if not body:
@@ -254,7 +257,7 @@ def comment_rich_text(report, glossary_url, limit=30):
     return [{"type": "text", "text": {"content": "術語檢查"}, "annotations": {"bold": True}},
             {"type": "text", "text": {"content": body}},
             {"type": "text", "text": {"content": "\n\n👉 "}},
-            {"type": "text", "text": {"content": "開啟產品用術語表", "link": {"url": glossary_url}}}]
+            {"type": "text", "text": {"content": "開啟術語審核區", "link": {"url": glossary_url}}}]
 
 
 def new_row_properties(item, title, date):

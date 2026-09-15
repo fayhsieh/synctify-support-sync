@@ -553,7 +553,7 @@ def build():
     # 讀錯會讓連結對照表指向另一站的文章 ID。
     adapter = (ADAPTER.replace("__POST_ID_PROP__", POST_ID_PROP)
                .replace("__GLOSSARY_DB_ID__", GLOSSARY_DB_ID)
-               .replace("__GLOSSARY_URL__", GLOSSARY_URL))
+               .replace("__GLOSSARY_URL__", REVIEW_URL))
     body = "\n".join([
         HEADER,
         "# ─── converter/notion_blocks.py ───",
@@ -587,6 +587,8 @@ NOTION_DB_ID = "3272f2ed-e27d-807e-9fac-f2313dd2d0de"
 GLOSSARY_DB_ID = "1ab2891d5ddd48db97d1f1c1afeefcf5"     # database id：查詢與建列的 parent
 GLOSSARY_PAGE_ID = "3bc2f2ede27d81238c4fd63c958ac9fc"   # 術語表頁面：變更紀錄寫在這頁
 GLOSSARY_URL = "https://app.notion.com/p/" + GLOSSARY_PAGE_ID
+# 術語檢查留言的連結指向審核區（2026-09-15 起在那裡補術語、推送回完整表）
+REVIEW_URL = "https://app.notion.com/p/3dc2f2ede27d81609ffae4e44ee1d02e"
 TRANSLATE_STATUS_PROP = "翻譯狀態"
 TERM_CHECK_PROP = "術語檢查"
 # 勾選輪詢用的 checkbox 屬性與間隔。POLLING="removed" 時不會被引用，
@@ -2013,8 +2015,9 @@ def warn_stale_local(just_written):
 
     def fingerprint(path):
         wf = json.loads(path.read_text(encoding="utf-8"))
-        code = [n["parameters"]["pythonCode"] for n in wf["nodes"]
-                if n["type"] == "n8n-nodes-base.code"]
+        # Code node 有 Python（pythonCode）也有 JS（jsCode，例如「整理術語表」），兩種都要比
+        code = [n["parameters"].get("pythonCode") or n["parameters"].get("jsCode", "")
+                for n in wf["nodes"] if n["type"] == "n8n-nodes-base.code"]
         return sorted(n["name"] for n in wf["nodes"]), code
 
     if fingerprint(local_copy) == fingerprint(just_written):

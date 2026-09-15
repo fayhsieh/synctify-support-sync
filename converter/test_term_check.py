@@ -103,7 +103,8 @@ def test_摘要與留言依檢查時機措辭():
     sync = tc.check(["<strong>Override</strong>"], G)
     assert sync["summary"] == "⚠️ 同步時有詞待確認｜待確認 1｜已確認 0（UI 詞 1）"
     txt = tc.comment_text(sync)
-    assert "直接按「翻譯」即可" in txt and "不用再同步" in txt and "發佈到 WP 後才能翻譯" in txt
+    assert "再回來按「翻譯」即可" in txt and "不用再同步" in txt and "發佈到 WP 後才能翻譯" in txt
+    assert "取出待確認" in txt and "推送回完整表" in txt          # 2026-09-15 起在審核區補術語
     gate = tc.check(["<strong>Override</strong>"], G, when="翻譯前")
     assert gate["summary"] == "⚠️ 翻譯前有詞待確認｜待確認 1｜已確認 0（UI 詞 1）"
     assert "發佈到 WP 後才能翻譯" not in tc.comment_text(gate)      # 能走到術語閘門代表已發佈
@@ -142,7 +143,7 @@ def test_留言的術語表是可點的連結():
     assert rich[0] == {"type": "text", "text": {"content": "術語檢查"}, "annotations": {"bold": True}}
     assert rich[1]["text"]["content"].startswith("：⚠️ 同步時有詞待確認")
     assert rich[2]["text"]["content"] == "\n\n👉 "          # 只空一行（Fay 2026-09-11 實看後調整）
-    assert rich[3]["text"] == {"content": "開啟產品用術語表", "link": {"url": "https://example.com/glossary"}}
+    assert rich[3]["text"] == {"content": "開啟術語審核區", "link": {"url": "https://example.com/glossary"}}
     assert all(len(r["text"]["content"]) <= 2000 for r in rich)
 
 
