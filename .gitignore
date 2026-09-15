@@ -24,6 +24,10 @@ elementor-template-output.json
 *.sql
 wp-content/
 
+# ── 術語表備份（scripts/glossary_backup.py）──────────
+# 術語表是公司內部資料（備註有內部討論與待修的產品問題），這個 repo 是公開的，絕對不可提交
+backups/
+
 # ── Python ──────────────────────────────────────
 __pycache__/
 *.py[cod]

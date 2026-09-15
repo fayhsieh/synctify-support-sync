@@ -336,8 +336,9 @@ def classify(oms_cn, doc_cn, oms_has_key=False):
     return "OMS 缺中文" if oms_has_key else "無資料可比對"
 
 
-# 可以「補上」的現值：空白，或術語檢查建列時先填的佔位值
-_FILLABLE = (None, "", "待比對")
+def _blank(v):
+    """欄位不存在（None）、空文字、空的多選都算空白。"""
+    return v is None or v == "" or v == []
 
 
 def plan_row(props, want, fill_only):
@@ -353,10 +354,10 @@ def plan_row(props, want, fill_only):
     if not fill_only:
         return diff, {}
     # 現值空、比對結果也是空（欄位不存在會讀成 None）：不是差異，不要寫也不要回報
-    diff = {k: v for k, v in diff.items()
-            if not (current(props, k) in (None, "") and v in (None, ""))}
+    diff = {k: v for k, v in diff.items() if not (_blank(current(props, k)) and _blank(v))}
+    # 可以「補上」的現值：空白，或術語檢查建列時先填的佔位值「待比對」
     write = {k: v for k, v in diff.items()
-             if current(props, k) in _FILLABLE and v not in (None, "")}
+             if (_blank(current(props, k)) or current(props, k) == "待比對") and not _blank(v)}
     return write, {k: v for k, v in diff.items() if k not in write}
 
 
@@ -383,7 +384,7 @@ def want_for(props, o, d):
     else:
         doc_cn = [s for s in (current(props, "文件現況") or "").split("／") if s]
         doc_n = current(props, "文件出現次數") if doc_cn else 0
-    return {
+    want = {
         "文件現況": "／".join(doc_cn),
         "OMS v0 現況": "／".join(oms_cn),
         "i18n key": "、".join(o["keys"][:3]) if o else "",
@@ -391,6 +392,11 @@ def want_for(props, o, d):
         "文件出現次數": doc_n,
         "OMS 使用處數": len(o["keys"]) if o else 0,
     }
+    if o:
+        # 模組＝所有 i18n key 的第一段（i18n key 欄只放前 3 個，不夠判斷）。OMS 2.0 要依模組交付術語。
+        # 對不到 OMS 的列不寫，人工標的模組才不會被清掉。
+        want["模組"] = sorted({k.split(".")[0] for k in o["keys"]})
+    return want
 
 
 def is_confirmed(props):
@@ -407,6 +413,8 @@ def current(props, name):
         return (p.get("select") or {}).get("name")
     if p.get("type") == "rich_text":
         return "".join(t.get("plain_text", "") for t in p.get("rich_text", []))
+    if p.get("type") == "multi_select":
+        return sorted(o["name"] for o in p.get("multi_select") or [])
     return None
 
 
@@ -576,6 +584,10 @@ def main():
         return 0
 
     todo = changed + filled
+    if todo:
+        import glossary_backup  # 放這裡：glossary_backup 反過來 import 本檔
+        path = glossary_backup.snapshot(glossary, reason="glossary_sync --write 寫入前")
+        print(f"🗂 寫入前已備份整張術語表 → {path}")
     for i, (row, diff) in enumerate(todo, 1):
         props = {}
         for k, v in diff.items():
@@ -583,6 +595,8 @@ def main():
                 props[k] = {"number": v}
             elif k == "一致性":
                 props[k] = {"select": {"name": v}}
+            elif k == "模組":
+                props[k] = {"multi_select": [{"name": n} for n in v]}
             else:
                 props[k] = {"rich_text": [{"text": {"content": v[:2000]}}] if v else []}
         notion(f"/pages/{row['id']}", token, "PATCH", {"properties": props})

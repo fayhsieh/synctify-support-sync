@@ -87,6 +87,36 @@ def test_want_for_no_docs_and_nothing_to_keep():
     assert w["一致性"] == "僅 OMS 有"
 
 
+def test_current_reads_multi_select_sorted():
+    p = {"模組": {"type": "multi_select", "multi_select": [{"name": "order"}, {"name": "global"}]}}
+    assert gs.current(p, "模組") == ["global", "order"]
+
+
+def test_want_for_modules_from_all_keys():
+    o = {"cn": {"承运商"}, "keys": ["shipment_routing.a", "integration.b",
+                                    "shipment_routing.c", "parcel_monitoring.d"]}
+    assert gs.want_for(props(), o, None)["模組"] == ["integration", "parcel_monitoring", "shipment_routing"]
+
+
+def test_want_for_without_oms_leaves_modules_alone():
+    """對不到 OMS 的列（文件步驟用語）不寫模組，人工標的不會被清掉。"""
+    assert "模組" not in gs.want_for(props(), None, {"cn": {"查找成员"}, "n": 1})
+
+
+def test_fill_only_fills_empty_multi_select():
+    p = {"模組": {"type": "multi_select", "multi_select": []}}
+    write, rest = gs.plan_row(p, {"模組": ["order"]}, fill_only=True)
+    assert write == {"模組": ["order"]}
+    assert rest == {}
+
+
+def test_fill_only_keeps_existing_modules():
+    p = {"模組": {"type": "multi_select", "multi_select": [{"name": "order"}]}}
+    write, rest = gs.plan_row(p, {"模組": ["global", "order"]}, fill_only=True)
+    assert write == {}
+    assert rest == {"模組": ["global", "order"]}
+
+
 def test_has_doc_evidence():
     assert gs.has_doc_evidence(props(**{"文件現況": "添加代码"}))
     # Link：文件現況空白，但人工記了出現 3 次（取自句子裡的譯文）
