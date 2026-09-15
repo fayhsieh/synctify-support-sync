@@ -360,6 +360,30 @@ def plan_row(props, want, fill_only):
     return write, {k: v for k, v in diff.items() if k not in write}
 
 
+def want_for(props, o, d):
+    """一列該有的衍生欄位。o／d 是 OMS／文件的比對結果，比對不到是 None。
+
+    文件那邊比對不到、但列上已經有「文件現況」時**沿用現值，不清空**：這裡的比對是完全相符的
+    獨立字串，「+ Add Code」這種帶符號的、或術語檢查從文章 UI 路徑撈到的譯法本來就對不到。
+    2026-09-15 用正式站試跑，Add Code／Customized／Code／Integrated Message Codes 會因此被清空、
+    Link／Resume 從「一致」退成「僅 OMS 有」。比對不到不代表譯法不存在。
+    """
+    oms_cn = sorted(o["cn"]) if o else []
+    if d:
+        doc_cn, doc_n = sorted(d["cn"]), d["n"]
+    else:
+        doc_cn = [s for s in (current(props, "文件現況") or "").split("／") if s]
+        doc_n = current(props, "文件出現次數") if doc_cn else 0
+    return {
+        "文件現況": "／".join(doc_cn),
+        "OMS v0 現況": "／".join(oms_cn),
+        "i18n key": "、".join(o["keys"][:3]) if o else "",
+        "一致性": classify(oms_cn, doc_cn, oms_has_key=bool(o)),
+        "文件出現次數": doc_n,
+        "OMS 使用處數": len(o["keys"]) if o else 0,
+    }
+
+
 def is_confirmed(props):
     """該列是否已被人工確認過。已確認＝人做過決定，腳本不得覆蓋。"""
     return bool((props.get("已確認") or {}).get("checkbox"))
@@ -479,17 +503,7 @@ def main():
             if write:
                 (filled if is_confirmed(row["props"]) else changed).append((row, write))
             continue
-        oms_cn = sorted(o["cn"]) if o else []
-        doc_cn = sorted(d["cn"]) if d else []
-
-        want = {
-            "文件現況": "／".join(doc_cn),
-            "OMS v0 現況": "／".join(oms_cn),
-            "i18n key": "、".join(o["keys"][:3]) if o else "",
-            "一致性": classify(oms_cn, doc_cn, oms_has_key=bool(o)),
-            "文件出現次數": d["n"] if d else 0,
-            "OMS 使用處數": len(o["keys"]) if o else 0,
-        }
+        want = want_for(row["props"], o, d)
 
         # 已確認的列：**空白的欄位補上，有值但不同的只回報、不寫入**。
         #

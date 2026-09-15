@@ -50,6 +50,43 @@ def test_classify_never_returns_placeholder():
                 assert gs.classify(oms_cn, doc_cn, has_key) != "待比對"
 
 
+# ---- want_for ---------------------------------------------------------------
+
+OMS_CODE = {"cn": {"代码"}, "keys": ["a.labels.code", "b.labels.code"]}
+
+
+def test_want_for_keeps_existing_doc_value_when_docs_miss():
+    """「+ Add Code」對不到 Add Code：比對不到不能把人家已有的文件現況清掉。"""
+    p = props(**{"文件現況": "添加代码", "文件出現次數": 1, "一致性": "僅文件有"})
+    w = gs.want_for(p, {"cn": set(), "keys": ["imc.labels.add_code"]}, None)
+    assert w["文件現況"] == "添加代码"
+    assert w["文件出現次數"] == 1
+    assert w["一致性"] == "僅文件有"
+
+
+def test_want_for_kept_doc_value_still_compared_with_oms():
+    p = props(**{"文件現況": "代码", "文件出現次數": 3})
+    w = gs.want_for(p, OMS_CODE, None)
+    assert w["一致性"] == "一致"
+    assert w["文件出現次數"] == 3
+
+
+def test_want_for_uses_docs_when_matched():
+    w = gs.want_for(props(**{"文件現況": "旧的"}), OMS_CODE, {"cn": {"代码"}, "n": 2})
+    assert w["文件現況"] == "代码"
+    assert w["文件出現次數"] == 2
+    assert w["一致性"] == "一致"
+    assert w["i18n key"] == "a.labels.code、b.labels.code"
+    assert w["OMS 使用處數"] == 2
+
+
+def test_want_for_no_docs_and_nothing_to_keep():
+    w = gs.want_for(props(), OMS_CODE, None)
+    assert w["文件現況"] == ""
+    assert w["文件出現次數"] == 0
+    assert w["一致性"] == "僅 OMS 有"
+
+
 # ---- plan_row ---------------------------------------------------------------
 
 WANT = {"文件現況": "", "OMS v0 現況": "订单", "i18n key": "order.title",
