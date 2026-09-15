@@ -360,6 +360,15 @@ def plan_row(props, want, fill_only):
     return write, {k: v for k, v in diff.items() if k not in write}
 
 
+def has_doc_evidence(props):
+    """列上有沒有文件那邊的證據（文件現況或出現次數）。
+
+    文件比對不到、列上卻有證據，代表是人從句子裡查證整理的（Link／Resume 取自心柔 10-1 的譯文、
+    Fulfillment 手寫了散文語境的 key），這種列只補空白、不覆蓋——即使還沒勾已確認。
+    """
+    return bool(current(props, "文件現況")) or (current(props, "文件出現次數") or 0) > 0
+
+
 def want_for(props, o, d):
     """一列該有的衍生欄位。o／d 是 OMS／文件的比對結果，比對不到是 None。
 
@@ -489,7 +498,7 @@ def main():
         print("同一個詞若列出多個中文，代表 OMS 自己就不一致，那更需要有人拍板。")
         return 0
 
-    changed, filled, unchanged, missing, locked = [], [], 0, [], []
+    changed, filled, unchanged, missing, locked, kept = [], [], 0, [], [], []
     for row in glossary:
         key = row["english"].lower()
         o, d = oms.get(key), docs.get(key)
@@ -520,11 +529,12 @@ def main():
         # 2026-09-14 放寬成「空白或待比對的欄位可以補」：術語檢查建的列勾了已確認之後，
         # 衍生欄位永遠停在待比對、越積越多。補空白不會蓋掉任何人做過的決定。
         confirmed = is_confirmed(row["props"])
-        write, rest = plan_row(row["props"], want, fill_only=confirmed)
+        curated = not d and has_doc_evidence(row["props"])
+        write, rest = plan_row(row["props"], want, fill_only=confirmed or curated)
         if write:
             (filled if confirmed else changed).append((row, write))
         if rest:
-            locked.append((row, rest))
+            (locked if confirmed else kept).append((row, rest))
         if not write and not rest:
             unchanged += 1
 
@@ -544,6 +554,13 @@ def main():
         if len(locked) > 10:
             print(f"   …另外 {len(locked) - 10} 筆")
         print("   （要重新採用 OMS 的值，把該列的「已確認」取消勾選再跑一次）")
+    if kept:
+        print(f"\n📌 有 {len(kept)} 筆未確認、文件比對不到但列上有人工整理的文件證據——有值的欄位**不覆蓋**：")
+        for row, d in kept[:10]:
+            print(f"   {row['english']}｜" + "、".join(f"{k}：{current(row['props'], k)!r} → {v!r}"
+                                                 for k, v in list(d.items())[:2]))
+        if len(kept) > 10:
+            print(f"   …另外 {len(kept) - 10} 筆")
     if missing:
         print(f"ℹ️ 有 {len(missing)} 筆兩邊都比對不到，只補「一致性＝無資料可比對」（原本空白或待比對的才補），其他原值保留")
         print("   （多是只出現在句子裡、不是獨立詞條的詞，腳本無從驗證）：")

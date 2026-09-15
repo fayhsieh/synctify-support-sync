@@ -87,6 +87,14 @@ def test_want_for_no_docs_and_nothing_to_keep():
     assert w["一致性"] == "僅 OMS 有"
 
 
+def test_has_doc_evidence():
+    assert gs.has_doc_evidence(props(**{"文件現況": "添加代码"}))
+    # Link：文件現況空白，但人工記了出現 3 次（取自句子裡的譯文）
+    assert gs.has_doc_evidence(props(**{"文件出現次數": 3}))
+    assert not gs.has_doc_evidence(props(**{"文件出現次數": 0}))
+    assert not gs.has_doc_evidence(props())
+
+
 # ---- plan_row ---------------------------------------------------------------
 
 WANT = {"文件現況": "", "OMS v0 現況": "订单", "i18n key": "order.title",
