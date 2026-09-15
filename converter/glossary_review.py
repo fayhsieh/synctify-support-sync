@@ -159,6 +159,29 @@ def _gr_sort_key(row):
     return (row["English"].lower(), row["id"])
 
 
+# ── 在審核區建列（取出、同步新詞共用）───────────────────────────────
+
+def _gr_create_op(row, review_db, note_prefix):
+    """完整表的一列 → 在審核區建同樣內容的一列。快照＝完整表這一列的值。"""
+    props = {name: _gr_prop(_GR_KINDS[name], row[name]) for name in REVIEW_PUSH_FIELDS + REVIEW_REF_FIELDS}
+    props[REVIEW_SOURCE] = _gr_prop("url", REVIEW_PAGE_URL_PREFIX + row["id"])
+    props[REVIEW_SNAPSHOT] = _gr_prop("rich_text", encode_snapshot(row))
+    return {"method": "POST", "path": "/pages",
+            "body": {"parent": {"database_id": review_db}, "properties": props},
+            "note": note_prefix + row["English"]}
+
+
+def review_create_ops(full_pages, review_db):
+    """同步把新詞建進完整表後，用 API 回傳的那一列在審核區建同樣的一列（Fay 2026-09-15）。
+
+    快照取自回傳內容——也就是完整表實際存下的值——所以推送時不會被判成衝突。
+    這些列剛建立，審核區不可能已經有，不必查重複。建列失敗的回應（沒有 id）與已確認的列都不建。
+    """
+    rows = sorted((review_values(p) for p in _gr_alive(full_pages) if p.get("object", "page") == "page"),
+                  key=_gr_sort_key)
+    return [_gr_create_op(row, review_db, "同步新詞：") for row in rows if row["id"] and not row["已確認"]]
+
+
 # ── 取出待確認 ───────────────────────────────────────────────────────
 
 def review_pull_plan(full_pages, review_pages, page_children, review_db, now):
@@ -168,17 +191,9 @@ def review_pull_plan(full_pages, review_pages, page_children, review_db, now):
     full_by_id = {row["id"]: row for row in full}
     in_review = {review_norm_id(row[REVIEW_SOURCE]) for row in review}
 
-    creates = []
-    for row in sorted(full, key=_gr_sort_key):
-        if row["已確認"] or row["id"] in in_review:
-            continue
-        props = {name: _gr_prop(_GR_KINDS[name], row[name])
-                 for name in REVIEW_PUSH_FIELDS + REVIEW_REF_FIELDS}
-        props[REVIEW_SOURCE] = _gr_prop("url", REVIEW_PAGE_URL_PREFIX + row["id"])
-        props[REVIEW_SNAPSHOT] = _gr_prop("rich_text", encode_snapshot(row))
-        creates.append({"method": "POST", "path": "/pages",
-                        "body": {"parent": {"database_id": review_db}, "properties": props},
-                        "note": "取出：" + row["English"]})
+    creates = [_gr_create_op(row, review_db, "取出：")
+               for row in sorted(full, key=_gr_sort_key)
+               if not row["已確認"] and row["id"] not in in_review]
 
     flags = []
     for row in review:

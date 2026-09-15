@@ -159,6 +159,66 @@ def test_archived_pages_are_ignored():
     assert ops(plan, 0) == []
 
 
+# ---- 同步新詞同時建進審核區 ---------------------------------------------
+
+def written_to_read(props):
+    """寫入格式 → Notion 讀回的格式（模擬審核區建好後查到的列）。"""
+    out = {}
+    for name, p in props.items():
+        if "title" in p:
+            out[name] = {"type": "title", "title": [{"plain_text": s["text"]["content"]} for s in p["title"]]}
+        elif "rich_text" in p:
+            out[name] = {"type": "rich_text",
+                         "rich_text": [{"plain_text": s["text"]["content"]} for s in p["rich_text"]]}
+        elif "select" in p:
+            out[name] = {"type": "select", "select": p["select"]}
+        elif "checkbox" in p:
+            out[name] = {"type": "checkbox", "checkbox": p["checkbox"]}
+        elif "url" in p:
+            out[name] = {"type": "url", "url": p["url"]}
+    return out
+
+
+def test_create_ops_from_rows_the_sync_just_created():
+    created = dict(full_page("a" * 32, "Short-Shipped", "", note="2026-09-15 同步〈X〉時自動建立"), object="page")
+    result = gr.review_create_ops([created], REVIEW_DB)
+    assert [op["note"] for op in result] == ["同步新詞：Short-Shipped"]
+    body = result[0]["body"]
+    assert body["parent"] == {"database_id": REVIEW_DB}
+    assert body["properties"][gr.REVIEW_SOURCE] == {"url": gr.REVIEW_PAGE_URL_PREFIX + "a" * 32}
+    assert body["properties"]["備註"]["rich_text"][0]["text"]["content"] == "2026-09-15 同步〈X〉時自動建立"
+
+
+def test_create_ops_skip_failed_responses_and_confirmed_rows():
+    failed = {"error": {"message": "403 insufficient permissions"}}
+    confirmed = full_page("a" * 32, "Add", "添加", ok=True)
+    assert gr.review_create_ops([failed, confirmed], REVIEW_DB) == []
+
+
+def test_rows_created_by_sync_push_without_conflict():
+    """Fay 2026-09-15：兩邊寫入一樣的內容，推送回去時不會衝突。"""
+    created = full_page("a" * 32, "Short-Shipped", "")
+    body = gr.review_create_ops([created], REVIEW_DB)[0]["body"]
+    review = {"id": "1" * 32, "properties": written_to_read(body["properties"])}
+    review["properties"]["简体中文"] = _rt("短装")              # 心柔補簡中、勾確認
+    review["properties"]["已確認"] = {"type": "checkbox", "checkbox": True}
+    plan = gr.review_push_plan([created], [review], CHILDREN, REVIEW_PAGE, NOW)
+    assert plan["counts"]["conflicts"] == 0
+    assert plan["phases"][0][0]["body"]["properties"] == {
+        "简体中文": {"rich_text": [{"type": "text", "text": {"content": "短装"}}]},
+        "已確認": {"checkbox": True}}
+    assert plan["phases"][1][0]["body"] == {"archived": True}
+
+
+def test_pull_after_sync_does_not_duplicate():
+    """同步已經建進審核區的詞，之後按「取出待確認」不會重複建立。"""
+    created = full_page("a" * 32, "Short-Shipped", "")
+    body = gr.review_create_ops([created], REVIEW_DB)[0]["body"]
+    review = {"id": "1" * 32, "properties": written_to_read(body["properties"])}
+    plan = gr.review_pull_plan([created], [review], CHILDREN, REVIEW_DB, NOW)
+    assert ops(plan, 0) == []
+
+
 # ---- 推送回完整表 -------------------------------------------------------
 
 def test_push_writes_changed_fields_and_keeps_unconfirmed_row_with_new_snapshot():

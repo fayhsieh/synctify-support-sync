@@ -589,6 +589,34 @@ GLOSSARY_PAGE_ID = "3bc2f2ede27d81238c4fd63c958ac9fc"   # 術語表頁面：變�
 GLOSSARY_URL = "https://app.notion.com/p/" + GLOSSARY_PAGE_ID
 # 術語檢查留言的連結指向審核區（2026-09-15 起在那裡補術語、推送回完整表）
 REVIEW_URL = "https://app.notion.com/p/3dc2f2ede27d81609ffae4e44ee1d02e"
+# 新詞建進完整表後，同一份內容也建進審核區（Fay 2026-09-15：不用再手動按「取出待確認」）
+REVIEW_DB_ID = "0caf57e29f4a4831b93b7c5766a97fa4"
+
+REVIEW_ROWS_ADAPTER = r'''
+
+# ─── n8n 轉接層 ───
+# 上游「收合建列結果」一個 item：pages＝剛建進完整表的列（Notion API 回傳的實際內容）。
+# 快照取自回傳內容，推送時才不會被判成衝突。
+_REVIEW_DB = __REVIEW_DB__
+_pages = []
+for _it in _items:
+    _pages.extend(_it['json'].get('pages') or [])
+_ops = review_create_ops(_pages, _REVIEW_DB)
+if not _ops:
+    return [{'json': {'skip': True}}]
+return [{'json': _op['body']} for _op in _ops]
+'''
+
+
+def review_rows_code():
+    """「組出審核區列」的 Python code node：converter/glossary_review.py＋轉接層（模組不 import 任何東西）。"""
+    src = (CONVERTER / "glossary_review.py").read_text(encoding="utf-8")
+    header = ("# " + "=" * 66 + "\n"
+              "#  自動產生，請勿直接編輯\n"
+              "#  來源：converter/glossary_review.py\n"
+              "#  重新產生：./.venv/bin/python scripts/build_n8n_code_node.py --target <站> --local\n"
+              "# " + "=" * 66 + "\n")
+    return header + src + REVIEW_ROWS_ADAPTER.replace("__REVIEW_DB__", json.dumps(REVIEW_DB_ID))
 TRANSLATE_STATUS_PROP = "翻譯狀態"
 TERM_CHECK_PROP = "術語檢查"
 # 勾選輪詢用的 checkbox 屬性與間隔。POLLING="removed" 時不會被引用，
@@ -1454,11 +1482,47 @@ def build_polling_workflow(code):
 
         {"parameters": {"jsCode":
             "const all = $input.all();\n"
-            "const ok = all.filter(i => i.json && i.json.object === 'page').length;\n"
-            "return [{ json: { created: ok, failed: all.length - ok } }];"},
+            "const pages = all.filter(i => i.json && i.json.object === 'page').map(i => i.json);\n"
+            "return [{ json: { created: pages.length, failed: all.length - pages.length, pages } }];"},
          "id": nid(), "name": "收合建列結果", "type": "n8n-nodes-base.code",
          "typeVersion": 2, "position": [5040, 480],
-         "notes": "把逐詞的建列結果收回一個 item，下游只跑一次。"},
+         "notes": "把逐詞的建列結果收回一個 item，下游只跑一次。\n"
+                  "pages＝建好的完整表列（API 回傳的實際內容），給「組出審核區列」用。"},
+
+        # ── 新詞同時建進審核區（Fay 2026-09-15）─────────────────────────────
+        # 原本要到審核頁手動按「取出待確認」。用完整表建列的回應組審核區的列，快照＝完整表
+        # 實際存下的值，推送時不會衝突。失敗不影響同步，留言會提醒改按「取出待確認」補上。
+        {"parameters": {"language": "pythonNative", "pythonCode": review_rows_code()},
+         "id": nid(), "name": "組出審核區列", "type": "n8n-nodes-base.code",
+         "typeVersion": 2, "position": [5040, 760], "onError": "continueRegularOutput",
+         "notes": "自動產生，勿直接編輯——改 converter/glossary_review.py 後重新跑產生器。\n"
+                  "沒有要建的列時輸出一筆 skip（輸出 0 筆的話下游整條不會執行）。"},
+
+        {"parameters": {"conditions": {
+            "options": {"caseSensitive": True, "typeValidation": "loose", "version": 2},
+            "conditions": [{"id": nid(),
+                            "leftValue": "={{ $json.skip !== true }}",
+                            "operator": {"type": "boolean", "operation": "true",
+                                         "singleValue": True}}],
+            "combinator": "and"}},
+         "id": nid(), "name": "有審核區列要建？", "type": "n8n-nodes-base.if",
+         "typeVersion": 2.2, "position": [5260, 760]},
+
+        {"parameters": notion_http("POST", "https://api.notion.com/v1/pages", "={{ $json }}"),
+         "id": nid(), "name": "Notion：建立審核區列",
+         "type": "n8n-nodes-base.httpRequest", "typeVersion": 4.2, "position": [5480, 680],
+         "onError": "continueRegularOutput",
+         "credentials": {"notionApi": {"id": NOTION_CRED_ID, "name": NOTION_CRED_NAME}},
+         "notes": "⚠️ Support Center Sync 要連到審核頁（產品用術語表（審核區）→ … → Connections）。"},
+
+        {"parameters": {"jsCode":
+            "const expected = ($('收合建列結果').first().json.pages || []).length;\n"
+            "const created = $input.all().filter(i => i.json && i.json.object === 'page').length;\n"
+            "return [{ json: { created, failed: Math.max(expected - created, 0) } }];"},
+         "id": nid(), "name": "收合審核區結果", "type": "n8n-nodes-base.code",
+         "typeVersion": 2, "position": [5700, 680],
+         "notes": "失敗數用「應建幾列」減「建成幾列」算：組出審核區列本身出錯時，\n"
+                  "流下來的是一筆錯誤而不是逐詞的結果。"},
 
         {"parameters": {**notion_http(
             "GET", "https://api.notion.com/v1/blocks/" + GLOSSARY_PAGE_ID + "/children?page_size=100"),
@@ -1533,6 +1597,9 @@ def build_polling_workflow(code):
             "={{ (() => { let note = '';"
             " try { if ($('收合建列結果').isExecuted) { const f = $('收合建列結果').first().json;"
             " if (f.failed) note = '\\n\\n⚠️ 有 ' + f.failed + ' 個新詞沒能自動加入術語表（多半是 Notion 權限），請手動新增。'; } } catch (e) {}"
+            " try { if ($('收合審核區結果').isExecuted) { const g = $('收合審核區結果').first().json;"
+            " if (g.failed) note += '\\n\\n⚠️ 有 ' + g.failed + ' 個新詞已加入術語表、但沒能同步加進審核區，"
+            "請到審核區按「取出待確認」補上。'; } } catch (e) {}"
             # term_comment 已是 rich_text 陣列：[0] 粗體「術語檢查」[1] 本文 [2] 空行＋👉
             # [3] 可點的術語表連結（見 term_check.comment_rich_text）。建列失敗的提醒插在 [1] 之後。
             " const r = $('" + CONV + "').first().json.term_comment || [];"
@@ -1644,12 +1711,16 @@ def build_polling_workflow(code):
     conns["有新詞？"] = {"main": [_to("拆出新詞"), _to("有待處理術語？")]}
     for a, b in (("拆出新詞", "Notion：建立術語草稿列"),
                  ("Notion：建立術語草稿列", "收合建列結果"),
-                 ("收合建列結果", "Notion：取術語表頁面區塊"),
+                 ("收合建列結果", "組出審核區列"),
+                 ("組出審核區列", "有審核區列要建？"),
+                 ("Notion：建立審核區列", "收合審核區結果"),
+                 ("收合審核區結果", "Notion：取術語表頁面區塊"),
                  ("Notion：取術語表頁面區塊", "組出變更紀錄寫入"),
                  ("組出變更紀錄寫入", "有變更紀錄要寫？"),
                  ("Notion：寫入變更紀錄", "有待處理術語？"),
                  ("Notion：留言術語檢查", "彙整警告")):
         conns[a] = {"main": [_to(b)]}
+    conns["有審核區列要建？"] = {"main": [_to("Notion：建立審核區列"), _to("Notion：取術語表頁面區塊")]}
     conns["有變更紀錄要寫？"] = {"main": [_to("Notion：寫入變更紀錄"), _to("有待處理術語？")]}
     conns["有待處理術語？"] = {"main": [_to("Notion：留言術語檢查"), _to("彙整警告")]}
     conns["彙整警告"] = {"main": [[{"node": "有警告？", "type": "main", "index": 0}]]}
