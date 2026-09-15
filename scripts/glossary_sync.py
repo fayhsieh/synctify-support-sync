@@ -321,7 +321,9 @@ def propose_from_oms(oms, glossary, docs, top=40, min_keys=1):
     return out[:top]
 
 
-def classify(oms_cn, doc_cn):
+def classify(oms_cn, doc_cn, oms_has_key=False):
+    """「待比對」只留給「腳本還沒跑過」的新列（術語檢查建的草稿），這裡永遠不回它——
+    否則跑完腳本、兩邊都沒有中文的詞還是停在待比對，看起來像沒處理（Fay 2026-09-14）。"""
     if oms_cn and doc_cn:
         if len(oms_cn) > 1:
             return "OMS 自己不一致"
@@ -330,7 +332,32 @@ def classify(oms_cn, doc_cn):
         return "OMS 自己不一致" if len(oms_cn) > 1 else "僅 OMS 有"
     if doc_cn:
         return "僅文件有"
-    return "待比對"
+    # OMS 語言檔有這個英文字串、卻沒有 zh_CN：產品簡中介面會直接顯示英文
+    return "OMS 缺中文" if oms_has_key else "無資料可比對"
+
+
+# 可以「補上」的現值：空白，或術語檢查建列時先填的佔位值
+_FILLABLE = (None, "", "待比對")
+
+
+def plan_row(props, want, fill_only):
+    """決定這一列要寫哪些欄位，回傳 (write, rest)。
+
+    fill_only＝只補空白或「待比對」的欄位，已經有值的一律不動；有值但與比對結果
+    不同的放進 rest 只回報。用在兩種列：
+    - 已確認的列：人審過的列不能被腳本重算（見 main 裡 Cartons 的說明），
+      但衍生欄位空著沒有意義——Fay 2026-09-14 同意這種列可以補空白。
+    - 兩邊都比對不到的列：原本整筆跳過，現在只補「一致性」，手寫的值照樣保留。
+    """
+    diff = {k: v for k, v in want.items() if current(props, k) != v}
+    if not fill_only:
+        return diff, {}
+    # 現值空、比對結果也是空（欄位不存在會讀成 None）：不是差異，不要寫也不要回報
+    diff = {k: v for k, v in diff.items()
+            if not (current(props, k) in (None, "") and v in (None, ""))}
+    write = {k: v for k, v in diff.items()
+             if current(props, k) in _FILLABLE and v not in (None, "")}
+    return write, {k: v for k, v in diff.items() if k not in write}
 
 
 def is_confirmed(props):
@@ -352,7 +379,9 @@ def current(props, name):
 
 def main():
     ap = argparse.ArgumentParser(description="把衍生欄位寫回 Notion 產品用術語表")
-    wp_env.add_target_arg(ap, default="test")
+    # 預設讀正式站：「文件現況」取自心柔在正式站精修的人工譯文。測試站缺很多
+    # （2026-09-14 實測 686 vs 正式站 1083 筆），拿測試站寫入會把 25 列的文件現況清空。
+    wp_env.add_target_arg(ap, default="prod")
     ap.add_argument("--write", action="store_true", help="實際寫入（預設只報告）")
     ap.add_argument("--propose", action="store_true",
                     help="只列出「OMS 裡有、術語表沒有」的候選詞，不寫入任何欄位")
@@ -383,7 +412,14 @@ def main():
     oms = fetch_oms_lang()
     print(f"  {len(oms)} 個英文字串")
     print(f"讀取 {wp.label} 人工譯文…")
-    docs = fetch_docs(wp, args.language or env.get("TP_TARGET_LANGUAGE", "zh_CN"))
+    try:
+        docs = fetch_docs(wp, args.language or env.get("TP_TARGET_LANGUAGE", "zh_CN"))
+    except json.JSONDecodeError:
+        # 正式站有 WAF IP 白名單，不在白名單會回 202 challenge 頁（HTML），不是 JSON
+        sys.exit(f"✗ 讀不到{wp.label}的譯文（回應不是 JSON）。"
+                 + ("正式站要先連 VPN 再跑。" if args.target == "prod" else ""))
+    if args.write and args.target != "prod":
+        print(f"⚠️ 用{wp.label}的譯文寫入：它比正式站少，「文件現況」可能被清空")
     print(f"  {len(docs)} 個英文字串")
     print("讀取 Notion 術語表…")
     glossary = fetch_glossary(token)
@@ -429,16 +465,19 @@ def main():
         print("同一個詞若列出多個中文，代表 OMS 自己就不一致，那更需要有人拍板。")
         return 0
 
-    changed, unchanged, missing, locked = [], 0, [], []
+    changed, filled, unchanged, missing, locked = [], [], 0, [], []
     for row in glossary:
         key = row["english"].lower()
         o, d = oms.get(key), docs.get(key)
         if not o and not d:
-            # 兩邊都比對不到就**整筆跳過**，不要把欄位清空。
+            # 兩邊都比對不到：**只補「一致性」，其他欄位不動**，不要把欄位清空。
             # 比對是「完全相符的字串」，而像 SSCC、ASIN 這種只出現在句子裡面、
             # 不是獨立詞條的詞，腳本本來就找不到——那不代表資訊不存在，
             # 只代表這支腳本無從驗證。擦掉人手寫的內容比留著舊值糟得多。
             missing.append(row["english"])
+            write, _ = plan_row(row["props"], {"一致性": classify([], [])}, fill_only=True)
+            if write:
+                (filled if is_confirmed(row["props"]) else changed).append((row, write))
             continue
         oms_cn = sorted(o["cn"]) if o else []
         doc_cn = sorted(d["cn"]) if d else []
@@ -447,13 +486,12 @@ def main():
             "文件現況": "／".join(doc_cn),
             "OMS v0 現況": "／".join(oms_cn),
             "i18n key": "、".join(o["keys"][:3]) if o else "",
-            "一致性": classify(oms_cn, doc_cn),
+            "一致性": classify(oms_cn, doc_cn, oms_has_key=bool(o)),
             "文件出現次數": d["n"] if d else 0,
             "OMS 使用處數": len(o["keys"]) if o else 0,
         }
-        diff = {k: v for k, v in want.items() if current(row["props"], k) != v}
 
-        # 已確認的列：**回報差異但不寫入**。
+        # 已確認的列：**空白的欄位補上，有值但不同的只回報、不寫入**。
         #
         # 起因（2026-09-08）：Cartons 一列底下混了三個語意不同的 i18n key
         # （carton_quantity=箱数、cartons_count=纸箱数 兩個是「數量」，
@@ -464,16 +502,25 @@ def main():
         # 更一般地說：老闆已經審過這張表了，人工決定過的列不該被腳本重算。
         # 但也不能完全不看——OMS 之後改了字串，我們要知道。所以折衷成
         # 「照樣比對、照樣回報，就是不寫」。看得到漂移，也不會被覆蓋。
-        if diff and is_confirmed(row["props"]):
-            locked.append((row, diff))
-            continue
-
-        if diff:
-            changed.append((row, diff))
-        else:
+        #
+        # 2026-09-14 放寬成「空白或待比對的欄位可以補」：術語檢查建的列勾了已確認之後，
+        # 衍生欄位永遠停在待比對、越積越多。補空白不會蓋掉任何人做過的決定。
+        confirmed = is_confirmed(row["props"])
+        write, rest = plan_row(row["props"], want, fill_only=confirmed)
+        if write:
+            (filled if confirmed else changed).append((row, write))
+        if rest:
+            locked.append((row, rest))
+        if not write and not rest:
             unchanged += 1
 
-    print(f"需要更新 {len(changed)} 筆，已是最新 {unchanged} 筆")
+    print(f"需要更新 {len(changed)} 筆（未確認），已是最新 {unchanged} 筆")
+    if filled:
+        print(f"\n✏️ 有 {len(filled)} 筆已確認的列，只補空白或「待比對」的衍生欄位（已有的值不動）：")
+        for row, w in filled[:15]:
+            print(f"   {row['english']}｜" + "、".join(f"{k}→{v!r}" for k, v in w.items()))
+        if len(filled) > 15:
+            print(f"   …另外 {len(filled) - 15} 筆")
     if locked:
         print(f"\n🔒 有 {len(locked)} 筆已確認、但與 OMS 現況不同——**只回報，不寫入**：")
         for row, d in locked[:10]:
@@ -484,7 +531,7 @@ def main():
             print(f"   …另外 {len(locked) - 10} 筆")
         print("   （要重新採用 OMS 的值，把該列的「已確認」取消勾選再跑一次）")
     if missing:
-        print(f"ℹ️ 有 {len(missing)} 筆兩邊都比對不到，**整筆跳過、原值保留**")
+        print(f"ℹ️ 有 {len(missing)} 筆兩邊都比對不到，只補「一致性＝無資料可比對」（原本空白或待比對的才補），其他原值保留")
         print("   （多是只出現在句子裡、不是獨立詞條的詞，腳本無從驗證）：")
         print("   " + "、".join(missing[:12]) + ("…" if len(missing) > 12 else ""))
 
@@ -497,7 +544,8 @@ def main():
         print(f"\n確認後加 --write 實際寫入。**不會動到 简体中文／繁體中文／已確認／備註／類型**。")
         return 0
 
-    for i, (row, diff) in enumerate(changed, 1):
+    todo = changed + filled
+    for i, (row, diff) in enumerate(todo, 1):
         props = {}
         for k, v in diff.items():
             if k in ("文件出現次數", "OMS 使用處數"):
@@ -507,8 +555,8 @@ def main():
             else:
                 props[k] = {"rich_text": [{"text": {"content": v[:2000]}}] if v else []}
         notion(f"/pages/{row['id']}", token, "PATCH", {"properties": props})
-        if i % 20 == 0 or i == len(changed):
-            print(f"  已更新 {i}／{len(changed)}")
+        if i % 20 == 0 or i == len(todo):
+            print(f"  已更新 {i}／{len(todo)}")
     print("✓ 完成")
     return 0
 
