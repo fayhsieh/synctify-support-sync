@@ -1,4 +1,4 @@
-"""術語審核區（本機版）：取出待確認／推送回完整表。
+"""術語審核區（本機版）：同步待確認／推送回完整表。
 
     ./.venv/bin/python scripts/glossary_review.py pull            # 只列出會做什麼
     ./.venv/bin/python scripts/glossary_review.py pull --write
@@ -20,8 +20,9 @@ import glossary_review as gr  # noqa: E402
 import glossary_sync as gs  # noqa: E402
 import wp_env  # noqa: E402
 
-REVIEW_PAGE = "3dc2f2ede27d81609ffae4e44ee1d02e"   # 審核頁（原「翻譯用精簡版」）
-REVIEW_DB = "0caf57e29f4a4831b93b7c5766a97fa4"     # 待確認詞彙（審核區）
+WORK_PAGE = "3dc2f2ede27d80d9aa01cf56910ec8b1"     # 「術語審核區」：按鈕、審核區檢視、頁首狀態列（Fay 2026-09-15 搬過來）
+LOG_PAGE = "3dc2f2ede27d81609ffae4e44ee1d02e"      # 「產品用術語表（審核區）」：說明與推送紀錄
+REVIEW_DB = "0caf57e29f4a4831b93b7c5766a97fa4"     # 待確認詞彙（審核區）；術語審核區頁上是它的連結檢視
 TAIPEI = datetime.timezone(datetime.timedelta(hours=8))
 
 
@@ -50,8 +51,8 @@ def children_of(page_id, token):
 
 
 def main():
-    ap = argparse.ArgumentParser(description="術語審核區：取出待確認／推送回完整表")
-    ap.add_argument("action", choices=["pull", "push"], help="pull＝取出待確認、push＝推送回完整表")
+    ap = argparse.ArgumentParser(description="術語審核區：同步待確認／推送回完整表")
+    ap.add_argument("action", choices=["pull", "push"], help="pull＝同步待確認、push＝推送回完整表")
     ap.add_argument("--write", action="store_true", help="實際寫入 Notion（預設只列出會做什麼）")
     args = ap.parse_args()
 
@@ -61,12 +62,12 @@ def main():
 
     full = query_all(gs.GLOSSARY_DB, token)
     review = query_all(REVIEW_DB, token)
-    kids = children_of(REVIEW_PAGE, token)
+    kids = children_of(WORK_PAGE, token)
     now = datetime.datetime.now(TAIPEI).strftime("%Y-%m-%d %H:%M")
     if args.action == "pull":
         plan = gr.review_pull_plan(full, review, kids, REVIEW_DB, now)
     else:
-        plan = gr.review_push_plan(full, review, kids, REVIEW_PAGE, now)
+        plan = gr.review_push_plan(full, review, kids, LOG_PAGE, now)
 
     print(f"完整表 {len(full)} 列、審核區 {len(review)} 列")
     print(plan["summary"])

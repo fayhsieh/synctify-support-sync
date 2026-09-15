@@ -587,9 +587,10 @@ NOTION_DB_ID = "3272f2ed-e27d-807e-9fac-f2313dd2d0de"
 GLOSSARY_DB_ID = "1ab2891d5ddd48db97d1f1c1afeefcf5"     # database id：查詢與建列的 parent
 GLOSSARY_PAGE_ID = "3bc2f2ede27d81238c4fd63c958ac9fc"   # 術語表頁面：變更紀錄寫在這頁
 GLOSSARY_URL = "https://app.notion.com/p/" + GLOSSARY_PAGE_ID
-# 術語檢查留言的連結指向審核區（2026-09-15 起在那裡補術語、推送回完整表）
-REVIEW_URL = "https://app.notion.com/p/3dc2f2ede27d81609ffae4e44ee1d02e"
-# 新詞建進完整表後，同一份內容也建進審核區（Fay 2026-09-15：不用再手動按「取出待確認」）
+# 術語檢查留言的連結指向「術語審核區」頁（按鈕與審核區檢視都在這頁；Fay 2026-09-15 從
+# 「產品用術語表（審核區）」搬過來，那頁留作說明與推送紀錄）
+REVIEW_URL = "https://app.notion.com/p/3dc2f2ede27d80d9aa01cf56910ec8b1"
+# 新詞建進完整表後，同一份內容也建進審核區（Fay 2026-09-15：不用再手動按「同步待確認」）
 REVIEW_DB_ID = "0caf57e29f4a4831b93b7c5766a97fa4"
 
 REVIEW_ROWS_ADAPTER = r'''
@@ -1490,8 +1491,8 @@ def build_polling_workflow(code):
                   "pages＝建好的完整表列（API 回傳的實際內容），給「組出審核區列」用。"},
 
         # ── 新詞同時建進審核區（Fay 2026-09-15）─────────────────────────────
-        # 原本要到審核頁手動按「取出待確認」。用完整表建列的回應組審核區的列，快照＝完整表
-        # 實際存下的值，推送時不會衝突。失敗不影響同步，留言會提醒改按「取出待確認」補上。
+        # 原本要到審核頁手動按「同步待確認」。用完整表建列的回應組審核區的列，快照＝完整表
+        # 實際存下的值，推送時不會衝突。失敗不影響同步，留言會提醒改按「同步待確認」補上。
         {"parameters": {"language": "pythonNative", "pythonCode": review_rows_code()},
          "id": nid(), "name": "組出審核區列", "type": "n8n-nodes-base.code",
          "typeVersion": 2, "position": [5040, 760], "onError": "continueRegularOutput",
@@ -1599,7 +1600,7 @@ def build_polling_workflow(code):
             " if (f.failed) note = '\\n\\n⚠️ 有 ' + f.failed + ' 個新詞沒能自動加入術語表（多半是 Notion 權限），請手動新增。'; } } catch (e) {}"
             " try { if ($('收合審核區結果').isExecuted) { const g = $('收合審核區結果').first().json;"
             " if (g.failed) note += '\\n\\n⚠️ 有 ' + g.failed + ' 個新詞已加入術語表、但沒能同步加進審核區，"
-            "請到審核區按「取出待確認」補上。'; } } catch (e) {}"
+            "請到審核區按「同步待確認」補上。'; } } catch (e) {}"
             # term_comment 已是 rich_text 陣列：[0] 粗體「術語檢查」[1] 本文 [2] 空行＋👉
             # [3] 可點的術語表連結（見 term_check.comment_rich_text）。建列失敗的提醒插在 [1] 之後。
             " const r = $('" + CONV + "').first().json.term_comment || [];"

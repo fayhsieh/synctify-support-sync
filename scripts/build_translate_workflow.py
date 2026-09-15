@@ -105,8 +105,8 @@ TERM_CHECK_PROP = "術語檢查"
 # （後者查會回 404，而訊息是誤導性的「請與 integration 分享」）。
 GLOSSARY_DB = "1ab2891d5ddd48db97d1f1c1afeefcf5"
 GLOSSARY_URL = "https://app.notion.com/p/3bc2f2ede27d81238c4fd63c958ac9fc"
-# 術語閘門留言的連結指向審核區（2026-09-15 起在那裡補術語、推送回完整表）
-REVIEW_URL = "https://app.notion.com/p/3dc2f2ede27d81609ffae4e44ee1d02e"
+# 術語閘門留言的連結指向「術語審核區」頁（按鈕與審核區檢視都在這頁，Fay 2026-09-15）
+REVIEW_URL = "https://app.notion.com/p/3dc2f2ede27d80d9aa01cf56910ec8b1"
 
 # 中轉站上 Sam 為 Fay 建的組合模型（2026-09-14）。組合裡依序是
 #   GPT 5.6 Terra → Claude Sonnet 5 → GLM 5.2 → DeepSeek V4 Flash，

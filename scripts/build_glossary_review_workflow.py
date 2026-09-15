@@ -3,7 +3,8 @@
     ./.venv/bin/python scripts/build_glossary_review_workflow.py
     → n8n/local/glossary-review.workflow.json（帶真實 webhook path，不入庫）
 
-- 取出待確認：完整術語表還沒勾「已確認」的列 → 複製到審核區（已在審核區的不覆蓋）
+- 同步待確認（原名取出待確認）：完整術語表還沒勾「已確認」的列 → 複製到審核區（已在審核區的不覆蓋）。
+  同步 WP 時撈到的新詞已自動建進審核區，這顆補的是手動加進完整表的詞
 - 推送回完整表：審核區有改動的列寫回完整表；勾了「已確認」的寫回後移出審核區
 
 判斷全部在 converter/glossary_review.py（與本機腳本 scripts/glossary_review.py 共用、有測試），
@@ -35,11 +36,12 @@ WEBHOOK_PLACEHOLDER = "synctify-glossary-review-CHANGE-ME-TO-A-RANDOM-STRING"
 
 GLOSSARY_DB = "1ab2891d5ddd48db97d1f1c1afeefcf5"    # 完整術語表
 REVIEW_DB = "0caf57e29f4a4831b93b7c5766a97fa4"      # 待確認詞彙（審核區）
-REVIEW_PAGE = "3dc2f2ede27d81609ffae4e44ee1d02e"    # 審核頁：狀態列、推送紀錄、失敗留言都在這
+WORK_PAGE = "3dc2f2ede27d80d9aa01cf56910ec8b1"      # 「術語審核區」：按鈕、審核區檢視、頁首狀態列、失敗留言
+LOG_PAGE = "3dc2f2ede27d81609ffae4e44ee1d02e"       # 「產品用術語表（審核區）」：推送紀錄寫在這頁
 
 PLAN = "計算要做的事"
 REASON_FAIL = "原因：節點失敗"
-PHASES = 3          # 取出用前 2 階段（建立＋標註、狀態列），推送用 3 階段（完整表、審核區、紀錄＋狀態列）
+PHASES = 3          # 同步待確認用前 2 階段（建立＋標註、狀態列），推送用 3 階段（完整表、審核區、紀錄＋狀態列）
 
 _ID_NS = uuid.UUID("2b8e61d4-3f0a-4c55-9d7e-8a1f3c6b0e27")
 
@@ -55,7 +57,7 @@ ADAPTER = r'''
 # **依形狀分辨**而不是依順序：頁面依 parent.database_id 分到完整表或審核區，區塊看 object。
 _GLOSSARY_DB = __GLOSSARY_DB__
 _REVIEW_DB = __REVIEW_DB__
-_REVIEW_PAGE = __REVIEW_PAGE__
+_LOG_PAGE = __LOG_PAGE__
 
 _full, _review, _children = [], [], []
 _action, _now = '', ''
@@ -83,9 +85,9 @@ if not _full:
 if _action == 'pull':
     _plan = review_pull_plan(_full, _review, _children, _REVIEW_DB, _now)
 elif _action == 'push':
-    _plan = review_push_plan(_full, _review, _children, _REVIEW_PAGE, _now)
+    _plan = review_push_plan(_full, _review, _children, _LOG_PAGE, _now)
 else:
-    raise ValueError('不知道要取出還是推送（action=' + repr(_action) + '）')
+    raise ValueError('不知道要同步待確認還是推送（action=' + repr(_action) + '）')
 _plan['stat_full'] = len(_full)
 _plan['stat_review'] = len(_review)
 return [{'json': _plan}]
@@ -102,7 +104,7 @@ def plan_code():
               "# " + "=" * 66 + "\n")
     adapter = (ADAPTER.replace("__GLOSSARY_DB__", json.dumps(GLOSSARY_DB))
                .replace("__REVIEW_DB__", json.dumps(REVIEW_DB))
-               .replace("__REVIEW_PAGE__", json.dumps(REVIEW_PAGE)))
+               .replace("__LOG_PAGE__", json.dumps(LOG_PAGE)))
     return header + src + adapter
 
 
@@ -163,20 +165,20 @@ def build(webhook_base):
         ]}, "options": {}},
             "id": n(key), "name": name, "type": "n8n-nodes-base.set", "typeVersion": 3.4, "position": pos}
 
-    button_notes = ("Notion「產品用術語表（審核區）」頁上的「{label}」按鈕 → Send webhook。\n"
+    button_notes = ("Notion「術語審核區」頁上的「{label}」按鈕 → Send webhook。\n"
                     "網址用這個節點的 Production URL；Add custom header 填與「同步到 WP」按鈕同一組\n"
                     "（共用 Header Auth 憑證）。\n\n"
-                    "⚠️ Support Center Sync 這個 Notion integration 要連到審核頁（頁面 … → Connections），\n"
+                    "⚠️ Support Center Sync 這個 Notion integration 要連到「術語審核區」和「產品用術語表（審核區）」兩頁（頁面 … → Connections），\n"
                     "否則讀審核區會回 404。\n\n"
                     "path 取自 .env 的 " + WEBHOOK_ENV + "（不入庫）。")
 
     nodes = [
         {"parameters": {"httpMethod": "POST", "path": webhook_base + "-pull", "responseMode": "onReceived",
                         "authentication": "headerAuth", "options": {}},
-         "id": n("wh-pull"), "name": "按鈕：取出待確認（Webhook）", "type": "n8n-nodes-base.webhook",
+         "id": n("wh-pull"), "name": "按鈕：同步待確認（Webhook）", "type": "n8n-nodes-base.webhook",
          "typeVersion": 2, "position": [0, 200], "webhookId": n("wh-pull-id"),
          "credentials": {"httpHeaderAuth": WEBHOOK_AUTH_CRED},
-         "notes": button_notes.format(label="取出待確認")},
+         "notes": button_notes.format(label="同步待確認")},
         {"parameters": {"httpMethod": "POST", "path": webhook_base + "-push", "responseMode": "onReceived",
                         "authentication": "headerAuth", "options": {}},
          "id": n("wh-push"), "name": "按鈕：推送回完整表（Webhook）", "type": "n8n-nodes-base.webhook",
@@ -184,14 +186,14 @@ def build(webhook_base):
          "credentials": {"httpHeaderAuth": WEBHOOK_AUTH_CRED},
          "notes": button_notes.format(label="推送回完整表")},
 
-        action_node("act-pull", "動作：取出", "pull", [220, 200]),
+        action_node("act-pull", "動作：同步待確認", "pull", [220, 200]),
         action_node("act-push", "動作：推送", "push", [220, 500]),
 
         query_node("q-full", "Notion：取完整術語表", [460, 160], GLOSSARY_DB,
-                   "全部列都要（含已確認）：推送時要比對來源列、取出時要知道審核區的列在完整表是否已確認。\n"
+                   "全部列都要（含已確認）：推送時要比對來源列、同步待確認時要知道審核區的列在完整表是否已確認。\n"
                    "**要分頁**（上限 100）。設定與翻譯工作流的「Notion：取產品術語表」相同。"),
         query_node("q-review", "Notion：取審核區", [460, 340], REVIEW_DB, "審核區全部列，**要分頁**。"),
-        {"parameters": {"url": "https://api.notion.com/v1/blocks/" + REVIEW_PAGE + "/children?page_size=100",
+        {"parameters": {"url": "https://api.notion.com/v1/blocks/" + WORK_PAGE + "/children?page_size=100",
                         "authentication": "predefinedCredentialType", "nodeCredentialType": "notionApi",
                         "sendHeaders": True, "headerParameters": notion_headers, "options": {}},
          "credentials": {"notionApi": NOTION_CRED},
@@ -228,10 +230,10 @@ def build(webhook_base):
             "authentication": "predefinedCredentialType", "nodeCredentialType": "notionApi",
             "sendHeaders": True, "headerParameters": notion_headers,
             "sendBody": True, "specifyBody": "json",
-            "jsonBody": "={{ { parent: { page_id: '" + REVIEW_PAGE + "' }, rich_text: ["
+            "jsonBody": "={{ { parent: { page_id: '" + WORK_PAGE + "' }, rich_text: ["
                         " { text: { content: '術語審核區操作失敗' }, annotations: { bold: true } },"
                         " { text: { content: ($json.fail_node ? '（卡在「' + $json.fail_node + '」）' : '')"
-                        " + '：' + ($json.fail_reason || '') + '\\n\\n處理後可以直接再按一次：取出不會重複建立已在審核區的列；'"
+                        " + '：' + ($json.fail_reason || '') + '\\n\\n處理後可以直接再按一次：同步待確認不會重複建立已在審核區的列；'"
                         " + '推送時已寫進完整表的內容不會重寫，也不會被當成衝突。' } } ] } }}",
             "options": {}},
          "credentials": {"notionApi": NOTION_CRED},
@@ -248,9 +250,9 @@ def build(webhook_base):
 
     fetches = [to("Notion：取完整術語表"), to("Notion：取審核區"), to("Notion：取審核頁區塊"), to("合流", 3)]
     conns = {
-        "按鈕：取出待確認（Webhook）": {"main": [[to("動作：取出")]]},
+        "按鈕：同步待確認（Webhook）": {"main": [[to("動作：同步待確認")]]},
         "按鈕：推送回完整表（Webhook）": {"main": [[to("動作：推送")]]},
-        "動作：取出": {"main": [fetches]},
+        "動作：同步待確認": {"main": [fetches]},
         "動作：推送": {"main": [fetches]},
         "Notion：取完整術語表": {"main": [[to("合流", 0)]]},
         "Notion：取審核區": {"main": [[to("合流", 1)]]},
@@ -312,7 +314,7 @@ def build(webhook_base):
         main[1] = [to(REASON_FAIL)]
         conns[name] = {"main": main}
 
-    return {"name": "Synctify — 術語審核區（取出待確認／推送回完整表）",
+    return {"name": "Synctify — 術語審核區（同步待確認／推送回完整表）",
             "nodes": nodes, "connections": conns, "active": False,
             "settings": {"executionOrder": "v1"}}
 

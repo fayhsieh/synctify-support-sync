@@ -1,14 +1,14 @@
-"""術語審核區：從完整術語表「取出待確認」，審核後「推送回完整表」。
+"""術語審核區：從完整術語表「同步待確認」到審核區，審核後「推送回完整表」。
 
 流程（Fay／心柔 2026-09-15）：心柔請 Claude 翻譯待確認的詞。完整表經 Notion API 讀取很慢，
 所以把還沒勾「已確認」的列複製到審核區（另一個資料庫，只放待確認的詞，備註一起帶過去），
 改好後手動按「推送回完整表」寫回。不做排程、不做改了就同步。
 
-- 取出是「複製」不是搬走：翻譯前的術語閘門、同步時建新詞都讀完整表，搬走會被當成新詞重建。
+- 同步待確認是「複製」不是搬走（按鈕原名「取出待確認」，Fay 2026-09-15 改名）：翻譯前的術語閘門、同步時建新詞都讀完整表，搬走會被當成新詞重建。
 - 已在審核區的列不覆蓋（心柔改到一半的內容要保留）。
 - 推送只寫 REVIEW_PUSH_FIELDS；參考欄位（一致性、OMS v0 現況、文件現況）不寫回。
 - 有改動的列都寫回；勾了「已確認」的寫回後移出審核區（封存，Notion 垃圾桶 30 天內可還原）。
-- 衝突：某欄在取出後被人在完整表改過、審核區的值又跟完整表現在不同 → 整列不寫，標在「推送狀態」。
+- 衝突：某欄在同步到審核區後被人在完整表改過、審核區的值又跟完整表現在不同 → 整列不寫，標在「推送狀態」。
   審核區的值剛好等於完整表現況（例如上次推送寫到一半）不算衝突，所以推送可以重按。
 - 推送紀錄記下每列每欄的原值與新值，附在審核頁底部，改壞了照著改回。
 
@@ -159,7 +159,7 @@ def _gr_sort_key(row):
     return (row["English"].lower(), row["id"])
 
 
-# ── 在審核區建列（取出、同步新詞共用）───────────────────────────────
+# ── 在審核區建列（同步待確認按鈕、同步 WP 時的新詞共用）───────────────────────────────
 
 def _gr_create_op(row, review_db, note_prefix):
     """完整表的一列 → 在審核區建同樣內容的一列。快照＝完整表這一列的值。"""
@@ -182,7 +182,7 @@ def review_create_ops(full_pages, review_db):
     return [_gr_create_op(row, review_db, "同步新詞：") for row in rows if row["id"] and not row["已確認"]]
 
 
-# ── 取出待確認 ───────────────────────────────────────────────────────
+# ── 同步待確認（按鈕）───────────────────────────────────────────────────────
 
 def review_pull_plan(full_pages, review_pages, page_children, review_db, now):
     """完整表未確認、審核區還沒有的列 → 在審核區建立。已在審核區的列不覆蓋，只標出來源有異狀的。"""
@@ -191,7 +191,7 @@ def review_pull_plan(full_pages, review_pages, page_children, review_db, now):
     full_by_id = {row["id"]: row for row in full}
     in_review = {review_norm_id(row[REVIEW_SOURCE]) for row in review}
 
-    creates = [_gr_create_op(row, review_db, "取出：")
+    creates = [_gr_create_op(row, review_db, "同步待確認：")
                for row in sorted(full, key=_gr_sort_key)
                if not row["已確認"] and row["id"] not in in_review]
 
@@ -208,7 +208,7 @@ def review_pull_plan(full_pages, review_pages, page_children, review_db, now):
             flags.append(_gr_status_op(row, message))
 
     total = len(review) + len(creates)
-    summary = f"{REVIEW_SUMMARY_PREFIX}{now} 取出待確認｜新增 {len(creates)} 列｜審核區共 {total} 列"
+    summary = f"{REVIEW_SUMMARY_PREFIX}{now} 同步待確認｜新增 {len(creates)} 列｜審核區共 {total} 列"
     if flags:
         summary += f"｜{len(flags)} 列需要注意（看「推送狀態」）"
     return {"action": "pull", "summary": summary,
@@ -247,7 +247,11 @@ def review_log_blocks(headline, entries, per_toggle=90):
     return blocks
 
 
-def review_push_plan(full_pages, review_pages, page_children, review_page_id, now):
+def review_push_plan(full_pages, review_pages, page_children, log_page_id, now):
+    """page_children：放「最後動作：」狀態列那一頁的區塊（術語審核區）；log_page_id：推送紀錄寫在哪一頁。
+
+    2026-09-15 起兩者是不同頁：按鈕與審核區檢視在「術語審核區」，紀錄留在「產品用術語表（審核區）」。
+    """
     full_by_id = {row["id"]: row for row in (review_values(p) for p in _gr_alive(full_pages))}
     review = sorted((review_values(p) for p in _gr_alive(review_pages)), key=_gr_sort_key)
 
@@ -264,7 +268,7 @@ def review_push_plan(full_pages, review_pages, page_children, review_page_id, no
             continue
         if snapshot is None:
             broken += 1
-            message = "⚠️「取出時內容」被改過，無法判斷完整表有沒有被別人改，沒有推送。刪掉這列再按「取出待確認」"
+            message = "⚠️「取出時內容」被改過，無法判斷完整表有沒有被別人改，沒有推送。刪掉這列再按「同步待確認」"
             if row[REVIEW_STATUS] != message:
                 review_ops.append(_gr_status_op(row, message))
             continue
@@ -272,8 +276,8 @@ def review_push_plan(full_pages, review_pages, page_children, review_page_id, no
         clash = [f for f in REVIEW_PUSH_FIELDS if source[f] != snapshot[f] and row[f] != source[f]]
         if clash:
             conflicts += 1
-            message = ("⚠️ 完整表在取出後被改過（" + "、".join(clash) + "），這列沒有推送。"
-                       "對照完整表後，刪掉這列再按「取出待確認」")
+            message = ("⚠️ 完整表在同步到審核區後被改過（" + "、".join(clash) + "），這列沒有推送。"
+                       "對照完整表後，刪掉這列再按「同步待確認」")
             if row[REVIEW_STATUS] != message:
                 review_ops.append(_gr_status_op(row, message))
             continue
@@ -309,7 +313,7 @@ def review_push_plan(full_pages, review_pages, page_children, review_page_id, no
     headline = f"{now}｜寫回 {pushed} 列、移出 {confirmed} 列"
     log = review_log_blocks(headline, entries)
     if log:
-        final_ops.append({"method": "PATCH", "path": "/blocks/" + review_page_id + "/children",
+        final_ops.append({"method": "PATCH", "path": "/blocks/" + log_page_id + "/children",
                           "body": {"children": log}, "note": "推送紀錄"})
     final_ops += _gr_summary_ops(review_summary_block(page_children), summary)
 

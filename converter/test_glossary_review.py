@@ -89,7 +89,7 @@ def test_snapshot_broken_returns_none():
     assert gr.decode_snapshot("English\tA\n简体中文\tB") is None
 
 
-# ---- 取出待確認 ---------------------------------------------------------
+# ---- 同步待確認（按鈕）---------------------------------------------------------
 
 def test_pull_creates_only_unconfirmed_rows_not_already_in_review():
     a = full_page("a" * 32, "Cause", "原因", note="OMS order.labels.cause")
@@ -98,7 +98,7 @@ def test_pull_creates_only_unconfirmed_rows_not_already_in_review():
     review = [review_page("r" * 32, c, 简体中文="心柔改到一半")]
     plan = gr.review_pull_plan([a, b, c], review, CHILDREN, REVIEW_DB, NOW)
     creates = [op for op in ops(plan, 0) if op["method"] == "POST"]
-    assert [op["note"] for op in creates] == ["取出：Cause"]
+    assert [op["note"] for op in creates] == ["同步待確認：Cause"]
     props = creates[0]["body"]["properties"]
     assert creates[0]["body"]["parent"] == {"database_id": REVIEW_DB}
     assert props["简体中文"] == {"rich_text": [{"type": "text", "text": {"content": "原因"}}]}
@@ -115,7 +115,7 @@ def test_pull_creates_only_unconfirmed_rows_not_already_in_review():
 def test_pull_sorted_by_english_and_reference_fields_copied():
     rows = [full_page("b" * 32, "zeta"), full_page("a" * 32, "Alpha", oms="阿尔法", doc="甲", consistency="一致")]
     plan = gr.review_pull_plan(rows, [], CHILDREN, REVIEW_DB, NOW)
-    assert [op["note"] for op in ops(plan, 0)] == ["取出：Alpha", "取出：zeta"]
+    assert [op["note"] for op in ops(plan, 0)] == ["同步待確認：Alpha", "同步待確認：zeta"]
     props = ops(plan, 0)[0]["body"]["properties"]
     assert props["一致性"] == {"select": {"name": "一致"}}
     assert props["OMS v0 現況"]["rich_text"][0]["text"]["content"] == "阿尔法"
@@ -145,7 +145,7 @@ def test_pull_summary_written_to_paragraph_last():
     plan = gr.review_pull_plan([full_page("a" * 32, "Cause")], [], CHILDREN, REVIEW_DB, NOW)
     assert ops(plan, 1) == [{"method": "PATCH", "path": "/blocks/para-1", "note": "狀態列", "body": {
         "paragraph": {"rich_text": [{"type": "text", "text": {"content":
-            "最後動作：2026-09-15 19:00 取出待確認｜新增 1 列｜審核區共 1 列"}}]}}}]
+            "最後動作：2026-09-15 19:00 同步待確認｜新增 1 列｜審核區共 1 列"}}]}}}]
 
 
 def test_pull_without_summary_paragraph_skips_summary():
@@ -211,7 +211,7 @@ def test_rows_created_by_sync_push_without_conflict():
 
 
 def test_pull_after_sync_does_not_duplicate():
-    """同步已經建進審核區的詞，之後按「取出待確認」不會重複建立。"""
+    """同步已經建進審核區的詞，之後按「同步待確認」不會重複建立。"""
     created = full_page("a" * 32, "Short-Shipped", "")
     body = gr.review_create_ops([created], REVIEW_DB)[0]["body"]
     review = {"id": "1" * 32, "properties": written_to_read(body["properties"])}
@@ -269,7 +269,7 @@ def test_push_conflict_when_full_table_changed_a_field_since_pull():
     plan = gr.review_push_plan([now_full], [rev], CHILDREN, REVIEW_PAGE, NOW)
     assert plan["phases"][0] == []
     status = plan["phases"][1][0]["body"]["properties"][gr.REVIEW_STATUS]["rich_text"][0]["text"]["content"]
-    assert status.startswith("⚠️ 完整表在取出後被改過（備註）")
+    assert status.startswith("⚠️ 完整表在同步到審核區後被改過（備註）")
     assert plan["counts"]["conflicts"] == 1
     assert "1 列沒有推送" in plan["summary"]
 

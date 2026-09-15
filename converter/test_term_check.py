@@ -104,7 +104,7 @@ def test_摘要與留言依檢查時機措辭():
     assert sync["summary"] == "⚠️ 同步時有詞待確認｜待確認 1｜已確認 0（UI 詞 1）"
     txt = tc.comment_text(sync)
     assert "再回來按「翻譯」即可" in txt and "不用再同步" in txt and "發佈到 WP 後才能翻譯" in txt
-    assert "取出待確認" in txt and "推送回完整表" in txt          # 2026-09-15 起在審核區補術語
+    assert "同步待確認" in txt and "推送回完整表" in txt          # 2026-09-15 起在審核區補術語
     gate = tc.check(["<strong>Override</strong>"], G, when="翻譯前")
     assert gate["summary"] == "⚠️ 翻譯前有詞待確認｜待確認 1｜已確認 0（UI 詞 1）"
     assert "發佈到 WP 後才能翻譯" not in tc.comment_text(gate)      # 能走到術語閘門代表已發佈
