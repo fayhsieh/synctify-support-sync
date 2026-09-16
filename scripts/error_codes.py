@@ -103,6 +103,12 @@ CODES = [
     ("C7", ["rest_no_route"],
      "找不到這個 API 端點——輔助外掛沒安裝，或版本太舊。",
      "請找 Fay 確認 Synctify Sync Helper 外掛的版本。"),
+
+    # 2026-09-15 術語審核區實際踩到：按鈕在新頁、資料庫留在舊頁，只連了新頁就 404。
+    ("C8", ["object_not_found", "make sure the relevant pages"],
+     "Notion 找不到那個頁面或資料庫——多半是沒有分享給 integration。",
+     "到那個頁面右上角的 … → Connections 加上 Support Center Sync。"
+     "資料庫要看它所在的那一頁有沒有連：別頁上的連結檢視不會把權限帶過去。加完直接再按一次。"),
 ]
 
 FALLBACK = ("C0",

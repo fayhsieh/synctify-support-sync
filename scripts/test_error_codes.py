@@ -47,6 +47,10 @@ import error_codes as ec
     ('404 - {"code":"root_not_found","message":"Doc root not found"}', "C6"),
     ('404 - {"code":"rest_no_route","message":"No route was found matching '
      'the URL and request method"}', "C7"),
+    # 2026-09-15 術語審核區「同步待確認」實際收到的
+    ('404 - {"object":"error","status":404,"code":"object_not_found",'
+     '"message":"Could not find database with ID: 0caf57e2-9f4a-4831-b93b-7c5766a97fa4. '
+     'Make sure the relevant pages and databases are shared with your integration."}', "C8"),
 
     # 沒命中 → 安全地退回 C0
     ("something nobody has ever seen before", "C0"),
