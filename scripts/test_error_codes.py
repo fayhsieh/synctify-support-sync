@@ -35,6 +35,9 @@ import error_codes as ec
      '<Message>Request has expired</Message></Error>', "B1"),
     ("connect ETIMEDOUT 10.0.0.5:443", "B2"),
     ("Error: socket hang up", "B2"),
+    # 2026-09-16 測試站 6627 上傳圖片時收到的
+    ('504 - "<html>\\r\\n<head><title>504 Gateway Time-out</title></head>\\r\\n'
+     '<body>\\r\\n<center><h1>504 Gateway Time-out</h1></center>\\r\\n</body>\\r\\n</html>\\r\\n"', "B3"),
 
     # C：找 Fay
     ('401 - {"code":"rest_forbidden","message":"Sorry, you are not allowed '
