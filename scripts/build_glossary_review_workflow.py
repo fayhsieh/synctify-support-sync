@@ -37,7 +37,7 @@ WEBHOOK_PLACEHOLDER = "synctify-glossary-review-CHANGE-ME-TO-A-RANDOM-STRING"
 GLOSSARY_DB = "1ab2891d5ddd48db97d1f1c1afeefcf5"    # 完整術語表
 REVIEW_DB = "0caf57e29f4a4831b93b7c5766a97fa4"      # 待確認詞彙（審核區）
 WORK_PAGE = "3dc2f2ede27d80d9aa01cf56910ec8b1"      # 「術語審核區」：按鈕、審核區檢視、頁首狀態列、失敗留言
-LOG_PAGE = "3dc2f2ede27d81609ffae4e44ee1d02e"       # 「產品用術語表（審核區）」：推送紀錄寫在這頁
+LOG_PAGE = "3dc2f2ede27d81609ffae4e44ee1d02e"       # 「術語審核區推送紀錄」：說明與推送紀錄，審核區資料庫也掛在這頁底下
 
 PLAN = "計算要做的事"
 REASON_FAIL = "原因：節點失敗"
@@ -168,8 +168,10 @@ def build(webhook_base):
     button_notes = ("Notion「術語審核區」頁上的「{label}」按鈕 → Send webhook。\n"
                     "網址用這個節點的 Production URL；Add custom header 填與「同步到 WP」按鈕同一組\n"
                     "（共用 Header Auth 憑證）。\n\n"
-                    "⚠️ Support Center Sync 這個 Notion integration 要連到「術語審核區」和「產品用術語表（審核區）」兩頁（頁面 … → Connections），\n"
-                    "否則讀審核區會回 404。\n\n"
+                    "⚠️ Support Center Sync 這個 Notion integration 要連到「術語審核區」和「術語審核區推送紀錄」\n"
+                    "兩頁（頁面 … → Connections）。**兩頁都要連**：審核區資料庫掛在推送紀錄那一頁底下，\n"
+                    "連結檢視不會把權限帶過去——2026-09-15 只連了術語審核區，按下去就回\n"
+                    "404 object_not_found（錯誤代碼 C8）。\n\n"
                     "path 取自 .env 的 " + WEBHOOK_ENV + "（不入庫）。")
 
     nodes = [

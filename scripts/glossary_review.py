@@ -21,7 +21,7 @@ import glossary_sync as gs  # noqa: E402
 import wp_env  # noqa: E402
 
 WORK_PAGE = "3dc2f2ede27d80d9aa01cf56910ec8b1"     # 「術語審核區」：按鈕、審核區檢視、頁首狀態列（Fay 2026-09-15 搬過來）
-LOG_PAGE = "3dc2f2ede27d81609ffae4e44ee1d02e"      # 「產品用術語表（審核區）」：說明與推送紀錄
+LOG_PAGE = "3dc2f2ede27d81609ffae4e44ee1d02e"      # 「術語審核區推送紀錄」：說明與推送紀錄；審核區資料庫掛在這頁底下
 REVIEW_DB = "0caf57e29f4a4831b93b7c5766a97fa4"     # 待確認詞彙（審核區）；術語審核區頁上是它的連結檢視
 TAIPEI = datetime.timezone(datetime.timedelta(hours=8))
 

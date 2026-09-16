@@ -250,7 +250,7 @@ def review_log_blocks(headline, entries, per_toggle=90):
 def review_push_plan(full_pages, review_pages, page_children, log_page_id, now):
     """page_children：放「最後動作：」狀態列那一頁的區塊（術語審核區）；log_page_id：推送紀錄寫在哪一頁。
 
-    2026-09-15 起兩者是不同頁：按鈕與審核區檢視在「術語審核區」，紀錄留在「產品用術語表（審核區）」。
+    2026-09-15 起兩者是不同頁：按鈕與審核區檢視在「術語審核區」，紀錄留在「術語審核區推送紀錄」。
     """
     full_by_id = {row["id"]: row for row in (review_values(p) for p in _gr_alive(full_pages))}
     review = sorted((review_values(p) for p in _gr_alive(review_pages)), key=_gr_sort_key)

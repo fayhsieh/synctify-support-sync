@@ -588,7 +588,7 @@ GLOSSARY_DB_ID = "1ab2891d5ddd48db97d1f1c1afeefcf5"     # database id：查詢�
 GLOSSARY_PAGE_ID = "3bc2f2ede27d81238c4fd63c958ac9fc"   # 術語表頁面：變更紀錄寫在這頁
 GLOSSARY_URL = "https://app.notion.com/p/" + GLOSSARY_PAGE_ID
 # 術語檢查留言的連結指向「術語審核區」頁（按鈕與審核區檢視都在這頁；Fay 2026-09-15 從
-# 「產品用術語表（審核區）」搬過來，那頁留作說明與推送紀錄）
+# 「術語審核區推送紀錄」搬過來，那頁留作說明與推送紀錄）
 REVIEW_URL = "https://app.notion.com/p/3dc2f2ede27d80d9aa01cf56910ec8b1"
 # 新詞建進完整表後，同一份內容也建進審核區（Fay 2026-09-15：不用再手動按「同步待確認」）
 REVIEW_DB_ID = "0caf57e29f4a4831b93b7c5766a97fa4"
@@ -1514,7 +1514,8 @@ def build_polling_workflow(code):
          "type": "n8n-nodes-base.httpRequest", "typeVersion": 4.2, "position": [5480, 680],
          "onError": "continueRegularOutput",
          "credentials": {"notionApi": {"id": NOTION_CRED_ID, "name": NOTION_CRED_NAME}},
-         "notes": "⚠️ Support Center Sync 要連到審核頁（產品用術語表（審核區）→ … → Connections）。"},
+         "notes": "⚠️ Support Center Sync 要連到「術語審核區推送紀錄」那一頁——審核區資料庫掛在它底下，\n"
+                  "別頁上的連結檢視不會把權限帶過去（2026-09-15 踩過，回 404 object_not_found）。"},
 
         {"parameters": {"jsCode":
             "const expected = ($('收合建列結果').first().json.pages || []).length;\n"
