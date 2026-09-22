@@ -229,15 +229,21 @@ def build(webhook_base):
             "typeVersion": 4.2, "position": pos, "notes": notes}
 
     def action_node(key, name, action, pos):
-        return {"parameters": {"assignments": {"assignments": [
+        # includeOtherFields 一定要開：Set 預設只輸出自己設的欄位，webhook 的 body 會被丟掉，
+        # 下一個節點就讀不到 body.data.id（2026-09-22 實際踩到：流程安靜走到「沒有 page id」）。
+        return {"parameters": {"includeOtherFields": True, "assignments": {"assignments": [
             {"id": n(key + "-a"), "name": "action", "value": action, "type": "string"},
         ]}, "options": {}},
             "id": n(key), "name": name, "type": "n8n-nodes-base.set",
-            "typeVersion": 3.4, "position": pos}
+            "typeVersion": 3.4, "position": pos,
+            "notes": "把 webhook 的 body 一起往下帶（includeOtherFields），解析 page_id 才讀得到。"}
 
-    button_notes = ("OMS Docs 資料庫的「{label}」按鈕屬性 → Send webhook（不是頁面上的按鈕區塊：\n"
-                    "按鈕屬性送出時會帶那一列的 page id，流程才知道是哪個功能）。\n"
+    button_notes = ("每個 Glossary 頁上的「{label}」按鈕區塊 → Send webhook。\n"
                     "網址用這個節點的 Production URL；Add custom header 填與「同步到 WP」按鈕同一組。\n\n"
+                    "payload 的 body.data.id 就是那一頁的 id（2026-09-22 實測），所以同一支流程\n"
+                    "服務所有功能，按鈕不必做成 OMS Docs 的資料庫屬性——那會讓每一份 Spec、\n"
+                    "Guideline 都跑出按鈕（Fay 2026-09-22 不要這樣）。複製 Glossary 頁時按鈕一起複製，\n"
+                    "送出的是新那一頁的 id，不用改設定。\n\n"
                     "⚠️ Support Center Sync 要連到 OMS Docs（含各 Glossary／Push Log 頁），\n"
                     "否則讀頁面與資料庫會回 404（錯誤代碼 C8）。\n\n"
                     "path 取自 .env 的 " + WEBHOOK_ENV + "（不入庫），後綴 -oms-{suffix}。")
@@ -279,13 +285,14 @@ def build(webhook_base):
          "id": n("has"), "name": "取得到 page_id？", "type": "n8n-nodes-base.if",
          "typeVersion": 2.2, "position": [660, 360]},
 
-        {"parameters": {"errorMessage": "webhook 沒帶 page id：按鈕要用 OMS Docs 的「按鈕屬性」，"
-                                        "不能用頁面上的按鈕區塊（頁面按鈕不會帶那一列的 id，"
-                                        "流程就不知道是哪個功能）"},
+        {"parameters": {"errorMessage": "webhook 沒帶 page id（payload 少了 body.data.id）："
+                                        "確認按鈕是從 Glossary 頁送出的 Send webhook，"
+                                        "以及「動作：…」節點有開 includeOtherFields"},
          "id": n("no-page"), "name": "payload 無 page_id（失敗）",
          "type": "n8n-nodes-base.stopAndError", "typeVersion": 1, "position": [880, 560],
-         "notes": "2026-09-22 實際踩到：用頁面按鈕時流程安靜結束、Notion 上沒有任何變化也沒有留言，\n"
-                  "n8n 的執行紀錄還顯示成功，很難查。所以這裡標成失敗，至少在 Executions 看得到紅色。"},
+         "notes": "2026-09-22 實際踩到：Set 節點沒開 includeOtherFields 把 body 丟掉了，\n"
+                  "流程安靜走到這裡結束、Notion 沒反應也沒留言，n8n 執行還顯示成功，很難查。\n"
+                  "所以這裡標成失敗，至少在 Executions 看得到紅色。"},
 
         notion_get("page", "Notion：取 Glossary 頁",
                    "=https://api.notion.com/v1/pages/{{ " + page_expr + " }}", [880, 260],
