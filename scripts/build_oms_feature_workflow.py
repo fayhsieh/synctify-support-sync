@@ -67,10 +67,18 @@ const feature = page.properties?.['FEATURE_PROP']?.select?.name || '';
 if (!feature) {
   throw new Error('這一頁的「FEATURE_PROP」是空的。請先選這一頁對應的功能（例如 Sales Orders），再按一次');
 }
-const db = blocks.find(b => b.type === 'child_database');
-if (!db) {
+// 連結檢視在 API 看起來也是 child_database，抓錯就會寫到別的功能的表。
+// 所以要求這一頁只有一個資料庫：多個就停下來，讓人自己決定留哪一個。
+const dbs = blocks.filter(b => b.type === 'child_database');
+if (!dbs.length) {
   throw new Error('這一頁底下沒有術語資料庫。請先插入一個（可從別的功能的 Glossary 頁複製），再按一次');
 }
+if (dbs.length > 1) {
+  const titles = dbs.map(b => (b.child_database || {}).title || '（無標題）').join('、');
+  throw new Error('這一頁有 ' + dbs.length + ' 個資料庫（' + titles + '），不知道要寫進哪一個。'
+                  + '請只留術語清單那一個，其餘（例如舊的連結檢視）刪掉再按一次');
+}
+const db = dbs[0];
 return [{ json: {
   action: parsed.action,
   now: parsed.now,
