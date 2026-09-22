@@ -78,7 +78,8 @@ def main():
     if args.action == "pull":
         # 功能文件收該功能全部的詞（含已確認），它同時是交付給工程的清單
         plan = gr.review_pull_plan(full, review, kids, review_db, now,
-                                   features=features, pending_only=not features)
+                                   features=features, pending_only=not features,
+                                   label="從完整表同步" if features else "同步待確認")
     else:
         plan = gr.review_push_plan(full, review, kids, log_page, now,
                                    archive_confirmed=not features)

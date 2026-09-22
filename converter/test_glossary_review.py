@@ -176,6 +176,15 @@ def test_pull_features_only_takes_those_features():
     assert "（Sales Orders、Orders (Shared)）" in plan["summary"]
 
 
+def test_pull_label_shows_in_summary_and_notes():
+    """OMS 的 Glossary 收全部的詞，按鈕叫「同步待確認」會誤導（Fay 2026-09-22）。"""
+    rows = [full_page("a" * 32, "Cause", "原因", features=["Sales Orders"])]
+    plan = gr.review_pull_plan(rows, [], CHILDREN, REVIEW_DB, NOW, features=["Sales Orders"],
+                               pending_only=False, label="從完整表同步")
+    assert ops(plan, 0)[0]["note"] == "從完整表同步：Cause"
+    assert plan["summary"].startswith("最後動作：2026-09-15 19:00 從完整表同步（Sales Orders）")
+
+
 def test_pull_features_takes_confirmed_rows_too():
     """交付給工程的清單要完整：pending_only=False 連已確認的也收。"""
     rows = [full_page("a" * 32, "Cause", "原因", features=["Sales Orders"]),

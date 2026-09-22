@@ -193,13 +193,15 @@ def review_create_ops(full_pages, review_db):
 # ── 同步待確認（按鈕）───────────────────────────────────────────────────────
 
 def review_pull_plan(full_pages, review_pages, page_children, review_db, now,
-                     features=None, pending_only=True):
+                     features=None, pending_only=True, label="同步待確認"):
     """完整表的列 → 在審核區／功能文件建立還沒有的那些。已經有的列不覆蓋，只標出來源有異狀的。
 
     features：只收「功能」與這份清單有交集的列。功能是詞彙表的最小單位（Fay 2026-09-22），
     名稱以 OMS DB 上的頁面為準；一頁可以列多個（例：Sales Orders 與該模組的共用詞）。
     每個功能一個**獨立資料庫**——篩選檢視擋不住工程師用 AI 讀到別的功能的詞。None＝全收（Marketing 審核區）。
     pending_only：True＝只收還沒勾「已確認」的（待辦清單）；False＝全部的詞（給工程的完整清單）。
+    label：按鈕名稱，寫進狀態列與每個操作的說明。Marketing 是「同步待確認」；
+    OMS 的 Glossary 收全部的詞，叫「同步待確認」會誤導，用「從完整表同步」（Fay 2026-09-22）。
     """
     full = [review_values(p) for p in _gr_alive(full_pages)]
     review = [review_values(p) for p in _gr_alive(review_pages)]
@@ -211,7 +213,7 @@ def review_pull_plan(full_pages, review_pages, page_children, review_db, now,
             return False
         return not features or any(f in row["功能"] for f in features)
 
-    creates = [_gr_create_op(row, review_db, "同步待確認：")
+    creates = [_gr_create_op(row, review_db, label + "：")
                for row in sorted(full, key=_gr_sort_key) if wanted(row)]
 
     flags = []
@@ -229,7 +231,7 @@ def review_pull_plan(full_pages, review_pages, page_children, review_db, now,
 
     total = len(review) + len(creates)
     scope = f"（{'、'.join(features)}）" if features else ""
-    summary = f"{REVIEW_SUMMARY_PREFIX}{now} 同步待確認{scope}｜新增 {len(creates)} 列｜共 {total} 列"
+    summary = f"{REVIEW_SUMMARY_PREFIX}{now} {label}{scope}｜新增 {len(creates)} 列｜共 {total} 列"
     if flags:
         summary += f"｜{len(flags)} 列需要注意（看「推送狀態」）"
     return {"action": "pull", "summary": summary,

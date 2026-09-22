@@ -139,13 +139,14 @@ for _d in _docs:
 if _cfg['action'] == 'pull':
     # Glossary 頁收該功能全部的詞（含已確認）：它同時是交付給工程的清單（Fay 2026-09-22）
     _plan = review_pull_plan(_full, _review, _cfg.get('children') or [], _cfg['feature_db'],
-                             _cfg['now'], features=[_cfg['feature']], pending_only=False)
+                             _cfg['now'], features=[_cfg['feature']], pending_only=False,
+                             label='從完整表同步')
 elif _cfg['action'] == 'push':
     # 推送後列留著；紀錄寫到 Push Log 那一頁
     _plan = review_push_plan(_full, _review, _cfg.get('children') or [], _log_page,
                              _cfg['now'], archive_confirmed=False)
 else:
-    raise ValueError('不知道要同步待確認還是推送（action=' + repr(_cfg['action']) + '）')
+    raise ValueError('不知道要從完整表同步還是推送（action=' + repr(_cfg['action']) + '）')
 
 _plan['feature'] = _cfg['feature']
 _plan['log_page'] = _log_page
@@ -244,10 +245,10 @@ def build(webhook_base):
     nodes = [
         {"parameters": {"httpMethod": "POST", "path": webhook_base + "-oms-pull",
                         "responseMode": "onReceived", "authentication": "headerAuth", "options": {}},
-         "id": n("wh-pull"), "name": "按鈕：同步待確認（Webhook）", "type": "n8n-nodes-base.webhook",
+         "id": n("wh-pull"), "name": "按鈕：從完整表同步（Webhook）", "type": "n8n-nodes-base.webhook",
          "typeVersion": 2, "position": [0, 200], "webhookId": n("wh-pull-id"),
          "credentials": {"httpHeaderAuth": WEBHOOK_AUTH_CRED},
-         "notes": button_notes.format(label="同步待確認", suffix="pull")},
+         "notes": button_notes.format(label="從完整表同步", suffix="pull")},
         {"parameters": {"httpMethod": "POST", "path": webhook_base + "-oms-push",
                         "responseMode": "onReceived", "authentication": "headerAuth", "options": {}},
          "id": n("wh-push"), "name": "按鈕：推送回完整表（Webhook）", "type": "n8n-nodes-base.webhook",
@@ -255,7 +256,7 @@ def build(webhook_base):
          "credentials": {"httpHeaderAuth": WEBHOOK_AUTH_CRED},
          "notes": button_notes.format(label="推送回完整表", suffix="push")},
 
-        action_node("act-pull", "動作：同步待確認", "pull", [220, 200]),
+        action_node("act-pull", "動作：從完整表同步", "pull", [220, 200]),
         action_node("act-push", "動作：推送回完整表", "push", [220, 520]),
 
         {"parameters": {"assignments": {"assignments": [
@@ -278,9 +279,13 @@ def build(webhook_base):
          "id": n("has"), "name": "取得到 page_id？", "type": "n8n-nodes-base.if",
          "typeVersion": 2.2, "position": [660, 360]},
 
-        {"parameters": {}, "id": n("no-page"), "name": "payload 無 page_id（結束）",
-         "type": "n8n-nodes-base.noOp", "typeVersion": 1, "position": [880, 560],
-         "notes": "按鈕若是頁面上的按鈕區塊就會走到這裡——要用資料庫的按鈕屬性才會帶 page id。"},
+        {"parameters": {"errorMessage": "webhook 沒帶 page id：按鈕要用 OMS Docs 的「按鈕屬性」，"
+                                        "不能用頁面上的按鈕區塊（頁面按鈕不會帶那一列的 id，"
+                                        "流程就不知道是哪個功能）"},
+         "id": n("no-page"), "name": "payload 無 page_id（失敗）",
+         "type": "n8n-nodes-base.stopAndError", "typeVersion": 1, "position": [880, 560],
+         "notes": "2026-09-22 實際踩到：用頁面按鈕時流程安靜結束、Notion 上沒有任何變化也沒有留言，\n"
+                  "n8n 的執行紀錄還顯示成功，很難查。所以這裡標成失敗，至少在 Executions 看得到紅色。"},
 
         notion_get("page", "Notion：取 Glossary 頁",
                    "=https://api.notion.com/v1/pages/{{ " + page_expr + " }}", [880, 260],
@@ -343,7 +348,7 @@ def build(webhook_base):
             "jsonBody": "={{ { parent: { page_id: " + page_expr + " }, rich_text: ["
                         " { text: { content: '功能術語操作失敗' }, annotations: { bold: true } },"
                         " { text: { content: ($json.fail_node ? '（卡在「' + $json.fail_node + '」）' : '')"
-                        " + '：' + ($json.fail_reason || '') + '\\n\\n處理後可以直接再按一次：同步待確認不會重複建立已有的列；'"
+                        " + '：' + ($json.fail_reason || '') + '\\n\\n處理後可以直接再按一次：從完整表同步不會重複建立已有的列；'"
                         " + '推送時已寫進完整表的內容不會重寫，也不會被當成衝突。' } } ] } }}",
             "options": {}},
          "credentials": {"notionApi": NOTION_CRED},
@@ -359,12 +364,12 @@ def build(webhook_base):
         return {"node": name, "type": "main", "index": index}
 
     conns = {
-        "按鈕：同步待確認（Webhook）": {"main": [[to("動作：同步待確認")]]},
+        "按鈕：從完整表同步（Webhook）": {"main": [[to("動作：從完整表同步")]]},
         "按鈕：推送回完整表（Webhook）": {"main": [[to("動作：推送回完整表")]]},
-        "動作：同步待確認": {"main": [[to(PARSE)]]},
+        "動作：從完整表同步": {"main": [[to(PARSE)]]},
         "動作：推送回完整表": {"main": [[to(PARSE)]]},
         PARSE: {"main": [[to("取得到 page_id？")]]},
-        "取得到 page_id？": {"main": [[to("Notion：取 Glossary 頁")], [to("payload 無 page_id（結束）")]]},
+        "取得到 page_id？": {"main": [[to("Notion：取 Glossary 頁")], [to("payload 無 page_id（失敗）")]]},
         "Notion：取 Glossary 頁": {"main": [[to("Notion：取頁面區塊")]]},
         "Notion：取頁面區塊": {"main": [[to(CONFIG)]]},
         CONFIG: {"main": [[to("Notion：取完整術語表"), to("Notion：取功能術語資料庫"),
@@ -428,7 +433,7 @@ def build(webhook_base):
         main[1] = [to(REASON_FAIL)]
         conns[name] = {"main": main}
 
-    return {"name": "Synctify — OMS 功能術語（同步待確認／推送回完整表）",
+    return {"name": "Synctify — OMS 功能術語（從完整表同步／推送回完整表）",
             "nodes": nodes, "connections": conns, "active": False,
             "settings": {"executionOrder": "v1"}}
 
