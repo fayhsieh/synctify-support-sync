@@ -20,8 +20,9 @@ def _rt(text):
     return {"type": "rich_text", "rich_text": [{"plain_text": text}] if text else []}
 
 
-def full_page(pid, en, zh="", tw="", kind="UI 標籤", note="", ok=False, **extra):
+def full_page(pid, en, zh="", tw="", kind="UI 標籤", note="", ok=False, modules=(), **extra):
     props = {
+        "模組": {"type": "multi_select", "multi_select": [{"name": m} for m in modules]},
         "English": {"type": "title", "title": [{"plain_text": en}]},
         "简体中文": _rt(zh), "繁體中文": _rt(tw), "備註": _rt(note),
         "類型": {"type": "select", "select": {"name": kind} if kind else None},
@@ -145,7 +146,7 @@ def test_pull_summary_written_to_paragraph_last():
     plan = gr.review_pull_plan([full_page("a" * 32, "Cause")], [], CHILDREN, REVIEW_DB, NOW)
     assert ops(plan, 1) == [{"method": "PATCH", "path": "/blocks/para-1", "note": "狀態列", "body": {
         "paragraph": {"rich_text": [{"type": "text", "text": {"content":
-            "最後動作：2026-09-15 19:00 同步待確認｜新增 1 列｜審核區共 1 列"}}]}}}]
+            "最後動作：2026-09-15 19:00 同步待確認｜新增 1 列｜共 1 列"}}]}}}]
 
 
 def test_pull_without_summary_paragraph_skips_summary():
@@ -157,6 +158,58 @@ def test_archived_pages_are_ignored():
     archived = dict(full_page("a" * 32, "Cause"), archived=True)
     plan = gr.review_pull_plan([archived], [], CHILDREN, REVIEW_DB, NOW)
     assert ops(plan, 0) == []
+
+
+# ---- OMS 模組文件（一個模組一個獨立資料庫）-------------------------------
+
+def test_pull_module_only_takes_that_module():
+    """篩選檢視擋不住 AI 讀到別的模組，所以模組文件真的只建該模組的列（Fay 2026-09-22）。"""
+    rows = [full_page("a" * 32, "Cause", "原因", modules=["order"]),
+            full_page("b" * 32, "Pallets", "托盘", modules=["shipment_routing"]),
+            full_page("c" * 32, "Carrier", "承运商", modules=["order", "parcel_monitoring"])]
+    plan = gr.review_pull_plan(rows, [], CHILDREN, REVIEW_DB, NOW, module="order")
+    assert [op["note"] for op in ops(plan, 0)] == ["同步待確認：Carrier", "同步待確認：Cause"]
+    assert ops(plan, 0)[0]["body"]["properties"]["模組"] == {
+        "multi_select": [{"name": "order"}, {"name": "parcel_monitoring"}]}
+    assert "（order）" in plan["summary"]
+
+
+def test_pull_module_takes_confirmed_rows_too():
+    """交付給工程的清單要完整：pending_only=False 連已確認的也收。"""
+    rows = [full_page("a" * 32, "Cause", "原因", modules=["order"]),
+            full_page("b" * 32, "Add", "添加", ok=True, modules=["order"])]
+    pending = gr.review_pull_plan(rows, [], CHILDREN, REVIEW_DB, NOW, module="order")
+    full = gr.review_pull_plan(rows, [], CHILDREN, REVIEW_DB, NOW, module="order", pending_only=False)
+    assert [op["note"] for op in ops(pending, 0)] == ["同步待確認：Cause"]
+    assert [op["note"] for op in ops(full, 0)] == ["同步待確認：Add", "同步待確認：Cause"]
+
+
+def test_pull_module_does_not_flag_confirmed_source():
+    """模組文件本來就收已確認的列，不該被標成「完整表已勾確認」。"""
+    src = full_page("a" * 32, "Add", "添加", ok=True, modules=["order"])
+    rev = review_page("1" * 32, src, 已確認=False)
+    plan = gr.review_pull_plan([src], [rev], CHILDREN, REVIEW_DB, NOW, module="order", pending_only=False)
+    assert ops(plan, 0) == []
+
+
+def test_push_without_archive_keeps_rows():
+    src = full_page("a" * 32, "Cause", "", modules=["order"])
+    rev = review_page("1" * 32, src, 简体中文="原因", 已確認=True)
+    plan = gr.review_push_plan([src], [rev], CHILDREN, REVIEW_PAGE, NOW, archive_confirmed=False)
+    full_ops, review_ops, _ = plan["phases"]
+    assert full_ops[0]["body"]["properties"]["简体中文"]["rich_text"][0]["text"]["content"] == "原因"
+    assert [op["body"].get("archived") for op in review_ops] == [None]      # 沒有封存，只更新快照
+    assert review_ops[0]["note"] == "更新快照：Cause"
+    assert "移出審核區" not in plan["summary"]
+
+
+def test_push_without_archive_is_idempotent():
+    """推送完列還在，再按一次不該重寫。"""
+    src = full_page("a" * 32, "Cause", "原因", modules=["order"], ok=True)
+    rev = review_page("1" * 32, src, 已確認=True)
+    plan = gr.review_push_plan([src], [rev], CHILDREN, REVIEW_PAGE, NOW, archive_confirmed=False)
+    assert plan["phases"][0] == [] and plan["phases"][1] == []
+    assert plan["summary"].endswith("沒有需要寫回的改動")
 
 
 # ---- 同步新詞同時建進審核區 ---------------------------------------------

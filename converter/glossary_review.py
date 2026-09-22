@@ -18,7 +18,7 @@
 """
 
 REVIEW_PUSH_FIELDS = ["English", "简体中文", "繁體中文", "類型", "備註", "已確認"]
-REVIEW_REF_FIELDS = ["一致性", "OMS v0 現況", "文件現況"]
+REVIEW_REF_FIELDS = ["一致性", "OMS v0 現況", "文件現況", "模組"]
 REVIEW_SOURCE = "完整表列"
 REVIEW_SNAPSHOT = "取出時內容"
 REVIEW_STATUS = "推送狀態"
@@ -27,7 +27,7 @@ REVIEW_PAGE_URL_PREFIX = "https://app.notion.com/p/"
 
 _GR_KINDS = {"English": "title", "简体中文": "rich_text", "繁體中文": "rich_text", "類型": "select",
              "備註": "rich_text", "已確認": "checkbox", "一致性": "select",
-             "OMS v0 現況": "rich_text", "文件現況": "rich_text"}
+             "OMS v0 現況": "rich_text", "文件現況": "rich_text", "模組": "multi_select"}
 
 
 # ── 讀值 ─────────────────────────────────────────────────────────────
@@ -49,16 +49,20 @@ def _gr_value(prop):
         return bool(prop.get("checkbox"))
     if kind == "url":
         return prop.get("url") or ""
+    if kind == "multi_select":
+        return sorted(o["name"] for o in prop.get("multi_select") or [])
     return ""
 
 
 def review_values(page):
-    """完整表或審核區的 Notion page → 純值 dict（缺的欄位是空字串，已確認一律是 bool）。"""
+    """完整表或審核區的 Notion page → 純值 dict（缺的欄位是空字串，已確認是 bool、模組是 list）。"""
     props = page.get("properties") or {}
     out = {"id": review_norm_id(page.get("id", ""))}
     for name in REVIEW_PUSH_FIELDS + REVIEW_REF_FIELDS + [REVIEW_SOURCE, REVIEW_SNAPSHOT, REVIEW_STATUS]:
         out[name] = _gr_value(props.get(name))
     out["已確認"] = bool(out["已確認"])
+    if not isinstance(out["模組"], list):      # 欄位不存在時 _gr_value 回空字串
+        out["模組"] = []
     return out
 
 
@@ -129,6 +133,8 @@ def _gr_prop(kind, value):
         return {"checkbox": bool(value)}
     if kind == "url":
         return {"url": value or None}
+    if kind == "multi_select":
+        return {"multi_select": [{"name": name} for name in value or []]}
     raise ValueError("不支援的欄位型別：" + str(kind))
 
 
@@ -184,23 +190,34 @@ def review_create_ops(full_pages, review_db):
 
 # ── 同步待確認（按鈕）───────────────────────────────────────────────────────
 
-def review_pull_plan(full_pages, review_pages, page_children, review_db, now):
-    """完整表未確認、審核區還沒有的列 → 在審核區建立。已在審核區的列不覆蓋，只標出來源有異狀的。"""
+def review_pull_plan(full_pages, review_pages, page_children, review_db, now,
+                     module=None, pending_only=True):
+    """完整表的列 → 在審核區／模組文件建立還沒有的那些。已經有的列不覆蓋，只標出來源有異狀的。
+
+    module：只收「模組」含這個值的列——OMS 每個模組一份獨立文件，篩選檢視擋不住 AI 讀到別的模組
+    （Fay 2026-09-22），所以是真的只把該模組的列建進那個資料庫。None＝不分模組（Marketing 審核區）。
+    pending_only：True＝只收還沒勾「已確認」的（待辦清單）；False＝該模組全部的詞（給工程的完整清單）。
+    """
     full = [review_values(p) for p in _gr_alive(full_pages)]
     review = [review_values(p) for p in _gr_alive(review_pages)]
     full_by_id = {row["id"]: row for row in full}
     in_review = {review_norm_id(row[REVIEW_SOURCE]) for row in review}
 
+    def wanted(row):
+        if row["id"] in in_review or (pending_only and row["已確認"]):
+            return False
+        return module is None or module in row["模組"]
+
     creates = [_gr_create_op(row, review_db, "同步待確認：")
-               for row in sorted(full, key=_gr_sort_key)
-               if not row["已確認"] and row["id"] not in in_review]
+               for row in sorted(full, key=_gr_sort_key) if wanted(row)]
 
     flags = []
     for row in review:
         source = full_by_id.get(review_norm_id(row[REVIEW_SOURCE]))
         if source is None:
             message = "⚠️ 完整表已經沒有這一列（可能被刪除或合併），不會推送；確認後可以刪掉這列"
-        elif source["已確認"] and not row["已確認"]:
+        elif pending_only and source["已確認"] and not row["已確認"]:
+            # 模組文件本來就收已確認的列，這個提醒只對待辦清單有意義
             message = "⚠️ 完整表這一列已經被勾「已確認」，這裡的修改推送時會被當成衝突"
         else:
             continue
@@ -208,7 +225,8 @@ def review_pull_plan(full_pages, review_pages, page_children, review_db, now):
             flags.append(_gr_status_op(row, message))
 
     total = len(review) + len(creates)
-    summary = f"{REVIEW_SUMMARY_PREFIX}{now} 同步待確認｜新增 {len(creates)} 列｜審核區共 {total} 列"
+    scope = f"（{module}）" if module else ""
+    summary = f"{REVIEW_SUMMARY_PREFIX}{now} 同步待確認{scope}｜新增 {len(creates)} 列｜共 {total} 列"
     if flags:
         summary += f"｜{len(flags)} 列需要注意（看「推送狀態」）"
     return {"action": "pull", "summary": summary,
@@ -247,10 +265,13 @@ def review_log_blocks(headline, entries, per_toggle=90):
     return blocks
 
 
-def review_push_plan(full_pages, review_pages, page_children, log_page_id, now):
+def review_push_plan(full_pages, review_pages, page_children, log_page_id, now,
+                     archive_confirmed=True):
     """page_children：放「最後動作：」狀態列那一頁的區塊（術語審核區）；log_page_id：推送紀錄寫在哪一頁。
 
     2026-09-15 起兩者是不同頁：按鈕與審核區檢視在「術語審核區」，紀錄留在「術語審核區推送紀錄」。
+    archive_confirmed：True＝勾了已確認的列推完移出（Marketing 的待辦清單）；
+    False＝列留著（OMS 模組文件是該模組的完整清單，Fay 2026-09-22）。
     """
     full_by_id = {row["id"]: row for row in (review_values(p) for p in _gr_alive(full_pages))}
     review = sorted((review_values(p) for p in _gr_alive(review_pages)), key=_gr_sort_key)
@@ -292,25 +313,28 @@ def review_push_plan(full_pages, review_pages, page_children, log_page_id, now):
 
         if row["已確認"]:
             confirmed += 1
+        if row["已確認"] and archive_confirmed:
             review_ops.append({"method": "PATCH", "path": "/pages/" + row["id"],
                                "body": {"archived": True}, "note": "移出審核區：" + row["English"]})
         elif writes or any(source[f] != snapshot[f] for f in REVIEW_PUSH_FIELDS):
-            # 寫回後完整表＝審核區的值，快照要跟著更新，下次推送才不會誤判成衝突
+            # 寫回後完整表＝這一列的值，快照要跟著更新，下次推送才不會誤判成衝突
             props = {REVIEW_SNAPSHOT: _gr_prop("rich_text", encode_snapshot(row))}
             if writes:
                 props[REVIEW_STATUS] = _gr_prop("rich_text", f"✓ {now} 已推送：" + "、".join(writes))
             review_ops.append({"method": "PATCH", "path": "/pages/" + row["id"],
                                "body": {"properties": props}, "note": "更新快照：" + row["English"]})
 
-    summary = f"{REVIEW_SUMMARY_PREFIX}{now} 推送回完整表｜寫回 {pushed} 列｜{confirmed} 列已確認、移出審核區"
-    if not pushed and not confirmed:
+    summary = f"{REVIEW_SUMMARY_PREFIX}{now} 推送回完整表｜寫回 {pushed} 列"
+    if archive_confirmed:
+        summary += f"｜{confirmed} 列已確認、移出審核區"
+    if not pushed and not (archive_confirmed and confirmed):
         summary += "｜沒有需要寫回的改動"
     problems = conflicts + missing + broken
     if problems:
         summary += f"｜{problems} 列沒有推送（看「推送狀態」）"
 
     final_ops = []
-    headline = f"{now}｜寫回 {pushed} 列、移出 {confirmed} 列"
+    headline = f"{now}｜寫回 {pushed} 列" + (f"、移出 {confirmed} 列" if archive_confirmed else "")
     log = review_log_blocks(headline, entries)
     if log:
         final_ops.append({"method": "PATCH", "path": "/blocks/" + log_page_id + "/children",
