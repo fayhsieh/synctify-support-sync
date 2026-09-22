@@ -1,17 +1,21 @@
-"""產生「OMS 模組術語」的 n8n workflow：每個模組頁上的兩顆按鈕，**所有模組共用這一支**。
+"""產生「OMS 功能術語」的 n8n workflow：每個功能的 Glossary 頁上兩顆按鈕，**所有功能共用這一支**。
 
-    ./.venv/bin/python scripts/build_oms_module_workflow.py
-    → n8n/local/oms-module-glossary.workflow.json（帶真實 webhook path，不入庫）
+    ./.venv/bin/python scripts/build_oms_feature_workflow.py
+    → n8n/local/oms-feature-glossary.workflow.json（帶真實 webhook path，不入庫）
 
-跟 Marketing 的術語審核區分開（Fay 2026-09-22 的架構圖）：
-- 術語審核區只服務 Support Center 上稿；OMS 模組文件是產品端的審核區，給工程師看
-- **每個模組一個真正獨立的資料庫**，不是篩選過的連結檢視——檢視的篩選不是權限，
-  工程師用 AI 讀那一頁時照樣查得到別的模組的詞（Fay 2026-09-22 指出）
-- 模組文件收該模組**全部**的詞（含已確認），推送後列留著，所以它同時就是交付清單
+跟 Marketing 的術語審核區分開（Fay 2026-09-22 的架構圖）：術語審核區只服務 Support Center 上稿，
+OMS Docs 的 Glossary 文件是產品端給工程師的，完整術語表在中間當唯一真相。
 
-**模組再多也只有這一支 workflow**：按鈕是 Synctify OMS 資料庫的按鈕屬性，
-送 webhook 時會帶那一列的 page id。流程自己讀那一列的「模組」欄位，
-再掃那一頁底下的資料庫當作要寫入的目標。新增模組＝加一頁、填模組、插一個資料庫，不必動 n8n。
+- **一個功能一個真正獨立的資料庫**，不是篩選過的連結檢視——檢視的篩選不是權限，
+  工程師用 AI 讀那一頁時照樣查得到別的功能的詞
+- 功能＝OMS Docs 的 **Sub-module** 欄（Sales Orders、Exception Orders…），不是 i18n key 的第一段：
+  key 第一段只到模組（order），而 order.labels 這種結構性 key 佔 176 個，看不出功能
+- Glossary 頁收該功能**全部**的詞（含已確認），推送後列留著，所以它同時是交付清單
+- 推送紀錄寫到同一個 Sub-module、名稱結尾是「Push Log」的那一頁；找不到就寫在 Glossary 頁自己底下
+
+**功能再多也只有這一支 workflow**：按鈕是 OMS Docs 資料庫的按鈕屬性，送 webhook 時會帶那一列的
+page id。流程自己讀那一列的 Sub-module、掃那一頁底下的資料庫、再找對應的 Push Log 頁。
+新增功能＝複製一組 Glossary／Push Log 文件、選好 Sub-module，不必動 n8n。
 """
 import argparse
 import json
@@ -35,10 +39,12 @@ WEBHOOK_ENV = "N8N_GLOSSARY_REVIEW_WEBHOOK_PATH"                        # 與審
 WEBHOOK_PLACEHOLDER = "synctify-glossary-review-CHANGE-ME-TO-A-RANDOM-STRING"
 
 GLOSSARY_DB = "1ab2891d5ddd48db97d1f1c1afeefcf5"    # 完整術語表
-MODULE_PROP = "模組"                                # Synctify OMS 每一列（每個模組頁）上的欄位
+OMS_DOCS_DB = "e64b664440c9449ea96db9e2ea128a6d"    # OMS Docs：Glossary 與 Push Log 文件都在這
+FEATURE_PROP = "Sub-module"                         # 功能名稱（Sales Orders、Exception Orders…）
+LOG_NAME_SUFFIX = "push log"                        # 同 Sub-module 裡名稱這樣結尾的那一頁＝推送紀錄
 
 PARSE = "解析 page_id"
-CONFIG = "讀模組與資料庫"
+CONFIG = "讀功能與資料庫"
 PLAN = "計算要做的事"
 REASON_FAIL = "原因：節點失敗"
 PHASES = 3
@@ -51,27 +57,26 @@ def det(*parts):
 
 
 CONFIG_JS = """
-// 模組頁那一列的「MODULE_PROP」欄位 → 要撈哪個模組；頁面底下的資料庫 → 要寫進哪裡。
-// 兩者都讀不到就直接停，訊息寫清楚要補什麼（這是新增模組時最容易漏的兩步）。
-const page = $('Notion：取模組頁').first().json;
-const blocks = $('Notion：取模組頁區塊').all().flatMap(i => i.json.results || []);
+// 這一頁的「FEATURE_PROP」＝要收哪個功能的詞；頁面底下的資料庫＝要寫進哪裡。
+// 兩者都讀不到就直接停，訊息寫清楚要補什麼（新增功能時最容易漏的兩步）。
+const page = $('Notion：取 Glossary 頁').first().json;
+const blocks = $('Notion：取頁面區塊').all().flatMap(i => i.json.results || []);
 const parsed = $('PARSE_NODE').first().json;
 
-const module = page.properties?.['MODULE_PROP']?.select?.name || '';
-if (!module) {
-  throw new Error('這一頁的「MODULE_PROP」欄位是空的。請先填上它對應完整術語表的哪個模組（例如 order）');
+const feature = page.properties?.['FEATURE_PROP']?.select?.name || '';
+if (!feature) {
+  throw new Error('這一頁的「FEATURE_PROP」是空的。請先選這一頁對應的功能（例如 Sales Orders），再按一次');
 }
 const db = blocks.find(b => b.type === 'child_database');
 if (!db) {
-  throw new Error('這一頁底下沒有資料庫。請先插入一個術語資料庫（可從別的模組頁複製），再按一次');
+  throw new Error('這一頁底下沒有術語資料庫。請先插入一個（可從別的功能的 Glossary 頁複製），再按一次');
 }
 return [{ json: {
   action: parsed.action,
   now: parsed.now,
   page_id: parsed.page_id,
-  module,
-  module_db: db.id.replace(/-/g, ''),
-  module_title: (db.child_database || {}).title || '',
+  feature,
+  feature_db: db.id.replace(/-/g, ''),
   children: blocks,
 } }];
 """
@@ -79,15 +84,17 @@ return [{ json: {
 ADAPTER = r'''
 
 # ─── n8n 轉接層 ───
-# 上游是 Merge（append）：完整表查詢、模組資料庫查詢、以及「讀模組與資料庫」的設定。
-# **依形狀分辨**而不是依順序：設定那筆有 module_db，頁面依 parent.database_id 分到兩邊。
+# 上游是 Merge（append）：完整表查詢、功能資料庫查詢、OMS Docs 查詢，以及「讀功能與資料庫」的設定。
+# **依形狀分辨**而不是依順序：設定那筆有 feature_db，頁面依 parent.database_id 分三堆。
 _GLOSSARY_DB = __GLOSSARY_DB__
+_OMS_DOCS_DB = __OMS_DOCS_DB__
+_LOG_SUFFIX = __LOG_SUFFIX__
 
 _cfg = None
 _pages = []
 for _it in _items:
     _j = _it['json']
-    if 'module_db' in _j:
+    if 'feature_db' in _j:
         _cfg = _j
         continue
     _res = _j.get('results')
@@ -95,32 +102,45 @@ for _it in _items:
         _pages.extend([_r for _r in _res if _r.get('object') == 'page'])
 
 if _cfg is None:
-    raise ValueError('沒有拿到模組設定——確認「讀模組與資料庫」有執行')
+    raise ValueError('沒有拿到功能設定——確認「讀功能與資料庫」有執行')
 
-_module_db = review_norm_id(_cfg['module_db'])
-_full, _review = [], []
+_feature_db = review_norm_id(_cfg['feature_db'])
+_full, _review, _docs = [], [], []
 for _r in _pages:
     _db = review_norm_id((_r.get('parent') or {}).get('database_id') or '')
-    if _db == _module_db:
+    if _db == _feature_db:
         _review.append(_r)
     elif _db == review_norm_id(_GLOSSARY_DB):
         _full.append(_r)
+    elif _db == review_norm_id(_OMS_DOCS_DB):
+        _docs.append(_r)
 
 if not _full:
     raise ValueError('完整術語表讀到 0 列——確認 Support Center Sync 已連到術語表頁面')
 
+# 推送紀錄寫到同一個功能、名稱結尾是 Push Log 的那一頁；找不到就寫在 Glossary 頁自己底下
+_log_page = _cfg['page_id']
+for _d in _docs:
+    _props = _d.get('properties') or {}
+    _sub = ((_props.get('__FEATURE_PROP__') or {}).get('select') or {}).get('name') or ''
+    _name = ''.join(_t.get('plain_text', '') for _t in (_props.get('Name') or {}).get('title') or [])
+    if _sub == _cfg['feature'] and _name.strip().lower().endswith(_LOG_SUFFIX):
+        _log_page = review_norm_id(_d.get('id') or '')
+        break
+
 if _cfg['action'] == 'pull':
-    # 模組文件收該模組全部的詞（含已確認）：它同時是交付給工程的清單（Fay 2026-09-22）
-    _plan = review_pull_plan(_full, _review, _cfg.get('children') or [], _cfg['module_db'],
-                             _cfg['now'], module=_cfg['module'], pending_only=False)
+    # Glossary 頁收該功能全部的詞（含已確認）：它同時是交付給工程的清單（Fay 2026-09-22）
+    _plan = review_pull_plan(_full, _review, _cfg.get('children') or [], _cfg['feature_db'],
+                             _cfg['now'], features=[_cfg['feature']], pending_only=False)
 elif _cfg['action'] == 'push':
-    # 推送後列留著，紀錄寫在模組頁自己底下
-    _plan = review_push_plan(_full, _review, _cfg.get('children') or [], _cfg['page_id'],
+    # 推送後列留著；紀錄寫到 Push Log 那一頁
+    _plan = review_push_plan(_full, _review, _cfg.get('children') or [], _log_page,
                              _cfg['now'], archive_confirmed=False)
 else:
     raise ValueError('不知道要同步待確認還是推送（action=' + repr(_cfg['action']) + '）')
 
-_plan['module'] = _cfg['module']
+_plan['feature'] = _cfg['feature']
+_plan['log_page'] = _log_page
 _plan['stat_full'] = len(_full)
 _plan['stat_review'] = len(_review)
 return [{'json': _plan}]
@@ -133,9 +153,13 @@ def plan_code():
     header = ("# " + "=" * 66 + "\n"
               "#  自動產生，請勿直接編輯\n"
               "#  來源：converter/glossary_review.py（與術語審核區共用同一份判斷）\n"
-              "#  重新產生：./.venv/bin/python scripts/build_oms_module_workflow.py\n"
+              "#  重新產生：./.venv/bin/python scripts/build_oms_feature_workflow.py\n"
               "# " + "=" * 66 + "\n")
-    return header + src + ADAPTER.replace("__GLOSSARY_DB__", json.dumps(GLOSSARY_DB))
+    adapter = (ADAPTER.replace("__GLOSSARY_DB__", json.dumps(GLOSSARY_DB))
+               .replace("__OMS_DOCS_DB__", json.dumps(OMS_DOCS_DB))
+               .replace("__LOG_SUFFIX__", json.dumps(LOG_NAME_SUFFIX))
+               .replace("__FEATURE_PROP__", FEATURE_PROP))
+    return header + src + adapter
 
 
 PHASE_OPS_JS = """
@@ -163,23 +187,19 @@ return [{ json: { phase: PHASE_NO, done: results.length } }];
 
 
 def build(webhook_base):
-    n = lambda k: det("v1", k)
+    n = lambda k: det("v2", k)
     notion_headers = {"parameters": [{"name": "Notion-Version", "value": "2022-06-28"}]}
     page_expr = "$('" + PARSE + "').first().json.page_id"
 
-    def notion_get(key, name, url, pos, notes=None, **extra):
-        node = {"parameters": {"url": url,
+    def notion_get(key, name, url, pos, notes=None):
+        return {"parameters": {"url": url,
                                "authentication": "predefinedCredentialType",
                                "nodeCredentialType": "notionApi",
                                "sendHeaders": True, "headerParameters": notion_headers,
                                "options": {}},
                 "credentials": {"notionApi": NOTION_CRED},
                 "id": n(key), "name": name, "type": "n8n-nodes-base.httpRequest",
-                "typeVersion": 4.2, "position": pos}
-        if notes:
-            node["notes"] = notes
-        node.update(extra)
-        return node
+                "typeVersion": 4.2, "position": pos, "notes": notes or ""}
 
     def query_node(key, name, url, pos, notes):
         return {"parameters": {
@@ -206,11 +226,11 @@ def build(webhook_base):
             "id": n(key), "name": name, "type": "n8n-nodes-base.set",
             "typeVersion": 3.4, "position": pos}
 
-    button_notes = ("Synctify OMS 資料庫的「{label}」按鈕屬性 → Send webhook（不是頁面上的按鈕區塊：\n"
-                    "按鈕屬性送出時會帶那一列的 page id，流程才知道是哪個模組）。\n"
+    button_notes = ("OMS Docs 資料庫的「{label}」按鈕屬性 → Send webhook（不是頁面上的按鈕區塊：\n"
+                    "按鈕屬性送出時會帶那一列的 page id，流程才知道是哪個功能）。\n"
                     "網址用這個節點的 Production URL；Add custom header 填與「同步到 WP」按鈕同一組。\n\n"
-                    "⚠️ Support Center Sync 要連到 Synctify OMS 這個 wiki（或各模組頁），\n"
-                    "否則讀模組頁與模組資料庫都會回 404（錯誤代碼 C8）。\n\n"
+                    "⚠️ Support Center Sync 要連到 OMS Docs（含各 Glossary／Push Log 頁），\n"
+                    "否則讀頁面與資料庫會回 404（錯誤代碼 C8）。\n\n"
                     "path 取自 .env 的 " + WEBHOOK_ENV + "（不入庫），後綴 -oms-{suffix}。")
 
     nodes = [
@@ -254,42 +274,47 @@ def build(webhook_base):
          "type": "n8n-nodes-base.noOp", "typeVersion": 1, "position": [880, 560],
          "notes": "按鈕若是頁面上的按鈕區塊就會走到這裡——要用資料庫的按鈕屬性才會帶 page id。"},
 
-        notion_get("page", "Notion：取模組頁",
+        notion_get("page", "Notion：取 Glossary 頁",
                    "=https://api.notion.com/v1/pages/{{ " + page_expr + " }}", [880, 260],
-                   "讀那一列的「" + MODULE_PROP + "」欄位，決定要撈完整表的哪個模組。"),
+                   "讀那一列的「" + FEATURE_PROP + "」，決定要收完整表裡標了哪個功能的詞。"),
 
-        notion_get("kids", "Notion：取模組頁區塊",
+        notion_get("kids", "Notion：取頁面區塊",
                    "=https://api.notion.com/v1/blocks/{{ " + page_expr + " }}/children?page_size=100",
                    [1100, 260],
                    "找頁面底下的術語資料庫（child_database）當寫入目標，\n"
                    "以及頁首「最後動作：」那一段的 id（寫狀態列）。"),
 
-        {"parameters": {"jsCode": CONFIG_JS.replace("MODULE_PROP", MODULE_PROP)
+        {"parameters": {"jsCode": CONFIG_JS.replace("FEATURE_PROP", FEATURE_PROP)
                                            .replace("PARSE_NODE", PARSE)},
          "id": n("cfg"), "name": CONFIG, "type": "n8n-nodes-base.code",
          "typeVersion": 2, "position": [1320, 260],
-         "notes": "模組與目標資料庫都是從那一頁讀出來的——新增模組不必改這支流程。"},
+         "notes": "功能與目標資料庫都是從那一頁讀出來的——新增功能不必改這支流程。"},
 
         query_node("q-full", "Notion：取完整術語表",
-                   "https://api.notion.com/v1/databases/" + GLOSSARY_DB + "/query", [1540, 160],
-                   "全部列都要：模組文件收該模組全部的詞（含已確認）。**要分頁**（上限 100）。"),
+                   "https://api.notion.com/v1/databases/" + GLOSSARY_DB + "/query", [1540, 120],
+                   "全部列都要：Glossary 頁收該功能全部的詞（含已確認）。**要分頁**（上限 100）。"),
 
-        query_node("q-module", "Notion：取模組資料庫",
-                   "=https://api.notion.com/v1/databases/{{ $json.module_db }}/query", [1540, 360],
+        query_node("q-feature", "Notion：取功能術語資料庫",
+                   "=https://api.notion.com/v1/databases/{{ $json.feature_db }}/query", [1540, 300],
                    "資料庫 id 來自上一個節點掃到的 child_database，**不寫死**。**要分頁**。"),
 
-        {"parameters": {"mode": "append", "numberInputs": 3},
+        query_node("q-docs", "Notion：取 OMS Docs",
+                   "https://api.notion.com/v1/databases/" + OMS_DOCS_DB + "/query", [1540, 480],
+                   "用來找同一個 " + FEATURE_PROP + "、名稱結尾是 Push Log 的那一頁（推送紀錄寫在那）。\n"
+                   "找不到就寫在 Glossary 頁自己底下。"),
+
+        {"parameters": {"mode": "append", "numberInputs": 4},
          "id": n("merge"), "name": "合流", "type": "n8n-nodes-base.merge", "typeVersion": 3,
          "position": [1760, 260],
-         "notes": "三條線：完整表、模組資料庫、模組設定。下游依形狀分辨，不依順序。"},
+         "notes": "四條線：完整表、功能資料庫、OMS Docs、功能設定。下游依形狀分辨，不依順序。"},
 
         {"parameters": {"language": "pythonNative", "pythonCode": plan_code()},
          "id": n("plan"), "name": PLAN, "type": "n8n-nodes-base.code", "typeVersion": 2,
          "position": [1980, 260],
          "notes": "自動產生，勿直接編輯——改 converter/glossary_review.py 後重新跑產生器。\n"
-                  "與術語審核區共用同一份判斷，只是收全部的詞、推送後不移出。"},
+                  "與術語審核區共用同一份判斷，只是依功能收全部的詞、推送後不移出。"},
 
-        # ── 失敗路徑：在該模組頁留言 ────────────────────────────────────
+        # ── 失敗路徑：在該 Glossary 頁留言 ─────────────────────────────
         {"parameters": {"assignments": {"assignments": [
             {"id": n("f-reason"), "name": "fail_reason", "type": "string",
              "value": "={{ " + ec.to_reason_js() + "("
@@ -308,16 +333,16 @@ def build(webhook_base):
             "sendHeaders": True, "headerParameters": notion_headers,
             "sendBody": True, "specifyBody": "json",
             "jsonBody": "={{ { parent: { page_id: " + page_expr + " }, rich_text: ["
-                        " { text: { content: '模組術語操作失敗' }, annotations: { bold: true } },"
+                        " { text: { content: '功能術語操作失敗' }, annotations: { bold: true } },"
                         " { text: { content: ($json.fail_node ? '（卡在「' + $json.fail_node + '」）' : '')"
                         " + '：' + ($json.fail_reason || '') + '\\n\\n處理後可以直接再按一次：同步待確認不會重複建立已有的列；'"
                         " + '推送時已寫進完整表的內容不會重寫，也不會被當成衝突。' } } ] } }}",
             "options": {}},
          "credentials": {"notionApi": NOTION_CRED},
-         "id": n("fail-comment"), "name": "Notion：模組頁留言失敗", "type": "n8n-nodes-base.httpRequest",
+         "id": n("fail-comment"), "name": "Notion：Glossary 頁留言失敗", "type": "n8n-nodes-base.httpRequest",
          "typeVersion": 4.2, "position": [2860, 900], "executeOnce": True},
 
-        {"parameters": {"errorMessage": "=模組術語未完成：{{ $('" + REASON_FAIL + "').first().json.fail_reason }}"},
+        {"parameters": {"errorMessage": "=功能術語未完成：{{ $('" + REASON_FAIL + "').first().json.fail_reason }}"},
          "id": n("stop"), "name": "標記本次執行失敗", "type": "n8n-nodes-base.stopAndError",
          "typeVersion": 1, "position": [3080, 900]},
     ]
@@ -331,20 +356,21 @@ def build(webhook_base):
         "動作：同步待確認": {"main": [[to(PARSE)]]},
         "動作：推送回完整表": {"main": [[to(PARSE)]]},
         PARSE: {"main": [[to("取得到 page_id？")]]},
-        "取得到 page_id？": {"main": [[to("Notion：取模組頁")], [to("payload 無 page_id（結束）")]]},
-        "Notion：取模組頁": {"main": [[to("Notion：取模組頁區塊")]]},
-        "Notion：取模組頁區塊": {"main": [[to(CONFIG)]]},
-        CONFIG: {"main": [[to("Notion：取完整術語表"), to("Notion：取模組資料庫"), to("合流", 2)]]},
+        "取得到 page_id？": {"main": [[to("Notion：取 Glossary 頁")], [to("payload 無 page_id（結束）")]]},
+        "Notion：取 Glossary 頁": {"main": [[to("Notion：取頁面區塊")]]},
+        "Notion：取頁面區塊": {"main": [[to(CONFIG)]]},
+        CONFIG: {"main": [[to("Notion：取完整術語表"), to("Notion：取功能術語資料庫"),
+                           to("Notion：取 OMS Docs"), to("合流", 3)]]},
         "Notion：取完整術語表": {"main": [[to("合流", 0)]]},
-        "Notion：取模組資料庫": {"main": [[to("合流", 1)]]},
+        "Notion：取功能術語資料庫": {"main": [[to("合流", 1)]]},
+        "Notion：取 OMS Docs": {"main": [[to("合流", 2)]]},
         "合流": {"main": [[to(PLAN)]]},
-        REASON_FAIL: {"main": [[to("Notion：模組頁留言失敗")]]},
-        "Notion：模組頁留言失敗": {"main": [[to("標記本次執行失敗")]]},
+        REASON_FAIL: {"main": [[to("Notion：Glossary 頁留言失敗")]]},
+        "Notion：Glossary 頁留言失敗": {"main": [[to("標記本次執行失敗")]]},
     }
 
-    failable = ["Notion：取模組頁", "Notion：取模組頁區塊", CONFIG,
-                "Notion：取完整術語表", "Notion：取模組資料庫", PLAN]
-    previous = PLAN
+    failable = ["Notion：取 Glossary 頁", "Notion：取頁面區塊", CONFIG,
+                "Notion：取完整術語表", "Notion：取功能術語資料庫", "Notion：取 OMS Docs", PLAN]
     for i in range(PHASES):
         no = i + 1
         ops_name, if_name = f"第 {no} 階段：取出操作", f"第 {no} 階段有事要做？"
@@ -381,10 +407,9 @@ def build(webhook_base):
         nxt = [to(f"第 {no + 1} 階段：取出操作")] if no < PHASES else []
         conns[if_name] = {"main": [[to(run_name)], nxt]}
         conns[check_name] = {"main": [nxt]}
-        if previous == PLAN:
+        if i == 0:
             conns[PLAN] = {"main": [[to(ops_name)]]}
         failable.append(check_name)
-        previous = check_name
 
     by_name = {nd["name"]: nd for nd in nodes}
     for name in failable:
@@ -395,7 +420,7 @@ def build(webhook_base):
         main[1] = [to(REASON_FAIL)]
         conns[name] = {"main": main}
 
-    return {"name": "Synctify — OMS 模組術語（同步待確認／推送回完整表）",
+    return {"name": "Synctify — OMS 功能術語（同步待確認／推送回完整表）",
             "nodes": nodes, "connections": conns, "active": False,
             "settings": {"executionOrder": "v1"}}
 
@@ -409,7 +434,7 @@ def main():
         print(f"⚠️  .env 沒有 {WEBHOOK_ENV}，webhook path 先用佔位字串。")
     wf = build(base)
     OUT_DIR.mkdir(parents=True, exist_ok=True)
-    out = OUT_DIR / "oms-module-glossary.workflow.json"
+    out = OUT_DIR / "oms-feature-glossary.workflow.json"
     out.write_text(json.dumps(wf, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     print(f"✓ 已產生 {out}")
     print(f"  webhook path：{'（佔位字串）' if base == WEBHOOK_PLACEHOLDER else '取自 .env'}（-oms-pull／-oms-push）")

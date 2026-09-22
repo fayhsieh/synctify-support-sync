@@ -18,7 +18,7 @@
 """
 
 REVIEW_PUSH_FIELDS = ["English", "简体中文", "繁體中文", "類型", "備註", "已確認"]
-REVIEW_REF_FIELDS = ["一致性", "OMS v0 現況", "文件現況", "模組"]
+REVIEW_REF_FIELDS = ["一致性", "OMS v0 現況", "文件現況", "模組", "功能"]
 REVIEW_SOURCE = "完整表列"
 REVIEW_SNAPSHOT = "取出時內容"
 REVIEW_STATUS = "推送狀態"
@@ -27,7 +27,8 @@ REVIEW_PAGE_URL_PREFIX = "https://app.notion.com/p/"
 
 _GR_KINDS = {"English": "title", "简体中文": "rich_text", "繁體中文": "rich_text", "類型": "select",
              "備註": "rich_text", "已確認": "checkbox", "一致性": "select",
-             "OMS v0 現況": "rich_text", "文件現況": "rich_text", "模組": "multi_select"}
+             "OMS v0 現況": "rich_text", "文件現況": "rich_text",
+             "模組": "multi_select", "功能": "multi_select"}
 
 
 # ── 讀值 ─────────────────────────────────────────────────────────────
@@ -61,8 +62,9 @@ def review_values(page):
     for name in REVIEW_PUSH_FIELDS + REVIEW_REF_FIELDS + [REVIEW_SOURCE, REVIEW_SNAPSHOT, REVIEW_STATUS]:
         out[name] = _gr_value(props.get(name))
     out["已確認"] = bool(out["已確認"])
-    if not isinstance(out["模組"], list):      # 欄位不存在時 _gr_value 回空字串
-        out["模組"] = []
+    for name in ("模組", "功能"):              # 欄位不存在時 _gr_value 回空字串
+        if not isinstance(out[name], list):
+            out[name] = []
     return out
 
 
@@ -191,12 +193,13 @@ def review_create_ops(full_pages, review_db):
 # ── 同步待確認（按鈕）───────────────────────────────────────────────────────
 
 def review_pull_plan(full_pages, review_pages, page_children, review_db, now,
-                     module=None, pending_only=True):
-    """完整表的列 → 在審核區／模組文件建立還沒有的那些。已經有的列不覆蓋，只標出來源有異狀的。
+                     features=None, pending_only=True):
+    """完整表的列 → 在審核區／功能文件建立還沒有的那些。已經有的列不覆蓋，只標出來源有異狀的。
 
-    module：只收「模組」含這個值的列——OMS 每個模組一份獨立文件，篩選檢視擋不住 AI 讀到別的模組
-    （Fay 2026-09-22），所以是真的只把該模組的列建進那個資料庫。None＝不分模組（Marketing 審核區）。
-    pending_only：True＝只收還沒勾「已確認」的（待辦清單）；False＝該模組全部的詞（給工程的完整清單）。
+    features：只收「功能」與這份清單有交集的列。功能是詞彙表的最小單位（Fay 2026-09-22），
+    名稱以 OMS DB 上的頁面為準；一頁可以列多個（例：Sales Orders 與該模組的共用詞）。
+    每個功能一個**獨立資料庫**——篩選檢視擋不住工程師用 AI 讀到別的功能的詞。None＝全收（Marketing 審核區）。
+    pending_only：True＝只收還沒勾「已確認」的（待辦清單）；False＝全部的詞（給工程的完整清單）。
     """
     full = [review_values(p) for p in _gr_alive(full_pages)]
     review = [review_values(p) for p in _gr_alive(review_pages)]
@@ -206,7 +209,7 @@ def review_pull_plan(full_pages, review_pages, page_children, review_db, now,
     def wanted(row):
         if row["id"] in in_review or (pending_only and row["已確認"]):
             return False
-        return module is None or module in row["模組"]
+        return not features or any(f in row["功能"] for f in features)
 
     creates = [_gr_create_op(row, review_db, "同步待確認：")
                for row in sorted(full, key=_gr_sort_key) if wanted(row)]
@@ -225,7 +228,7 @@ def review_pull_plan(full_pages, review_pages, page_children, review_db, now,
             flags.append(_gr_status_op(row, message))
 
     total = len(review) + len(creates)
-    scope = f"（{module}）" if module else ""
+    scope = f"（{'、'.join(features)}）" if features else ""
     summary = f"{REVIEW_SUMMARY_PREFIX}{now} 同步待確認{scope}｜新增 {len(creates)} 列｜共 {total} 列"
     if flags:
         summary += f"｜{len(flags)} 列需要注意（看「推送狀態」）"

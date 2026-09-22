@@ -20,9 +20,10 @@ def _rt(text):
     return {"type": "rich_text", "rich_text": [{"plain_text": text}] if text else []}
 
 
-def full_page(pid, en, zh="", tw="", kind="UI 標籤", note="", ok=False, modules=(), **extra):
+def full_page(pid, en, zh="", tw="", kind="UI 標籤", note="", ok=False, modules=(), features=(), **extra):
     props = {
         "模組": {"type": "multi_select", "multi_select": [{"name": m} for m in modules]},
+        "功能": {"type": "multi_select", "multi_select": [{"name": f} for f in features]},
         "English": {"type": "title", "title": [{"plain_text": en}]},
         "简体中文": _rt(zh), "繁體中文": _rt(tw), "備註": _rt(note),
         "類型": {"type": "select", "select": {"name": kind} if kind else None},
@@ -160,40 +161,43 @@ def test_archived_pages_are_ignored():
     assert ops(plan, 0) == []
 
 
-# ---- OMS 模組文件（一個模組一個獨立資料庫）-------------------------------
+# ---- OMS 功能文件（一個功能一個獨立資料庫）-------------------------------
 
-def test_pull_module_only_takes_that_module():
-    """篩選檢視擋不住 AI 讀到別的模組，所以模組文件真的只建該模組的列（Fay 2026-09-22）。"""
-    rows = [full_page("a" * 32, "Cause", "原因", modules=["order"]),
-            full_page("b" * 32, "Pallets", "托盘", modules=["shipment_routing"]),
-            full_page("c" * 32, "Carrier", "承运商", modules=["order", "parcel_monitoring"])]
-    plan = gr.review_pull_plan(rows, [], CHILDREN, REVIEW_DB, NOW, module="order")
+def test_pull_features_only_takes_those_features():
+    """篩選檢視擋不住 AI 讀到別的功能，所以功能文件真的只建該功能的列（Fay 2026-09-22）。"""
+    rows = [full_page("a" * 32, "Cause", "原因", features=["Sales Orders"]),
+            full_page("b" * 32, "Pallets", "托盘", features=["Shipment Routing"]),
+            full_page("c" * 32, "Carrier", "承运商", features=["Orders (Shared)", "Parcel Monitoring"])]
+    plan = gr.review_pull_plan(rows, [], CHILDREN, REVIEW_DB, NOW,
+                               features=["Sales Orders", "Orders (Shared)"])
     assert [op["note"] for op in ops(plan, 0)] == ["同步待確認：Carrier", "同步待確認：Cause"]
-    assert ops(plan, 0)[0]["body"]["properties"]["模組"] == {
-        "multi_select": [{"name": "order"}, {"name": "parcel_monitoring"}]}
-    assert "（order）" in plan["summary"]
+    assert ops(plan, 0)[0]["body"]["properties"]["功能"] == {
+        "multi_select": [{"name": "Orders (Shared)"}, {"name": "Parcel Monitoring"}]}
+    assert "（Sales Orders、Orders (Shared)）" in plan["summary"]
 
 
-def test_pull_module_takes_confirmed_rows_too():
+def test_pull_features_takes_confirmed_rows_too():
     """交付給工程的清單要完整：pending_only=False 連已確認的也收。"""
-    rows = [full_page("a" * 32, "Cause", "原因", modules=["order"]),
-            full_page("b" * 32, "Add", "添加", ok=True, modules=["order"])]
-    pending = gr.review_pull_plan(rows, [], CHILDREN, REVIEW_DB, NOW, module="order")
-    full = gr.review_pull_plan(rows, [], CHILDREN, REVIEW_DB, NOW, module="order", pending_only=False)
+    rows = [full_page("a" * 32, "Cause", "原因", features=["Sales Orders"]),
+            full_page("b" * 32, "Add", "添加", ok=True, features=["Sales Orders"])]
+    pending = gr.review_pull_plan(rows, [], CHILDREN, REVIEW_DB, NOW, features=["Sales Orders"])
+    full = gr.review_pull_plan(rows, [], CHILDREN, REVIEW_DB, NOW,
+                               features=["Sales Orders"], pending_only=False)
     assert [op["note"] for op in ops(pending, 0)] == ["同步待確認：Cause"]
     assert [op["note"] for op in ops(full, 0)] == ["同步待確認：Add", "同步待確認：Cause"]
 
 
-def test_pull_module_does_not_flag_confirmed_source():
-    """模組文件本來就收已確認的列，不該被標成「完整表已勾確認」。"""
-    src = full_page("a" * 32, "Add", "添加", ok=True, modules=["order"])
+def test_pull_features_does_not_flag_confirmed_source():
+    """功能文件本來就收已確認的列，不該被標成「完整表已勾確認」。"""
+    src = full_page("a" * 32, "Add", "添加", ok=True, features=["Sales Orders"])
     rev = review_page("1" * 32, src, 已確認=False)
-    plan = gr.review_pull_plan([src], [rev], CHILDREN, REVIEW_DB, NOW, module="order", pending_only=False)
+    plan = gr.review_pull_plan([src], [rev], CHILDREN, REVIEW_DB, NOW,
+                               features=["Sales Orders"], pending_only=False)
     assert ops(plan, 0) == []
 
 
 def test_push_without_archive_keeps_rows():
-    src = full_page("a" * 32, "Cause", "", modules=["order"])
+    src = full_page("a" * 32, "Cause", "", features=["Sales Orders"])
     rev = review_page("1" * 32, src, 简体中文="原因", 已確認=True)
     plan = gr.review_push_plan([src], [rev], CHILDREN, REVIEW_PAGE, NOW, archive_confirmed=False)
     full_ops, review_ops, _ = plan["phases"]
@@ -205,7 +209,7 @@ def test_push_without_archive_keeps_rows():
 
 def test_push_without_archive_is_idempotent():
     """推送完列還在，再按一次不該重寫。"""
-    src = full_page("a" * 32, "Cause", "原因", modules=["order"], ok=True)
+    src = full_page("a" * 32, "Cause", "原因", features=["Sales Orders"], ok=True)
     rev = review_page("1" * 32, src, 已確認=True)
     plan = gr.review_push_plan([src], [rev], CHILDREN, REVIEW_PAGE, NOW, archive_confirmed=False)
     assert plan["phases"][0] == [] and plan["phases"][1] == []
