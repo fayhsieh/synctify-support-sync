@@ -51,23 +51,34 @@ def children_of(page_id, token):
 
 
 def main():
-    ap = argparse.ArgumentParser(description="術語審核區：同步待確認／推送回完整表")
+    ap = argparse.ArgumentParser(description="術語審核區／OMS 模組術語：同步待確認／推送回完整表")
     ap.add_argument("action", choices=["pull", "push"], help="pull＝同步待確認、push＝推送回完整表")
     ap.add_argument("--write", action="store_true", help="實際寫入 Notion（預設只列出會做什麼）")
+    ap.add_argument("--module", help="OMS 模組模式：只收這個模組的詞（例：order），收全部的詞且推送後不移出")
+    ap.add_argument("--page", help="模組頁 id（狀態列與推送紀錄寫在這頁）；不給就用 Marketing 的兩頁")
+    ap.add_argument("--review-db", help="模組術語資料庫 id；不給就用 Marketing 的審核區")
     args = ap.parse_args()
+    if args.module and not (args.page and args.review_db):
+        ap.error("--module 要一起給 --page 與 --review-db（模組頁與該頁底下的術語資料庫）")
 
     token = wp_env.read_env().get("NOTION_API_KEY")
     if not token:
         sys.exit("✗ .env 缺 NOTION_API_KEY")
 
+    review_db = args.review_db or REVIEW_DB
+    work_page = args.page or WORK_PAGE
+    log_page = args.page or LOG_PAGE
     full = query_all(gs.GLOSSARY_DB, token)
-    review = query_all(REVIEW_DB, token)
-    kids = children_of(WORK_PAGE, token)
+    review = query_all(review_db, token)
+    kids = children_of(work_page, token)
     now = datetime.datetime.now(TAIPEI).strftime("%Y-%m-%d %H:%M")
     if args.action == "pull":
-        plan = gr.review_pull_plan(full, review, kids, REVIEW_DB, now)
+        # 模組文件收該模組全部的詞（含已確認），它同時是交付給工程的清單
+        plan = gr.review_pull_plan(full, review, kids, review_db, now,
+                                   module=args.module, pending_only=not args.module)
     else:
-        plan = gr.review_push_plan(full, review, kids, LOG_PAGE, now)
+        plan = gr.review_push_plan(full, review, kids, log_page, now,
+                                   archive_confirmed=not args.module)
 
     print(f"完整表 {len(full)} 列、審核區 {len(review)} 列")
     print(plan["summary"])
