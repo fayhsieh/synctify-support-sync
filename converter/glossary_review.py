@@ -239,9 +239,19 @@ def review_pull_plan(full_pages, review_pages, page_children, review_db, now,
     creates = [_gr_create_op(row, review_db, label + "：", uncheck_flagged=pending_only)
                for row in sorted(full, key=_gr_sort_key) if wanted(row)]
 
-    flags = []
+    flags, refresh = [], []
     for row in review:
         source = full_by_id.get(review_norm_id(row[REVIEW_SOURCE]))
+        # 參考欄位（一致性、模組、審核群組…）是腳本算出來的，不是心柔改的內容，
+        # 所以每次同步都跟完整表對齊——不然審核區篩「審核群組」會漏掉後來才補標的列。
+        # 快照刻意不重算：它要留住「取出時完整表的推送欄位」，重算會把真正的衝突吃掉。
+        if source is not None:
+            stale = {f: source[f] for f in REVIEW_REF_FIELDS if row[f] != source[f]}
+            if stale:
+                refresh.append({"method": "PATCH", "path": "/pages/" + row["id"],
+                                "body": {"properties": {f: _gr_prop(_GR_KINDS[f], v)
+                                                        for f, v in stale.items()}},
+                                "note": "更新參考欄位：" + row["English"]})
         if source is None:
             message = "⚠️ 完整表已經沒有這一列（可能被刪除或合併），不會推送；確認後可以刪掉這列"
         elif pending_only and source["已確認"] and not source[REVIEW_FLAG] and not row["已確認"]:
@@ -255,11 +265,15 @@ def review_pull_plan(full_pages, review_pages, page_children, review_db, now,
     total = len(review) + len(creates)
     scope = f"（{'、'.join(features)}）" if features else ""
     summary = f"{REVIEW_SUMMARY_PREFIX}{now} {label}{scope}｜新增 {len(creates)} 列｜共 {total} 列"
+    if refresh:
+        summary += f"｜{len(refresh)} 列更新參考欄位"
     if flags:
         summary += f"｜{len(flags)} 列需要注意（看「推送狀態」）"
     return {"action": "pull", "summary": summary,
-            "counts": {"created": len(creates), "flagged": len(flags), "total": total},
-            "phases": [creates + flags, _gr_summary_ops(review_summary_block(page_children), summary)]}
+            "counts": {"created": len(creates), "refreshed": len(refresh),
+                       "flagged": len(flags), "total": total},
+            "phases": [creates + refresh + flags,
+                       _gr_summary_ops(review_summary_block(page_children), summary)]}
 
 
 # ── 推送回完整表 ─────────────────────────────────────────────────────

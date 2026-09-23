@@ -48,6 +48,12 @@ def review_page(rid, source_page, snapshot_of=None, status="", **changes):
         "简体中文": _rt(values["简体中文"]), "繁體中文": _rt(values["繁體中文"]), "備註": _rt(values["備註"]),
         "類型": {"type": "select", "select": {"name": values["類型"]} if values["類型"] else None},
         "已確認": {"type": "checkbox", "checkbox": values["已確認"]},
+        # 參考欄位：真實的審核區列是由 pull 建的，這些欄位跟完整表一致（不然每次同步都會被更新）
+        "一致性": {"type": "select", "select": {"name": values["一致性"]} if values["一致性"] else None},
+        "OMS v0 現況": _rt(values["OMS v0 現況"]), "文件現況": _rt(values["文件現況"]),
+        "模組": {"type": "multi_select", "multi_select": [{"name": m} for m in values["模組"]]},
+        "功能": {"type": "multi_select", "multi_select": [{"name": f} for f in values["功能"]]},
+        "審核群組": {"type": "multi_select", "multi_select": [{"name": g} for g in values["審核群組"]]},
         gr.REVIEW_SOURCE: {"type": "url", "url": gr.REVIEW_PAGE_URL_PREFIX + base["id"]},
         gr.REVIEW_SNAPSHOT: _rt(gr.encode_snapshot(gr.review_values(snapshot_of or source_page))),
         gr.REVIEW_STATUS: _rt(status),
@@ -115,7 +121,7 @@ def test_pull_creates_only_unconfirmed_rows_not_already_in_review():
     assert snap["简体中文"] == "原因" and snap["已確認"] is False
     # 審核區已有的 Backorder 沒有被覆蓋（沒有對它的任何操作）
     assert not [op for op in ops(plan, 0) if "Backorder" in op["note"]]
-    assert plan["counts"] == {"created": 1, "flagged": 0, "total": 2}
+    assert plan["counts"] == {"created": 1, "refreshed": 0, "flagged": 0, "total": 2}
 
 
 def test_pull_sorted_by_english_and_reference_fields_copied():
@@ -197,6 +203,30 @@ def test_push_never_unconfirms_full_table():
     rev = review_page("1" * 32, src, 简体中文="新增", 已確認=False)
     props = gr.review_push_plan([src], [rev], CHILDREN, REVIEW_PAGE, NOW)["phases"][0][0]["body"]["properties"]
     assert set(props) == {"简体中文"}
+
+
+def test_pull_refreshes_stale_reference_fields():
+    """審核區列已經存在時，參考欄位要跟完整表對齊——後來才補標的審核群組不能漏（Fay 2026-09-23）。"""
+    src = full_page("a" * 32, "3PL Orders", "3PL 订单", ok=True, flag=True, groups=["3. 中英文空格"])
+    rev = review_page("1" * 32, src, 已確認=False)
+    src["properties"]["審核群組"]["multi_select"].append({"name": "4. 選單名加管理"})   # 事後又標了一組
+    src["properties"]["一致性"]["select"] = {"name": "一致"}
+    plan = gr.review_pull_plan([src], [rev], CHILDREN, REVIEW_DB, NOW)
+    assert plan["counts"]["refreshed"] == 1
+    op, = ops(plan, 0)
+    assert op == {"method": "PATCH", "path": "/pages/" + "1" * 32, "note": "更新參考欄位：3PL Orders",
+                  "body": {"properties": {
+                      "一致性": {"select": {"name": "一致"}},
+                      "審核群組": {"multi_select": [{"name": "3. 中英文空格"}, {"name": "4. 選單名加管理"}]}}}}
+
+
+def test_pull_does_not_touch_snapshot_or_human_fields_when_refreshing():
+    """更新參考欄位時不能動快照與心柔改的內容，不然真正的衝突會被吃掉。"""
+    src = full_page("a" * 32, "Add", "添加", ok=True, flag=True, groups=["6. 添加 vs 新增"])
+    rev = review_page("1" * 32, src, 简体中文="新增", 已確認=False)
+    src["properties"]["模組"]["multi_select"].append({"name": "order"})
+    props = ops(gr.review_pull_plan([src], [rev], CHILDREN, REVIEW_DB, NOW), 0)[0]["body"]["properties"]
+    assert set(props) == {"模組"}
 
 
 def test_pull_copies_all_review_groups():
