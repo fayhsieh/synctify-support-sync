@@ -7,7 +7,9 @@
 - 同步待確認是「複製」不是搬走（按鈕原名「取出待確認」，Fay 2026-09-15 改名）：翻譯前的術語閘門、同步時建新詞都讀完整表，搬走會被當成新詞重建。
 - 已在審核區的列不覆蓋（心柔改到一半的內容要保留）。
 - 另外也收完整表上勾了「待複審」的列（即使已確認）：跨模組用詞要心柔一起決定，但取消「已確認」
-  會讓那些詞退出術語閘門、譯法被重跑，所以改用旗標。推送回去時若已勾確認就自動清掉旗標。
+  會讓那些詞退出術語閘門、譯法被重跑，所以改用旗標。這些列到審核區時「已確認」先取消勾選——
+  審核區的打勾意思是「複審過了」，勾了推送回去才會清掉旗標、把列移出。審核區永遠不會把完整表
+  的「已確認」取消掉（要退回未確認請直接在完整表改）。
 - 推送只寫 REVIEW_PUSH_FIELDS；參考欄位（一致性、OMS v0 現況、文件現況）不寫回。
 - 有改動的列都寫回；勾了「已確認」的寫回後移出審核區（封存，Notion 垃圾桶 30 天內可還原）。
 - 衝突：某欄在同步到審核區後被人在完整表改過、審核區的值又跟完整表現在不同 → 整列不寫，標在「推送狀態」。
@@ -177,9 +179,17 @@ def _gr_sort_key(row):
 
 # ── 在審核區建列（同步待確認按鈕、同步 WP 時的新詞共用）───────────────────────────────
 
-def _gr_create_op(row, review_db, note_prefix):
-    """完整表的一列 → 在審核區建同樣內容的一列。快照＝完整表這一列的值。"""
+def _gr_create_op(row, review_db, note_prefix, uncheck_flagged=False):
+    """完整表的一列 → 在審核區建同樣內容的一列。快照＝完整表這一列的值。
+
+    uncheck_flagged：待複審的列在完整表本來就勾著「已確認」，照抄過去審核區會變成
+    「還沒看就已經是已確認」，第一次推送就把整批列清掉。所以待辦清單（Marketing 審核區）
+    建列時先取消打勾——審核區的打勾意思是「心柔複審過了」，勾了才會清旗標、移出審核區。
+    快照仍然是完整表的原值（已確認），推送時不會把這個未勾狀態寫回去。
+    """
     props = {name: _gr_prop(_GR_KINDS[name], row[name]) for name in REVIEW_PUSH_FIELDS + REVIEW_REF_FIELDS}
+    if uncheck_flagged and row[REVIEW_FLAG] and row["已確認"]:
+        props["已確認"] = _gr_prop("checkbox", False)
     props[REVIEW_SOURCE] = _gr_prop("url", REVIEW_PAGE_URL_PREFIX + row["id"])
     props[REVIEW_SNAPSHOT] = _gr_prop("rich_text", encode_snapshot(row))
     return {"method": "POST", "path": "/pages",
@@ -224,7 +234,7 @@ def review_pull_plan(full_pages, review_pages, page_children, review_db, now,
             return False
         return not features or any(f in row["功能"] for f in features)
 
-    creates = [_gr_create_op(row, review_db, label + "：")
+    creates = [_gr_create_op(row, review_db, label + "：", uncheck_flagged=pending_only)
                for row in sorted(full, key=_gr_sort_key) if wanted(row)]
 
     flags = []
@@ -293,7 +303,7 @@ def review_push_plan(full_pages, review_pages, page_children, log_page_id, now,
     review = sorted((review_values(p) for p in _gr_alive(review_pages)), key=_gr_sort_key)
 
     full_ops, review_ops, entries = [], [], []
-    pushed = confirmed = conflicts = missing = broken = 0
+    pushed = reviewed = confirmed = conflicts = missing = broken = 0
     for row in review:
         source = full_by_id.get(review_norm_id(row[REVIEW_SOURCE]))
         snapshot = decode_snapshot(row[REVIEW_SNAPSHOT])
@@ -320,6 +330,10 @@ def review_push_plan(full_pages, review_pages, page_children, log_page_id, now,
             continue
 
         writes = [f for f in REVIEW_PUSH_FIELDS if row[f] != source[f]]
+        # 審核區不會把完整表的「已確認」取消掉：待複審的列取出時就是未勾的，那是「還沒複審」
+        # 不是「取消確認」。要退回未確認請直接在完整表改（Fay 的規則：確認過的列不隨意改）
+        if "已確認" in writes and source["已確認"] and not row["已確認"]:
+            writes.remove("已確認")
         # 心柔確認完就把「待複審」清掉，那一列才會退出審核區（旗標不是人工內容，不算 push 欄位）
         clear_flag = source[REVIEW_FLAG] and row["已確認"]
         if writes or clear_flag:
@@ -332,6 +346,10 @@ def review_push_plan(full_pages, review_pages, page_children, log_page_id, now,
         if writes:
             pushed += 1
             entries.append((row["English"], [(f, source[f], row[f]) for f in writes]))
+        elif clear_flag:
+            # 複審過但覺得原譯法就好：沒有欄位要寫，紀錄裡也要留一筆，才知道這列是看過才退出的
+            reviewed += 1
+            entries.append((row["English"], [(REVIEW_FLAG, "待複審", "複審通過，維持原譯")]))
 
         if row["已確認"]:
             confirmed += 1
@@ -347,16 +365,19 @@ def review_push_plan(full_pages, review_pages, page_children, log_page_id, now,
                                "body": {"properties": props}, "note": "更新快照：" + row["English"]})
 
     summary = f"{REVIEW_SUMMARY_PREFIX}{now} 推送回完整表｜寫回 {pushed} 列"
+    if reviewed:
+        summary += f"｜{reviewed} 列複審通過（維持原譯）"
     if archive_confirmed:
         summary += f"｜{confirmed} 列已確認、移出審核區"
-    if not pushed and not (archive_confirmed and confirmed):
+    if not pushed and not reviewed and not (archive_confirmed and confirmed):
         summary += "｜沒有需要寫回的改動"
     problems = conflicts + missing + broken
     if problems:
         summary += f"｜{problems} 列沒有推送（看「推送狀態」）"
 
     final_ops = []
-    headline = f"{now}｜寫回 {pushed} 列" + (f"、移出 {confirmed} 列" if archive_confirmed else "")
+    headline = (f"{now}｜寫回 {pushed} 列" + (f"、複審通過 {reviewed} 列" if reviewed else "")
+                + (f"、移出 {confirmed} 列" if archive_confirmed else ""))
     log = review_log_blocks(headline, entries)
     if log:
         final_ops.append({"method": "PATCH", "path": "/blocks/" + log_page_id + "/children",
@@ -364,6 +385,6 @@ def review_push_plan(full_pages, review_pages, page_children, log_page_id, now,
     final_ops += _gr_summary_ops(review_summary_block(page_children), summary)
 
     return {"action": "push", "summary": summary,
-            "counts": {"pushed": pushed, "confirmed": confirmed, "conflicts": conflicts,
-                       "missing": missing, "broken": broken},
+            "counts": {"pushed": pushed, "reviewed": reviewed, "confirmed": confirmed,
+                       "conflicts": conflicts, "missing": missing, "broken": broken},
             "phases": [full_ops, review_ops, final_ops]}

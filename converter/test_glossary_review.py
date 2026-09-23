@@ -4,6 +4,7 @@
     cd <repo root> && ./.venv/bin/python -m pytest converter/test_glossary_review.py -v
 """
 import ast
+import json
 import pathlib
 import sys
 
@@ -173,6 +174,30 @@ def test_pull_takes_confirmed_row_when_flagged():
     assert [op["note"] for op in ops(plan, 0)] == ["同步待確認：Add Product"]
 
 
+def test_pull_unchecks_confirmed_on_flagged_row():
+    """待複審的列到審核區時先取消打勾：審核區的「已確認」意思是心柔複審過了。"""
+    src = full_page("a" * 32, "Add", "添加", ok=True, flag=True)
+    props = ops(gr.review_pull_plan([src], [], CHILDREN, REVIEW_DB, NOW), 0)[0]["body"]["properties"]
+    assert props["已確認"] == {"checkbox": False}
+    assert gr.decode_snapshot(props[gr.REVIEW_SNAPSHOT]["rich_text"][0]["text"]["content"])["已確認"] is True
+
+
+def test_feature_doc_keeps_confirmed_on_flagged_row():
+    """OMS 功能文件是交付清單，不是待辦清單：已確認就是已確認，不動打勾。"""
+    src = full_page("a" * 32, "Add", "添加", ok=True, flag=True, features=["Sales Orders"])
+    plan = gr.review_pull_plan([src], [], CHILDREN, REVIEW_DB, NOW,
+                               features=["Sales Orders"], pending_only=False, label="從完整表同步")
+    assert ops(plan, 0)[0]["body"]["properties"]["已確認"] == {"checkbox": True}
+
+
+def test_push_never_unconfirms_full_table():
+    """還沒複審的列（審核區未勾）推送時不能把完整表的「已確認」取消掉。"""
+    src = full_page("a" * 32, "Add", "添加", ok=True, flag=True)
+    rev = review_page("1" * 32, src, 简体中文="新增", 已確認=False)
+    props = gr.review_push_plan([src], [rev], CHILDREN, REVIEW_PAGE, NOW)["phases"][0][0]["body"]["properties"]
+    assert set(props) == {"简体中文"}
+
+
 def test_pull_does_not_flag_flagged_row_as_conflict():
     """待複審的列是刻意收進來的，不該再標「完整表已勾確認」。"""
     src = full_page("a" * 32, "Add", "添加", ok=True, flag=True)
@@ -203,8 +228,12 @@ def test_push_clears_flag_even_without_other_changes():
     """心柔看完覺得原譯法就好、只勾確認：仍要清旗標，否則下次同步又被撈回來。"""
     src = full_page("a" * 32, "Add", "添加", ok=True, flag=True)
     rev = review_page("1" * 32, src, 已確認=True)
-    full_ops = gr.review_push_plan([src], [rev], CHILDREN, REVIEW_PAGE, NOW)["phases"][0]
-    assert full_ops[0]["body"]["properties"] == {gr.REVIEW_FLAG: {"checkbox": False}}
+    plan = gr.review_push_plan([src], [rev], CHILDREN, REVIEW_PAGE, NOW)
+    assert plan["phases"][0][0]["body"]["properties"] == {gr.REVIEW_FLAG: {"checkbox": False}}
+    assert plan["counts"]["pushed"] == 0 and plan["counts"]["reviewed"] == 1
+    assert "複審通過" in plan["summary"]
+    log = [op for op in plan["phases"][2] if op["note"] == "推送紀錄"]
+    assert "複審通過，維持原譯" in json.dumps(log, ensure_ascii=False)     # 沒改動也要留紀錄
 
 
 # ---- OMS 功能文件（一個功能一個獨立資料庫）-------------------------------
@@ -345,7 +374,8 @@ def test_push_writes_changed_fields_and_keeps_unconfirmed_row_with_new_snapshot(
     props = review_ops[0]["body"]["properties"]
     assert gr.decode_snapshot(props[gr.REVIEW_SNAPSHOT]["rich_text"][0]["text"]["content"])["简体中文"] == "原因"
     assert props[gr.REVIEW_STATUS]["rich_text"][0]["text"]["content"] == "✓ 2026-09-15 19:00 已推送：简体中文、繁體中文"
-    assert plan["counts"] == {"pushed": 1, "confirmed": 0, "conflicts": 0, "missing": 0, "broken": 0}
+    assert plan["counts"] == {"pushed": 1, "reviewed": 0, "confirmed": 0,
+                              "conflicts": 0, "missing": 0, "broken": 0}
 
 
 def test_push_confirmed_row_is_written_then_archived():
