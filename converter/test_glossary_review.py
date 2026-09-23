@@ -22,9 +22,10 @@ def _rt(text):
 
 
 def full_page(pid, en, zh="", tw="", kind="UI 標籤", note="", ok=False, modules=(), features=(),
-              flag=False, **extra):
+              flag=False, groups=(), **extra):
     props = {
         gr.REVIEW_FLAG: {"type": "checkbox", "checkbox": flag},
+        "審核群組": {"type": "multi_select", "multi_select": [{"name": g} for g in groups]},
         "模組": {"type": "multi_select", "multi_select": [{"name": m} for m in modules]},
         "功能": {"type": "multi_select", "multi_select": [{"name": f} for f in features]},
         "English": {"type": "title", "title": [{"plain_text": en}]},
@@ -196,6 +197,14 @@ def test_push_never_unconfirms_full_table():
     rev = review_page("1" * 32, src, 简体中文="新增", 已確認=False)
     props = gr.review_push_plan([src], [rev], CHILDREN, REVIEW_PAGE, NOW)["phases"][0][0]["body"]["properties"]
     assert set(props) == {"简体中文"}
+
+
+def test_pull_copies_all_review_groups():
+    """審核群組是多選：一列可能同時撞到兩個議題，審核區要看得到全部（Fay 2026-09-23）。"""
+    src = full_page("a" * 32, "3PL Orders", "3PL 订单", ok=True, flag=True,
+                    groups=["3. 中英文空格", "4. 選單名加管理"])
+    props = ops(gr.review_pull_plan([src], [], CHILDREN, REVIEW_DB, NOW), 0)[0]["body"]["properties"]
+    assert props["審核群組"] == {"multi_select": [{"name": "3. 中英文空格"}, {"name": "4. 選單名加管理"}]}
 
 
 def test_pull_does_not_flag_flagged_row_as_conflict():

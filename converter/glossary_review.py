@@ -35,7 +35,9 @@ REVIEW_PAGE_URL_PREFIX = "https://app.notion.com/p/"
 _GR_KINDS = {"English": "title", "简体中文": "rich_text", "繁體中文": "rich_text", "類型": "select",
              "備註": "rich_text", "已確認": "checkbox", "一致性": "select",
              "OMS v0 現況": "rich_text", "文件現況": "rich_text",
-             "模組": "multi_select", "功能": "multi_select", "審核群組": "select",
+             # 審核群組是 multi_select：一列可能同時撞到兩個議題（3PL Orders 既是中英文空格、
+             # 又是選單名要不要加「管理」），用單選會漏掉其中一個（Fay 2026-09-23）
+             "模組": "multi_select", "功能": "multi_select", "審核群組": "multi_select",
              REVIEW_FLAG: "checkbox"}
 
 
@@ -72,7 +74,7 @@ def review_values(page):
         out[name] = _gr_value(props.get(name))
     out["已確認"] = bool(out["已確認"])
     out[REVIEW_FLAG] = bool(out[REVIEW_FLAG])
-    for name in ("模組", "功能"):              # 欄位不存在時 _gr_value 回空字串
+    for name in ("模組", "功能", "審核群組"):     # 欄位不存在時 _gr_value 回空字串
         if not isinstance(out[name], list):
             out[name] = []
     return out
