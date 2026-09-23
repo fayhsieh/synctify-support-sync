@@ -6,6 +6,8 @@
 
 - 同步待確認是「複製」不是搬走（按鈕原名「取出待確認」，Fay 2026-09-15 改名）：翻譯前的術語閘門、同步時建新詞都讀完整表，搬走會被當成新詞重建。
 - 已在審核區的列不覆蓋（心柔改到一半的內容要保留）。
+- 另外也收完整表上勾了「待複審」的列（即使已確認）：跨模組用詞要心柔一起決定，但取消「已確認」
+  會讓那些詞退出術語閘門、譯法被重跑，所以改用旗標。推送回去時若已勾確認就自動清掉旗標。
 - 推送只寫 REVIEW_PUSH_FIELDS；參考欄位（一致性、OMS v0 現況、文件現況）不寫回。
 - 有改動的列都寫回；勾了「已確認」的寫回後移出審核區（封存，Notion 垃圾桶 30 天內可還原）。
 - 衝突：某欄在同步到審核區後被人在完整表改過、審核區的值又跟完整表現在不同 → 整列不寫，標在「推送狀態」。
@@ -18,7 +20,10 @@
 """
 
 REVIEW_PUSH_FIELDS = ["English", "简体中文", "繁體中文", "類型", "備註", "已確認"]
-REVIEW_REF_FIELDS = ["一致性", "OMS v0 現況", "文件現況", "模組", "功能"]
+REVIEW_REF_FIELDS = ["一致性", "OMS v0 現況", "文件現況", "模組", "功能", "審核群組"]
+# 完整表上的旗標：勾起來的列即使已確認也要進審核區（跨模組用詞要心柔一起決定，Fay 2026-09-23）。
+# 心柔確認並推送回來後由推送清掉。決定完可以整欄刪除——讀不到就當成沒勾，流程照跑。
+REVIEW_FLAG = "待複審"
 REVIEW_SOURCE = "完整表列"
 REVIEW_SNAPSHOT = "取出時內容"
 REVIEW_STATUS = "推送狀態"
@@ -28,7 +33,8 @@ REVIEW_PAGE_URL_PREFIX = "https://app.notion.com/p/"
 _GR_KINDS = {"English": "title", "简体中文": "rich_text", "繁體中文": "rich_text", "類型": "select",
              "備註": "rich_text", "已確認": "checkbox", "一致性": "select",
              "OMS v0 現況": "rich_text", "文件現況": "rich_text",
-             "模組": "multi_select", "功能": "multi_select"}
+             "模組": "multi_select", "功能": "multi_select", "審核群組": "select",
+             REVIEW_FLAG: "checkbox"}
 
 
 # ── 讀值 ─────────────────────────────────────────────────────────────
@@ -59,9 +65,11 @@ def review_values(page):
     """完整表或審核區的 Notion page → 純值 dict（缺的欄位是空字串，已確認是 bool、模組是 list）。"""
     props = page.get("properties") or {}
     out = {"id": review_norm_id(page.get("id", ""))}
-    for name in REVIEW_PUSH_FIELDS + REVIEW_REF_FIELDS + [REVIEW_SOURCE, REVIEW_SNAPSHOT, REVIEW_STATUS]:
+    for name in (REVIEW_PUSH_FIELDS + REVIEW_REF_FIELDS
+                 + [REVIEW_SOURCE, REVIEW_SNAPSHOT, REVIEW_STATUS, REVIEW_FLAG]):
         out[name] = _gr_value(props.get(name))
     out["已確認"] = bool(out["已確認"])
+    out[REVIEW_FLAG] = bool(out[REVIEW_FLAG])
     for name in ("模組", "功能"):              # 欄位不存在時 _gr_value 回空字串
         if not isinstance(out[name], list):
             out[name] = []
@@ -209,7 +217,10 @@ def review_pull_plan(full_pages, review_pages, page_children, review_db, now,
     in_review = {review_norm_id(row[REVIEW_SOURCE]) for row in review}
 
     def wanted(row):
-        if row["id"] in in_review or (pending_only and row["已確認"]):
+        if row["id"] in in_review:
+            return False
+        # 勾了「待複審」的列即使已確認也要收：跨模組用詞要心柔一起看（Fay 2026-09-23）
+        if pending_only and row["已確認"] and not row[REVIEW_FLAG]:
             return False
         return not features or any(f in row["功能"] for f in features)
 
@@ -221,8 +232,8 @@ def review_pull_plan(full_pages, review_pages, page_children, review_db, now,
         source = full_by_id.get(review_norm_id(row[REVIEW_SOURCE]))
         if source is None:
             message = "⚠️ 完整表已經沒有這一列（可能被刪除或合併），不會推送；確認後可以刪掉這列"
-        elif pending_only and source["已確認"] and not row["已確認"]:
-            # 模組文件本來就收已確認的列，這個提醒只對待辦清單有意義
+        elif pending_only and source["已確認"] and not source[REVIEW_FLAG] and not row["已確認"]:
+            # 功能文件本來就收已確認的列、待複審的列也是刻意收進來的，這提醒只對待辦清單有意義
             message = "⚠️ 完整表這一列已經被勾「已確認」，這裡的修改推送時會被當成衝突"
         else:
             continue
@@ -309,11 +320,17 @@ def review_push_plan(full_pages, review_pages, page_children, log_page_id, now,
             continue
 
         writes = [f for f in REVIEW_PUSH_FIELDS if row[f] != source[f]]
+        # 心柔確認完就把「待複審」清掉，那一列才會退出審核區（旗標不是人工內容，不算 push 欄位）
+        clear_flag = source[REVIEW_FLAG] and row["已確認"]
+        if writes or clear_flag:
+            props = {f: _gr_prop(_GR_KINDS[f], row[f]) for f in writes}
+            if clear_flag:
+                props[REVIEW_FLAG] = _gr_prop("checkbox", False)
+            full_ops.append({"method": "PATCH", "path": "/pages/" + source["id"],
+                             "body": {"properties": props},
+                             "note": "寫回：" + row["English"]})
         if writes:
             pushed += 1
-            full_ops.append({"method": "PATCH", "path": "/pages/" + source["id"],
-                             "body": {"properties": {f: _gr_prop(_GR_KINDS[f], row[f]) for f in writes}},
-                             "note": "寫回：" + row["English"]})
             entries.append((row["English"], [(f, source[f], row[f]) for f in writes]))
 
         if row["已確認"]:

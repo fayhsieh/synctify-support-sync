@@ -20,8 +20,10 @@ def _rt(text):
     return {"type": "rich_text", "rich_text": [{"plain_text": text}] if text else []}
 
 
-def full_page(pid, en, zh="", tw="", kind="UI 標籤", note="", ok=False, modules=(), features=(), **extra):
+def full_page(pid, en, zh="", tw="", kind="UI 標籤", note="", ok=False, modules=(), features=(),
+              flag=False, **extra):
     props = {
+        gr.REVIEW_FLAG: {"type": "checkbox", "checkbox": flag},
         "模組": {"type": "multi_select", "multi_select": [{"name": m} for m in modules]},
         "功能": {"type": "multi_select", "multi_select": [{"name": f} for f in features]},
         "English": {"type": "title", "title": [{"plain_text": en}]},
@@ -159,6 +161,50 @@ def test_archived_pages_are_ignored():
     archived = dict(full_page("a" * 32, "Cause"), archived=True)
     plan = gr.review_pull_plan([archived], [], CHILDREN, REVIEW_DB, NOW)
     assert ops(plan, 0) == []
+
+
+# ---- 待複審：已確認但要請人再看一次（跨模組用詞）-------------------------
+
+def test_pull_takes_confirmed_row_when_flagged():
+    """跨模組用詞要心柔一起決定，但取消「已確認」會擋住翻譯，所以改用旗標（Fay 2026-09-23）。"""
+    plain = full_page("a" * 32, "Add", "添加", ok=True)
+    flagged = full_page("b" * 32, "Add Product", "添加产品", ok=True, flag=True)
+    plan = gr.review_pull_plan([plain, flagged], [], CHILDREN, REVIEW_DB, NOW)
+    assert [op["note"] for op in ops(plan, 0)] == ["同步待確認：Add Product"]
+
+
+def test_pull_does_not_flag_flagged_row_as_conflict():
+    """待複審的列是刻意收進來的，不該再標「完整表已勾確認」。"""
+    src = full_page("a" * 32, "Add", "添加", ok=True, flag=True)
+    rev = review_page("1" * 32, src, 已確認=False)
+    plan = gr.review_pull_plan([src], [rev], CHILDREN, REVIEW_DB, NOW)
+    assert ops(plan, 0) == []
+
+
+def test_push_clears_flag_when_confirmed():
+    src = full_page("a" * 32, "Add", "添加", ok=True, flag=True)
+    rev = review_page("1" * 32, src, 简体中文="新增", 已確認=True)
+    plan = gr.review_push_plan([src], [rev], CHILDREN, REVIEW_PAGE, NOW)
+    props = plan["phases"][0][0]["body"]["properties"]
+    assert props["简体中文"]["rich_text"][0]["text"]["content"] == "新增"
+    assert props[gr.REVIEW_FLAG] == {"checkbox": False}       # 清掉旗標，這列退出審核區
+    assert plan["phases"][1][0]["body"] == {"archived": True}
+
+
+def test_push_keeps_flag_until_confirmed():
+    """還沒勾已確認就推送：進度寫回完整表，但旗標留著，列也留在審核區。"""
+    src = full_page("a" * 32, "Add", "添加", ok=True, flag=True)
+    rev = review_page("1" * 32, src, 简体中文="新增", 已確認=False)
+    props = gr.review_push_plan([src], [rev], CHILDREN, REVIEW_PAGE, NOW)["phases"][0][0]["body"]["properties"]
+    assert gr.REVIEW_FLAG not in props
+
+
+def test_push_clears_flag_even_without_other_changes():
+    """心柔看完覺得原譯法就好、只勾確認：仍要清旗標，否則下次同步又被撈回來。"""
+    src = full_page("a" * 32, "Add", "添加", ok=True, flag=True)
+    rev = review_page("1" * 32, src, 已確認=True)
+    full_ops = gr.review_push_plan([src], [rev], CHILDREN, REVIEW_PAGE, NOW)["phases"][0]
+    assert full_ops[0]["body"]["properties"] == {gr.REVIEW_FLAG: {"checkbox": False}}
 
 
 # ---- OMS 功能文件（一個功能一個獨立資料庫）-------------------------------
