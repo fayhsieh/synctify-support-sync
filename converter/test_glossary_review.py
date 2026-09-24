@@ -282,6 +282,26 @@ def test_pull_skips_sync_when_snapshot_is_broken():
     assert gr.review_pull_plan([src], [rev], CHILDREN, REVIEW_DB, NOW)["counts"]["synced"] == 0
 
 
+def test_feature_doc_never_sends_marketing_only_fields():
+    """功能文件沒有「審核群組」這一欄——送過去 Notion 會回 400，整批操作全滅（2026-09-24 實際踩到）。"""
+    src = full_page("a" * 32, "Orders", "订单", ok=True, features=["Shell"], groups=["4. 選單名加管理"])
+    plan = gr.review_pull_plan([src], [], CHILDREN, REVIEW_DB, NOW,
+                               features=["Shell"], pending_only=False, label="從完整表同步")
+    assert "審核群組" not in ops(plan, 0)[0]["body"]["properties"]
+    assert "模組" in ops(plan, 0)[0]["body"]["properties"]          # 其他參考欄位照送
+
+
+def test_pull_skips_fields_the_target_database_lacks():
+    """各功能文件的欄位不見得一樣：目標資料庫沒有的欄位一律不送。"""
+    src = full_page("a" * 32, "Orders", "订单", ok=True, features=["Shell"], modules=["order"])
+    rev = review_page("1" * 32, src)
+    del rev["properties"]["模組"]                                   # 這份文件沒有「模組」欄
+    src["properties"]["模組"]["multi_select"] = [{"name": "menu"}]   # 完整表改了模組
+    plan = gr.review_pull_plan([src], [rev], CHILDREN, REVIEW_DB, NOW,
+                               features=["Shell"], pending_only=False)
+    assert ops(plan, 0) == []                                       # 沒有可送的欄位就不發呼叫
+
+
 def test_pull_copies_all_review_groups():
     """審核群組是多選：一列可能同時撞到兩個議題，審核區要看得到全部（Fay 2026-09-23）。"""
     src = full_page("a" * 32, "3PL Orders", "3PL 订单", ok=True, flag=True,

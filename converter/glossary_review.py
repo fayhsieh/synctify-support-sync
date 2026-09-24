@@ -25,6 +25,9 @@
 
 REVIEW_PUSH_FIELDS = ["English", "简体中文", "繁體中文", "類型", "備註", "已確認"]
 REVIEW_REF_FIELDS = ["一致性", "OMS v0 現況", "文件現況", "模組", "功能", "審核群組"]
+# 「審核群組」是 Marketing 這一輪的臨時欄位，OMS 功能文件沒有這一欄。Notion 對不存在的屬性
+# 一律回 400（整批操作全滅），所以功能文件模式不送它——決定完要刪這欄時也不會波及功能文件。
+REVIEW_MARKETING_ONLY = ["審核群組"]
 # 完整表上的旗標：勾起來的列即使已確認也要進審核區（跨模組用詞要心柔一起決定，Fay 2026-09-23）。
 # 心柔確認並推送回來後由推送清掉。決定完可以整欄刪除——讀不到就當成沒勾，流程照跑。
 REVIEW_FLAG = "待複審"
@@ -183,7 +186,19 @@ def _gr_sort_key(row):
 
 # ── 在審核區建列（同步待確認按鈕、同步 WP 時的新詞共用）───────────────────────────────
 
-def _gr_create_op(row, review_db, note_prefix, uncheck_flagged=False):
+def _gr_present_fields(pages):
+    """目標資料庫實際有哪些欄位——從既有的列推得。空的資料庫推不出來，回 None＝不過濾。
+
+    Notion 只要收到一個不存在的屬性就整個呼叫 400，而各功能文件的欄位不見得一樣
+    （例如審核群組只有 Marketing 審核區有），所以送出去之前先濾掉對方沒有的欄位。
+    """
+    present = set()
+    for page in _gr_alive(pages):
+        present |= set((page.get("properties") or {}).keys())
+    return present or None
+
+
+def _gr_create_op(row, review_db, note_prefix, uncheck_flagged=False, fields=None):
     """完整表的一列 → 在審核區建同樣內容的一列。快照＝完整表這一列的值。
 
     uncheck_flagged：待複審的列在完整表本來就勾著「已確認」，照抄過去審核區會變成
@@ -191,7 +206,8 @@ def _gr_create_op(row, review_db, note_prefix, uncheck_flagged=False):
     建列時先取消打勾——審核區的打勾意思是「心柔複審過了」，勾了才會清旗標、移出審核區。
     快照仍然是完整表的原值（已確認），推送時不會把這個未勾狀態寫回去。
     """
-    props = {name: _gr_prop(_GR_KINDS[name], row[name]) for name in REVIEW_PUSH_FIELDS + REVIEW_REF_FIELDS}
+    props = {name: _gr_prop(_GR_KINDS[name], row[name])
+             for name in (fields if fields is not None else REVIEW_PUSH_FIELDS + REVIEW_REF_FIELDS)}
     if uncheck_flagged and row[REVIEW_FLAG] and row["已確認"]:
         props["已確認"] = _gr_prop("checkbox", False)
     props[REVIEW_SOURCE] = _gr_prop("url", REVIEW_PAGE_URL_PREFIX + row["id"])
@@ -230,6 +246,14 @@ def review_pull_plan(full_pages, review_pages, page_children, review_db, now,
     full_by_id = {row["id"]: row for row in full}
     in_review = {review_norm_id(row[REVIEW_SOURCE]) for row in review}
 
+    # 功能文件沒有 Marketing 這一輪的臨時欄位；再濾掉目標資料庫實際沒有的欄位（各文件不見得一樣）。
+    # Notion 只要收到一個不存在的屬性就整個呼叫 400，這一關沒守住會整批失敗。
+    present = _gr_present_fields(review_pages)
+    def usable(names):
+        return [f for f in names
+                if not (features and f in REVIEW_MARKETING_ONLY) and (present is None or f in present)]
+    ref_fields = usable(REVIEW_REF_FIELDS)
+
     def wanted(row):
         if row["id"] in in_review:
             return False
@@ -238,7 +262,8 @@ def review_pull_plan(full_pages, review_pages, page_children, review_db, now,
             return False
         return not features or any(f in row["功能"] for f in features)
 
-    creates = [_gr_create_op(row, review_db, label + "：", uncheck_flagged=pending_only)
+    creates = [_gr_create_op(row, review_db, label + "：", uncheck_flagged=pending_only,
+                             fields=usable(REVIEW_PUSH_FIELDS + REVIEW_REF_FIELDS))
                for row in sorted(full, key=_gr_sort_key) if wanted(row)]
 
     flags, refresh, synced = [], [], 0
@@ -247,14 +272,14 @@ def review_pull_plan(full_pages, review_pages, page_children, review_db, now,
         if source is not None:
             # 參考欄位（一致性、模組、審核群組…）是腳本算出來的，不是人改的內容，一律跟完整表對齊
             props = {f: _gr_prop(_GR_KINDS[f], source[f])
-                     for f in REVIEW_REF_FIELDS if row[f] != source[f]}
+                     for f in ref_fields if row[f] != source[f]}
             # 推送欄位只有「整列都還等於取出時的快照」才跟著完整表走——那代表這裡沒人動過，
             # 而完整表已經變了（多半是別的地方決定完推回去的）。**只要有一欄被改過就整列不碰**：
             # 那一列正在等著推送回去，這時候動它任何一欄（包括把「已確認」蓋成 true）
             # 都可能讓未推送的修改被當成已定案的內容寫回完整表。
             snapshot = decode_snapshot(row[REVIEW_SNAPSHOT])
             untouched = snapshot is not None and all(row[f] == snapshot[f] for f in REVIEW_PUSH_FIELDS)
-            fresh = [f for f in REVIEW_PUSH_FIELDS if row[f] != source[f]] if untouched else []
+            fresh = [f for f in usable(REVIEW_PUSH_FIELDS) if row[f] != source[f]] if untouched else []
             if fresh:
                 props.update({f: _gr_prop(_GR_KINDS[f], source[f]) for f in fresh})
                 props[REVIEW_SNAPSHOT] = _gr_prop("rich_text", encode_snapshot(source))

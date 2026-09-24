@@ -117,6 +117,12 @@ CODES = [
      "Notion 找不到那個頁面或資料庫——多半是沒有分享給 integration。",
      "到那個頁面右上角的 … → Connections 加上 Support Center Sync。"
      "資料庫要看它所在的那一頁有沒有連：別頁上的連結檢視不會把權限帶過去。加完直接再按一次。"),
+    # 2026-09-24 Shell - Glossary 實際踩到：功能文件沒有「審核群組」欄（那是 Marketing 這一輪才加的），
+    # 送過去 31 個呼叫全滅。Notion 只要收到一個不存在的屬性就整個呼叫 400。
+    ("C9", ["is not a property that exists", "not a property that exists"],
+     "這份文件的資料庫少了某個欄位——多半是它比完整表舊，或當初複製時沒帶到。",
+     "把訊息裡那個欄位加到這一頁底下的資料庫（型別要跟完整表一樣），或找 Fay 確認那一欄還需不需要。"
+     "加完直接再按一次，已經建好的列不會重複。"),
 ]
 
 FALLBACK = ("C0",
