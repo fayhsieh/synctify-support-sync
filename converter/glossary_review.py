@@ -5,7 +5,9 @@
 改好後手動按「推送回完整表」寫回。不做排程、不做改了就同步。
 
 - 同步待確認是「複製」不是搬走（按鈕原名「取出待確認」，Fay 2026-09-15 改名）：翻譯前的術語閘門、同步時建新詞都讀完整表，搬走會被當成新詞重建。
-- 已在審核區的列不覆蓋（心柔改到一半的內容要保留）。
+- 已在審核區的列不整列覆蓋（改到一半的內容要保留），但**沒被動過的欄位會跟著完整表更新**：
+  值還等於「取出時內容」就代表這裡沒人改，完整表那邊卻變了（別的地方決定完推回去的），
+  這時跟著走比留著舊值有用——不然功能文件會一直停在取出當下的狀態。被改過的欄位完全不碰。
 - 另外也收完整表上勾了「待複審」的列（即使已確認）：跨模組用詞要心柔一起決定，但取消「已確認」
   會讓那些詞退出術語閘門、譯法被重跑，所以改用旗標。這些列到審核區時「已確認」先取消勾選——
   審核區的打勾意思是「複審過了」，勾了推送回去才會清掉旗標、把列移出。審核區永遠不會把完整表
@@ -239,21 +241,32 @@ def review_pull_plan(full_pages, review_pages, page_children, review_db, now,
     creates = [_gr_create_op(row, review_db, label + "：", uncheck_flagged=pending_only)
                for row in sorted(full, key=_gr_sort_key) if wanted(row)]
 
-    flags, refresh = [], []
+    flags, refresh, synced = [], [], 0
     for row in review:
         source = full_by_id.get(review_norm_id(row[REVIEW_SOURCE]))
-        # 參考欄位（一致性、模組、審核群組…）是腳本算出來的，不是心柔改的內容，
-        # 所以每次同步都跟完整表對齊——不然審核區篩「審核群組」會漏掉後來才補標的列。
-        # 快照刻意不重算：它要留住「取出時完整表的推送欄位」，重算會把真正的衝突吃掉。
         if source is not None:
-            stale = {f: source[f] for f in REVIEW_REF_FIELDS if row[f] != source[f]}
-            if stale:
+            # 參考欄位（一致性、模組、審核群組…）是腳本算出來的，不是人改的內容，一律跟完整表對齊
+            props = {f: _gr_prop(_GR_KINDS[f], source[f])
+                     for f in REVIEW_REF_FIELDS if row[f] != source[f]}
+            # 推送欄位只有「整列都還等於取出時的快照」才跟著完整表走——那代表這裡沒人動過，
+            # 而完整表已經變了（多半是別的地方決定完推回去的）。**只要有一欄被改過就整列不碰**：
+            # 那一列正在等著推送回去，這時候動它任何一欄（包括把「已確認」蓋成 true）
+            # 都可能讓未推送的修改被當成已定案的內容寫回完整表。
+            snapshot = decode_snapshot(row[REVIEW_SNAPSHOT])
+            untouched = snapshot is not None and all(row[f] == snapshot[f] for f in REVIEW_PUSH_FIELDS)
+            fresh = [f for f in REVIEW_PUSH_FIELDS if row[f] != source[f]] if untouched else []
+            if fresh:
+                props.update({f: _gr_prop(_GR_KINDS[f], source[f]) for f in fresh})
+                props[REVIEW_SNAPSHOT] = _gr_prop("rich_text", encode_snapshot(source))
+                synced += 1
+            if props:
                 refresh.append({"method": "PATCH", "path": "/pages/" + row["id"],
-                                "body": {"properties": {f: _gr_prop(_GR_KINDS[f], v)
-                                                        for f, v in stale.items()}},
-                                "note": "更新參考欄位：" + row["English"]})
+                                "body": {"properties": props},
+                                "note": ("跟上完整表：" if fresh else "更新參考欄位：") + row["English"]})
         if source is None:
             message = "⚠️ 完整表已經沒有這一列（可能被刪除或合併），不會推送；確認後可以刪掉這列"
+        elif fresh:
+            continue        # 這一列剛跟完整表對齊過，沒有東西要提醒
         elif pending_only and source["已確認"] and not source[REVIEW_FLAG] and not row["已確認"]:
             # 功能文件本來就收已確認的列、待複審的列也是刻意收進來的，這提醒只對待辦清單有意義
             message = "⚠️ 完整表這一列已經被勾「已確認」，這裡的修改推送時會被當成衝突"
@@ -265,12 +278,14 @@ def review_pull_plan(full_pages, review_pages, page_children, review_db, now,
     total = len(review) + len(creates)
     scope = f"（{'、'.join(features)}）" if features else ""
     summary = f"{REVIEW_SUMMARY_PREFIX}{now} {label}{scope}｜新增 {len(creates)} 列｜共 {total} 列"
-    if refresh:
-        summary += f"｜{len(refresh)} 列更新參考欄位"
+    if synced:
+        summary += f"｜{synced} 列跟上完整表最新內容"
+    if len(refresh) - synced:
+        summary += f"｜{len(refresh) - synced} 列更新參考欄位"
     if flags:
         summary += f"｜{len(flags)} 列需要注意（看「推送狀態」）"
     return {"action": "pull", "summary": summary,
-            "counts": {"created": len(creates), "refreshed": len(refresh),
+            "counts": {"created": len(creates), "refreshed": len(refresh), "synced": synced,
                        "flagged": len(flags), "total": total},
             "phases": [creates + refresh + flags,
                        _gr_summary_ops(review_summary_block(page_children), summary)]}

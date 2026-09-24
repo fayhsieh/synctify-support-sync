@@ -121,7 +121,7 @@ def test_pull_creates_only_unconfirmed_rows_not_already_in_review():
     assert snap["简体中文"] == "原因" and snap["已確認"] is False
     # 審核區已有的 Backorder 沒有被覆蓋（沒有對它的任何操作）
     assert not [op for op in ops(plan, 0) if "Backorder" in op["note"]]
-    assert plan["counts"] == {"created": 1, "refreshed": 0, "flagged": 0, "total": 2}
+    assert plan["counts"] == {"created": 1, "refreshed": 0, "synced": 0, "flagged": 0, "total": 2}
 
 
 def test_pull_sorted_by_english_and_reference_fields_copied():
@@ -137,13 +137,23 @@ def test_pull_flags_review_rows_whose_source_is_gone_or_confirmed():
     gone = full_page("d" * 32, "Orgnization", "组织")
     done = full_page("e" * 32, "Carrier", "承运商")
     done_now = full_page("e" * 32, "Carrier", "承运商", ok=True)
-    review = [review_page("1" * 32, gone), review_page("2" * 32, done)]
+    # Carrier 在審核區被改過，所以不會被「跟上完整表」帶走，仍要提醒推送時會撞衝突
+    review = [review_page("1" * 32, gone), review_page("2" * 32, done, 简体中文="物流商")]
     plan = gr.review_pull_plan([done_now], review, CHILDREN, REVIEW_DB, NOW)
     notes = {op["note"]: op["body"]["properties"][gr.REVIEW_STATUS]["rich_text"][0]["text"]["content"]
              for op in ops(plan, 0)}
     assert notes["推送狀態：Orgnization"].startswith("⚠️ 完整表已經沒有這一列")
     assert notes["推送狀態：Carrier"].startswith("⚠️ 完整表這一列已經被勾「已確認」")
     assert plan["counts"]["flagged"] == 2
+
+
+def test_pull_syncs_instead_of_flagging_untouched_confirmed_row():
+    """沒被改過的列在別處被勾了已確認：直接跟上，不必再提醒會衝突。"""
+    done = full_page("e" * 32, "Carrier", "承运商")
+    done_now = full_page("e" * 32, "Carrier", "承运商", ok=True)
+    plan = gr.review_pull_plan([done_now], [review_page("2" * 32, done)], CHILDREN, REVIEW_DB, NOW)
+    assert plan["counts"] == {"created": 0, "refreshed": 1, "synced": 1, "flagged": 0, "total": 1}
+    assert ops(plan, 0)[0]["body"]["properties"]["已確認"] == {"checkbox": True}
 
 
 def test_pull_does_not_rewrite_same_flag():
@@ -227,6 +237,49 @@ def test_pull_does_not_touch_snapshot_or_human_fields_when_refreshing():
     src["properties"]["模組"]["multi_select"].append({"name": "order"})
     props = ops(gr.review_pull_plan([src], [rev], CHILDREN, REVIEW_DB, NOW), 0)[0]["body"]["properties"]
     assert set(props) == {"模組"}
+
+
+def test_pull_syncs_untouched_fields_from_full_table():
+    """沒被動過的欄位跟著完整表走：別處決定完推回完整表後，功能文件不該停在舊值（Fay 2026-09-24）。"""
+    src = full_page("a" * 32, "Allocations", "", ok=False)
+    rev = review_page("1" * 32, src)                       # 建立時與完整表一致
+    src["properties"]["简体中文"] = _rt("库存动态分配")          # 之後在完整表填了譯法並勾確認
+    src["properties"]["已確認"]["checkbox"] = True
+    plan = gr.review_pull_plan([src], [rev], CHILDREN, REVIEW_DB, NOW, pending_only=False)
+    assert plan["counts"]["synced"] == 1
+    op, = ops(plan, 0)
+    assert op["note"] == "跟上完整表：Allocations"
+    props = op["body"]["properties"]
+    assert props["简体中文"]["rich_text"][0]["text"]["content"] == "库存动态分配"
+    assert props["已確認"] == {"checkbox": True}
+    snap = gr.decode_snapshot(props[gr.REVIEW_SNAPSHOT]["rich_text"][0]["text"]["content"])
+    assert snap["简体中文"] == "库存动态分配" and snap["已確認"] is True   # 快照跟著更新，之後不會誤判成衝突
+
+
+def test_pull_never_touches_a_row_someone_edited():
+    """只要有一欄被改過就整列不碰：那一列正等著推送回去，動它會把未定案的修改變成定案。"""
+    src = full_page("a" * 32, "Cause", "原因", note="舊備註")
+    rev = review_page("1" * 32, src, 简体中文="起因")            # 心柔改了简中
+    src["properties"]["備註"] = _rt("新備註")                   # 完整表那邊改了備註
+    plan = gr.review_pull_plan([src], [rev], CHILDREN, REVIEW_DB, NOW)
+    assert plan["counts"]["synced"] == 0
+    assert ops(plan, 0) == []                                 # 備註也不碰，留給推送去判斷
+
+
+def test_pull_leaves_flagged_rows_confirmation_alone():
+    """待複審的列取出時刻意取消打勾，那不算「沒人動過」，不可以被完整表的已確認蓋回去。"""
+    src = full_page("a" * 32, "Add", "添加", ok=True, flag=True)
+    rev = review_page("1" * 32, src, 已確認=False)
+    assert gr.review_pull_plan([src], [rev], CHILDREN, REVIEW_DB, NOW)["counts"]["synced"] == 0
+
+
+def test_pull_skips_sync_when_snapshot_is_broken():
+    """快照壞掉就不知道誰改過什麼，寧可不動——推送那邊會請人刪掉重來。"""
+    src = full_page("a" * 32, "Cause", "原因")
+    rev = review_page("1" * 32, src)
+    rev["properties"][gr.REVIEW_SNAPSHOT] = _rt("壞掉的快照")
+    src["properties"]["简体中文"] = _rt("起因")
+    assert gr.review_pull_plan([src], [rev], CHILDREN, REVIEW_DB, NOW)["counts"]["synced"] == 0
 
 
 def test_pull_copies_all_review_groups():
